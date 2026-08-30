@@ -25,7 +25,7 @@ Two consequences worth holding on to:
 
 A compiled Swift helper was tried first and abandoned: macOS grants EventKit access
 per binary, and an unsigned binary's identity changes on every rebuild, so every edit
-to Juno would re-prompt for permission — which a background listener can never
+to Notron would re-prompt for permission — which a background listener can never
 answer. Running under `osascript` inherits the terminal's stable identity instead.
 """
 

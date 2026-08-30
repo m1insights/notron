@@ -1,7 +1,7 @@
 """Read and write the Apple Notes app.
 
 Apple Notes derives a note's title from the first line of its HTML body, so every
-write here leads with the title. Bodies are HTML; see `juno.markup` for the subset
+write here leads with the title. Bodies are HTML; see `notron.markup` for the subset
 Notes actually renders.
 
 **Two rules make this fast enough to poll, and both were learned the hard way.**

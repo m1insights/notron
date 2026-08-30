@@ -28,7 +28,7 @@ def blocks(html: str) -> list[str]:
 
     Everything between recognised blocks is kept as its own fragment, including
     the plain newlines Apple Notes puts between elements. Joining the result back
-    together must reproduce the input exactly — the safety check that lets Juno
+    together must reproduce the input exactly — the safety check that lets Notron
     write inside your notes is built on that being true.
     """
     out, pos = [], 0
@@ -60,7 +60,7 @@ def insert_after(html: str, index: int, new_html: str) -> str:
 def preserves(old: str, new: str) -> bool:
     """Is `new` exactly `old` with whole blocks inserted at a block boundary?
 
-    This is what lets Juno write inside a note you own without the risk that
+    This is what lets Notron write inside a note you own without the risk that
     makes that dangerous. Two conditions, both required:
 
       * every original character still sits in `new`, in order — nothing of

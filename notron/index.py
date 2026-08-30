@@ -11,7 +11,7 @@ import json
 import pathlib
 from dataclasses import asdict, dataclass
 
-CACHE = pathlib.Path(__file__).resolve().parents[1] / ".juno" / "index.json"
+CACHE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "index.json"
 VECTORS = CACHE.with_name("vectors.npy")
 CHUNK_CHARS = 1400
 CHUNK_OVERLAP = 150

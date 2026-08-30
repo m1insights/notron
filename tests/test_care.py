@@ -1,8 +1,8 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import care
-from juno.care import Signal
+from notron import care
+from notron.care import Signal
 
 
 def test_the_plain_version_lists_what_you_must_do_first():
@@ -33,7 +33,7 @@ def test_thresholds_are_ordered_sensibly():
 def test_she_asks_for_help_when_an_app_stops_answering(monkeypatch):
     """Automation approval can be revoked in System Settings at any time, and the
     only symptom is silence. The care note is where silence becomes a sentence."""
-    from juno import permissions
+    from notron import permissions
 
     monkeypatch.setattr(care.permissions, "check", lambda: [
         permissions.Check("Notes", True, "ready", ""),

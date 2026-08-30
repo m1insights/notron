@@ -1,4 +1,4 @@
-"""Nebius Token Factory client — the only place JUNO talks to a model.
+"""Nebius Token Factory client — the only place NOTRON talks to a model.
 
 Token Factory speaks the OpenAI protocol, so the official `openai` package
 works unchanged against Nebius' endpoint. Every node in the graph picks a
@@ -14,11 +14,11 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-USAGE_LOG = Path(__file__).resolve().parents[1] / ".juno" / "usage.json"
+USAGE_LOG = Path(__file__).resolve().parents[1] / ".notron" / "usage.json"
 
 BASE_URL = os.environ.get("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1/")
 
-# Tier -> model id. Override any of these in .env, e.g. JUNO_MODEL_FAST=...
+# Tier -> model id. Override any of these in .env, e.g. NOTRON_MODEL_FAST=...
 DEFAULT_MODELS = {
     "fast": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
     "smart": "nvidia/nemotron-3-super-120b-a12b",
@@ -47,7 +47,7 @@ def _load_env() -> None:
 
 
 class BrainUnavailable(RuntimeError):
-    """No Nebius key configured. JUNO's hands still work; her head does not."""
+    """No Nebius key configured. NOTRON's hands still work; her head does not."""
 
 
 @dataclass
@@ -62,7 +62,7 @@ class Brain:
         if not key:
             raise BrainUnavailable(
                 "NEBIUS_API_KEY is not set. Sign up at https://tokenfactory.nebius.com, "
-                "create a key, then put it in apps/juno/.env"
+                "create a key, then put it in apps/notron/.env"
             )
         return cls(api_key=key, base_url=os.environ.get("NEBIUS_BASE_URL", BASE_URL))
 
@@ -72,7 +72,7 @@ class Brain:
         self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
 
     def _record(self, tier: str, usage) -> None:
-        """Keep a running tally so Juno can report what she costs to run."""
+        """Keep a running tally so Notron can report what she costs to run."""
         if usage is None:
             return
         try:
@@ -88,7 +88,7 @@ class Brain:
             pass
 
     def model_for(self, tier: str) -> str:
-        return os.environ.get(f"JUNO_MODEL_{tier.upper()}", DEFAULT_MODELS[tier])
+        return os.environ.get(f"NOTRON_MODEL_{tier.upper()}", DEFAULT_MODELS[tier])
 
     def available_models(self) -> list[str]:
         """Ask the account what it can actually run — model ids drift."""
@@ -142,7 +142,7 @@ class Brain:
         """Vectorise a batch of note chunks. Batches of ~64 keep requests small."""
         import os as _os
 
-        model = _os.environ.get("JUNO_MODEL_EMBED", EMBED_MODEL)
+        model = _os.environ.get("NOTRON_MODEL_EMBED", EMBED_MODEL)
         out: list[list[float]] = []
         for i in range(0, len(texts), 64):
             resp = self._client.embeddings.create(model=model, input=texts[i : i + 64])

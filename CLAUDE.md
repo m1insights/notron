@@ -1,4 +1,4 @@
-# JUNO — working notes for Claude
+# NOTRON — working notes for Claude
 
 A personal AI agent that lives inside the user's Apple Notes. They type in Notes;
 she reads, thinks on NVIDIA Nemotron via Nebius, and writes back into Notes.
@@ -12,15 +12,15 @@ Do not swap the model provider.
 
 ```bash
 .venv/bin/python -m pytest tests -q      # 139 tests, no API key or network needed
-.venv/bin/python -m juno setup           # create the 🤖 JUNO folder in Notes
-.venv/bin/python -m juno index           # embed all the user's notes (~2 min)
-.venv/bin/python -m juno ask "..."       # one-shot, for testing
-.venv/bin/python -m juno listen          # foreground listener
-.venv/bin/python -m juno listen --install  # background listener via launchd
-.venv/bin/python -m juno morning         # the daily routine
-.venv/bin/python -m juno graph           # print the node graph
-.venv/bin/python -m juno permissions     # can she reach Notes, Reminders, Calendar?
-.venv/bin/python -m juno agenda          # today, this week, and what's outstanding
+.venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
+.venv/bin/python -m notron index           # embed all the user's notes (~2 min)
+.venv/bin/python -m notron ask "..."       # one-shot, for testing
+.venv/bin/python -m notron listen          # foreground listener
+.venv/bin/python -m notron listen --install  # background listener via launchd
+.venv/bin/python -m notron morning         # the daily routine
+.venv/bin/python -m notron graph           # print the node graph
+.venv/bin/python -m notron permissions     # can she reach Notes, Reminders, Calendar?
+.venv/bin/python -m notron agenda          # today, this week, and what's outstanding
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -29,8 +29,8 @@ Do not swap the model provider.
 
 **A listener started from a tool-run shell dies the moment that shell returns.**
 Hours were lost to this: the code looked broken because every test listener was
-being killed after printing its startup lines. Use `juno listen --install`
-(launchd) for anything that must outlive the command, and read `.juno/listen.log`.
+being killed after printing its startup lines. Use `notron listen --install`
+(launchd) for anything that must outlive the command, and read `.notron/listen.log`.
 
 **Do not run other Notes commands while the listener is working.** Notes serves one
 script request at a time; a slow query from a second process wedges the app for
@@ -63,18 +63,18 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `markup.py` | Markdown ⇄ the HTML subset Notes actually renders |
 | `notedoc.py` | A note as addressable blocks; provably lossless inserts |
 | `conversation.py` | Reads a note as turns; finds what she has not answered |
-| `mentions.py` | Sweeps every note for `#juno` |
+| `mentions.py` | Sweeps every note for `#notron` |
 | `guard.py` | The single choke point for every write |
 | `executor.py` | Applies writes. No model runs here, ever. |
 | `graph.py` / `nodes.py` / `state.py` | The graph and what flows along it |
 | `privacy.py` | Keeps credentials and private notes out of answers |
 | `index.py` / `retrieval.py` | Semantic search over the user's notes |
-| `care.py` / `daily.py` | "Take Care of Juno" and the morning routine |
+| `care.py` / `daily.py` | "Take Care of Notron" and the morning routine |
 
 ## Invariants — do not break these
 
-1. **`📌 About Me` is never written by Juno.** It is the user's instruction note.
-2. **Outside `🤖 JUNO` she may only add, never rewrite.** `notedoc.preserves` proves
+1. **`📌 About Me` is never written by Notron.** It is the user's instruction note.
+2. **Outside `🤖 NOTRON` she may only add, never rewrite.** `notedoc.preserves` proves
    character by character that every original character survives, in order, and
    that new text landed between elements rather than inside a sentence.
 3. **No model runs in the write path.** The model proposes, the Guard judges in
@@ -113,7 +113,7 @@ silently return the first one twice. Address folders by index.
 so cost scales with the user's history, not the answer. Reminders cannot even return
 properties from a filtered set: `name of rs` raises
 `Can't get name of {reminder id "x-apple-reminder://…"}`. There is no tuning that
-closes a 700× gap — use `juno/eventkit.py`.
+closes a 700× gap — use `notron/eventkit.py`.
 
 ## Nemotron gotchas
 
@@ -139,14 +139,14 @@ closes a 700× gap — use `juno/eventkit.py`.
   AppleScript Automation, and an unapproved app *hangs* rather than failing.
   **Calendar and Reminders** use EventKit, whose `write only` state is the nasty
   one: it raises nothing and reports one calendar and zero events, so a blocked
-  calendar is indistinguishable from a free week. `juno permissions` reads the
+  calendar is indistinguishable from a free week. `notron permissions` reads the
   numeric status instead of trusting a query.
 - EventKit reads are asynchronous and JXA has no `await`. A script that does not
   pump `NSRunLoop.runModeBeforeDate` exits before the callback fires and returns
   nothing, every time, with no error.
 - Do not replace the JXA scripts with a compiled Swift helper. EventKit access is
   granted per binary, and an unsigned binary's identity changes on every rebuild —
-  so every edit to Juno would re-prompt, and a background listener can never answer
+  so every edit to Notron would re-prompt, and a background listener can never answer
   a prompt. `osascript` inherits the terminal's stable identity.
 - A dated reminder needs an explicit `EKAlarm`. A due date alone shows in the app
   but does not notify, and a reminder that does not buzz is a note with a circle.

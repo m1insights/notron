@@ -1,4 +1,4 @@
-"""Which of your apps Juno is actually allowed to read.
+"""Which of your apps Notron is actually allowed to read.
 
 Three separate permissions, and each fails in its own quiet way:
 
@@ -52,7 +52,7 @@ EXPLAIN = {
     RESTRICTED: ("is restricted by a profile on this Mac", True),
     DENIED: ("is denied", True),
     FULL: ("full access", False),
-    WRITE_ONLY: ("is write only — Juno can add things but cannot read them, "
+    WRITE_ONLY: ("is write only — Notron can add things but cannot read them, "
                  "so your calendar will look empty", True),
 }
 

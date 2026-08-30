@@ -1,8 +1,8 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import graph, nodes, research
-from juno.state import State
+from notron import graph, nodes, research
+from notron.state import State
 
 
 def test_no_search_happens_unless_the_router_asked_for_one():

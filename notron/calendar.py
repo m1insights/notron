@@ -1,4 +1,4 @@
-"""The Calendar app — so the day Juno plans is the day you actually have.
+"""The Calendar app — so the day Notron plans is the day you actually have.
 
 Reads go through `eventkit`. Driving the Calendar app instead was measured at 26
 seconds for a single seven-day window, because a `whose start date …` filter walks
@@ -14,7 +14,7 @@ occurrences inside the window, where the app's scripting interface would hand ba
 the original rule and leave you to work out this week's instance yourself.
 
 Note for anyone editing this file: never write a bare `import calendar` anywhere in
-the `juno` package. Relative imports (`from . import calendar`) are unambiguous; a
+the `notron` package. Relative imports (`from . import calendar`) are unambiguous; a
 bare one gets the standard library.
 """
 

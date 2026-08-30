@@ -2,7 +2,7 @@ import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import pytest
-from juno import eventkit
+from notron import eventkit
 
 
 def test_a_script_result_comes_back_as_parsed_json():

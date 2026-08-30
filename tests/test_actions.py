@@ -8,8 +8,8 @@ import sys, pathlib
 from datetime import datetime, timedelta
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import guard
-from juno.state import Action
+from notron import guard
+from notron.state import Action
 
 SOON = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT14:00")
 ABOUT_9AM = "## My rules\n- Never schedule me before 9am.\n- Keep it short."
@@ -146,7 +146,7 @@ def test_an_unknown_kind_is_refused_rather_than_guessed_at():
 
 def test_a_blocked_action_is_logged_and_never_reaches_the_app(monkeypatch):
     """Invariant 4: every write, allowed or blocked, lands in the Log."""
-    from juno import executor as ex_mod
+    from notron import executor as ex_mod
 
     logged, created = [], []
     monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: logged.append(line))
@@ -160,7 +160,7 @@ def test_a_blocked_action_is_logged_and_never_reaches_the_app(monkeypatch):
 
 
 def test_an_allowed_reminder_reaches_the_app_and_is_logged(monkeypatch):
-    from juno import executor as ex_mod
+    from notron import executor as ex_mod
 
     logged, created = [], []
     monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: logged.append(line))
@@ -176,7 +176,7 @@ def test_an_allowed_reminder_reaches_the_app_and_is_logged(monkeypatch):
 
 
 def test_a_dry_run_touches_nothing(monkeypatch):
-    from juno import executor as ex_mod
+    from notron import executor as ex_mod
 
     called = []
     monkeypatch.setattr(ex_mod.reminders, "create", lambda *a, **kw: called.append(a) or "x")
@@ -187,8 +187,8 @@ def test_a_dry_run_touches_nothing(monkeypatch):
 
 
 def test_completing_looks_the_reminder_up_by_what_the_user_called_it(monkeypatch):
-    from juno import executor as ex_mod
-    from juno.reminders import Reminder
+    from notron import executor as ex_mod
+    from notron.reminders import Reminder
 
     monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: None)
     monkeypatch.setattr(ex_mod.reminders, "find_open",
@@ -203,7 +203,7 @@ def test_completing_looks_the_reminder_up_by_what_the_user_called_it(monkeypatch
 
 
 def test_ticking_off_something_that_isnt_there_says_so(monkeypatch):
-    from juno import executor as ex_mod
+    from notron import executor as ex_mod
 
     monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: None)
     monkeypatch.setattr(ex_mod.reminders, "find_open", lambda phrase, **kw: None)

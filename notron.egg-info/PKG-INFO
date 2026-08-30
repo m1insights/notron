@@ -1,9 +1,45 @@
-# NOTRON
+Metadata-Version: 2.4
+Name: notron
+Version: 0.1.0
+Summary: A personal AI agent that lives inside Apple Notes
+License: MIT License
+        
+        Copyright (c) 2026 M1 Labs
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Project-URL: Homepage, https://github.com/m1insights/juno
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: openai>=1.60.0
+Requires-Dist: numpy>=1.26
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"
+Dynamic: license-file
+
+# JUNO
 
 **A personal AI agent that lives inside the Notes app you already have.**
 
 No new app. No new account. No new habit. You type into Apple Notes on your
-phone — the same place you already dump your life — and Notron reads it, thinks
+phone — the same place you already dump your life — and Juno reads it, thinks
 about it on NVIDIA Nemotron, and writes back into your notes. The answer is on
 your phone about ten seconds later.
 
@@ -18,7 +54,7 @@ they all start with "first, rebuild your life in here." Almost nobody finishes.
 
 Apple Notes already won. It is on a billion devices, it already syncs, and it is
 already where people keep the messy truth of their lives. So instead of building
-another place to put things, Notron moves *into* the place you already are and
+another place to put things, Juno moves *into* the place you already are and
 turns it into an agent workspace.
 
 Your notes become three things at once: the interface, the memory, and the
@@ -28,11 +64,11 @@ instructions.
 
 Two ways, both of them just typing in Notes.
 
-**Ask her directly.** Write in the `📥 Ask Notron` note — anywhere in it, top or
+**Ask her directly.** Write in the `📥 Ask Juno` note — anywhere in it, top or
 bottom. She waits until you've stopped typing, answers directly underneath what
 you wrote, and draws a line so the next thing you type is the next question.
 
-**Or tag her where you're already thinking.** Write `#notron` in any note you own —
+**Or tag her where you're already thinking.** Write `#juno` in any note you own —
 the book idea, the meeting note, the half-finished plan — and ask about *that*
 thing, in *that* place:
 
@@ -44,7 +80,7 @@ from someone who died forty years ago.
 
 Act two is where it falls apart — she just reads letters for sixty pages.
 
-#notron what would give act two some pressure?
+#juno what would give act two some pressure?
 ```
 
 She answers underneath that line, using the note itself as context. In a note that
@@ -57,16 +93,16 @@ ten seconds later. And if you ask something at 2am while the Mac is shut, she pi
 it up the moment it wakes.
 
 ```bash
-notron listen --install     # she listens from now on, through reboots
-notron listen --off         # she stops
+juno listen --install     # she listens from now on, through reboots
+juno listen --off         # she stops
 ```
 
-There is a terminal route too — `notron ask "..."` — but it exists for testing. The
+There is a terminal route too — `juno ask "..."` — but it exists for testing. The
 note is the product.
 
 ## She can set a reminder
 
-Type this into `📥 Ask Notron`:
+Type this into `📥 Ask Juno`:
 
 ```
 remind me to call the pharmacy thursday at 10am
@@ -75,7 +111,7 @@ remind me to call the pharmacy thursday at 10am
 About fifteen seconds later, underneath it:
 
 ```
-Notron: Reminder set: Call the pharmacy — Thursday 3 September at 10:00
+Juno: Reminder set: Call the pharmacy — Thursday 3 September at 10:00
 ```
 
 And it is a real reminder — in the Reminders app, buzzing on your phone at
@@ -92,31 +128,31 @@ nicely. See [Safety: the Guard](#safety-the-guard).
 
 ## How it works for you
 
-Notron creates one folder, `🤖 NOTRON`, with six notes:
+Juno creates one folder, `🤖 JUNO`, with six notes:
 
 | Note | Who writes it | What it is |
 |---|---|---|
-| `📌 About Me` | **You only** | Your standing instructions. Notron reads it before every action and can never write to it. |
-| `📥 Ask Notron` | Both | Type a request; Notron answers underneath. |
-| `☀️ Today` | Notron | Your to-do list, rebuilt each morning. |
-| `🗓️ This Week` | Notron | Your weekly plan. |
-| `🧠 Memory` | Notron | What she has learned about you. You can correct any of it. |
-| `🌱 Take Care of Notron` | Notron | What *she* needs from *you* to keep working well. |
-| `📊 Log` | Notron | Every single thing she did. Nothing happens off the record. |
+| `📌 About Me` | **You only** | Your standing instructions. Juno reads it before every action and can never write to it. |
+| `📥 Ask Juno` | Both | Type a request; Juno answers underneath. |
+| `☀️ Today` | Juno | Your to-do list, rebuilt each morning. |
+| `🗓️ This Week` | Juno | Your weekly plan. |
+| `🧠 Memory` | Juno | What she has learned about you. You can correct any of it. |
+| `🌱 Take Care of Juno` | Juno | What *she* needs from *you* to keep working well. |
+| `📊 Log` | Juno | Every single thing she did. Nothing happens off the record. |
 
 Every other note you own is her knowledge base.
 
 `📌 About Me` is the important one. It works like a config file written in plain
 English — "never schedule me before 9am", "keep it short", "I'm a nurse on
-nights" — and it outranks everything Notron would otherwise decide. You are not
+nights" — and it outranks everything Juno would otherwise decide. You are not
 prompting a chatbot. You are editing the constitution of your assistant.
 
-## Take Care of Notron
+## Take Care of Juno
 
 An assistant that reads your whole life has upkeep, and normally that upkeep is
 invisible until something breaks: the instruction note quietly bloats until it
 crowds out your actual question, hundreds of new notes never get learned, the
-bill drifts. Every morning Notron measures her own state and writes you a note
+bill drifts. Every morning Juno measures her own state and writes you a note
 about it, in her own voice:
 
 > I'm in good shape, but I'm carrying a lot.
@@ -124,7 +160,7 @@ about it, in her own voice:
 > **What I need from you**
 > - [ ] `📌 About Me` is 6,100 characters and I read all of it before every single
 >       thing I do. Trim it to the rules that still matter.
-> - [ ] 42 notes have appeared since I last studied. Run `notron index`.
+> - [ ] 42 notes have appeared since I last studied. Run `juno index`.
 >
 > **How I'm doing**
 > - I've read all 358 of your notes.
@@ -134,20 +170,20 @@ It reframes context hygiene — a thing normal people will never do — as looki
 after something. Every number in it is measured; the model only writes the words.
 
 ```bash
-notron care
+juno care
 ```
 
 ## Safety: the Guard
 
 An agent with write access to your entire personal history is only useful if it
-cannot wreck it. Notron has one choke point — the Guard — and it is not a prompt,
+cannot wreck it. Juno has one choke point — the Guard — and it is not a prompt,
 it is code. Every proposed write passes through it:
 
-1. **`📌 About Me` can never be written by Notron.** Your instructions are yours.
-2. **Outside her own folder Notron may only append.** She cannot overwrite or
+1. **`📌 About Me` can never be written by Juno.** Your instructions are yours.
+2. **Outside her own folder Juno may only append.** She cannot overwrite or
    delete a note you wrote. The Guard verifies the new body still contains the
    old one, byte for byte.
-3. **No write may carry a credential.** On Notron's very first live morning run she
+3. **No write may carry a credential.** On Juno's very first live morning run she
    pulled two passwords out of the user's own notes and wrote them into the day's
    plan — which then synced to their phone. Now credential notes are excluded from
    retrieval entirely, anything that still looks like a secret is masked before the
@@ -165,7 +201,7 @@ a dumb executor applies. That separation is the whole security model.
 
 ## Architecture: graph engineering
 
-Notron is not one agent spinning in a while-loop. It is a declared graph of
+Juno is not one agent spinning in a while-loop. It is a declared graph of
 specialised nodes with explicit edges, so you can see exactly what runs, in what
 order, and on which model.
 
@@ -209,30 +245,30 @@ a plan costs one Nano plus one Super. Cost scales with what you actually asked f
 Requires macOS and Python 3.11+.
 
 ```bash
-git clone <this repo> && cd notron
+git clone <this repo> && cd juno
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 
 cp .env.example .env          # then paste your Nebius key into it
-.venv/bin/python -m notron setup
+.venv/bin/python -m juno setup
 ```
 
 The first run will ask macOS for permission to control Notes. Allow it.
 
-Then open Notes → `🤖 NOTRON` → `📌 About Me` and write a few lines about yourself.
+Then open Notes → `🤖 JUNO` → `📌 About Me` and write a few lines about yourself.
 
 ## Use
 
 ```bash
-.venv/bin/python -m notron index               # teach her your notes (once)
-.venv/bin/python -m notron ask "what did I decide about pricing?"
-.venv/bin/python -m notron plan --week
-.venv/bin/python -m notron care                # what she needs from you today
-.venv/bin/python -m notron morning             # her full daily routine
-.venv/bin/python -m notron schedule --hour 6   # let macOS run it every morning
-.venv/bin/python -m notron graph               # print the node graph
-.venv/bin/python -m notron models              # what your Nebius key can run
-.venv/bin/python -m notron permissions         # can she reach Notes, Reminders, Calendar?
-.venv/bin/python -m notron agenda              # today, this week, and what's outstanding
+.venv/bin/python -m juno index               # teach her your notes (once)
+.venv/bin/python -m juno ask "what did I decide about pricing?"
+.venv/bin/python -m juno plan --week
+.venv/bin/python -m juno care                # what she needs from you today
+.venv/bin/python -m juno morning             # her full daily routine
+.venv/bin/python -m juno schedule --hour 6   # let macOS run it every morning
+.venv/bin/python -m juno graph               # print the node graph
+.venv/bin/python -m juno models              # what your Nebius key can run
+.venv/bin/python -m juno permissions         # can she reach Notes, Reminders, Calendar?
+.venv/bin/python -m juno agenda              # today, this week, and what's outstanding
 ```
 
 Add `--dry-run` to any command to walk the graph and write nothing.
@@ -261,10 +297,10 @@ Tested on macOS 26.2, 2026-08-29. Apple documents almost none of this.
 | Read/write notes via AppleScript | Works |
 | `<h1>` `<b>` `<i>` `<ul>` `<ol>` `<table>` | All render |
 | `<a href>` | **href is stripped.** Emit bare URLs instead. |
-| `class="checklist"` (tap-to-tick boxes) | **Stripped.** Notron uses ☐ / ✅ text and you tell her when something's done — or now, asks Reminders to make a real one. |
+| `class="checklist"` (tap-to-tick boxes) | **Stripped.** Juno uses ☐ / ✅ text and you tell her when something's done — or now, asks Reminders to make a real one. |
 | Note title | Taken from the first line of the body, always. |
 | iCloud | Every Mac-side write appears on your iPhone automatically. |
-| Reminders/Calendar via AppleScript | **Unusable at real-library scale** — 65.7s for 23 open reminders, 26s for a 7-day window. Read them through EventKit instead (0.093s / 0.025s) — see `notron/eventkit.py`. |
+| Reminders/Calendar via AppleScript | **Unusable at real-library scale** — 65.7s for 23 open reminders, 26s for a 7-day window. Read them through EventKit instead (0.093s / 0.025s) — see `juno/eventkit.py`. |
 
 ## Tests
 

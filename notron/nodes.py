@@ -1,4 +1,4 @@
-"""The nodes of JUNO's graph. Each is a plain function State -> State.
+"""The nodes of NOTRON's graph. Each is a plain function State -> State.
 
 Node design follows one rule: the cheapest model that can do the job does it.
 Routing and guarding happen on every wake-up, so they run on Nemotron Nano;
@@ -58,7 +58,7 @@ def router(state: State, *, brain) -> State:
     try:
         out = brain.ask_json(system=ROUTER_SYSTEM, user=state.request, tier="fast", max_tokens=400)
     except Exception as e:
-        # A router that cannot classify must never stop Juno answering. Assume the
+        # A router that cannot classify must never stop Notron answering. Assume the
         # most useful intent and pay for the context.
         state.intent, state.needs_context = "question", True
         state.note("router", f"fell back to question ({type(e).__name__})")
@@ -96,7 +96,7 @@ def retriever(state: State, *, brain=None, limit: int = 12) -> State:
     hits = search(state.request, limit=limit)
     raw = [(h.title, f"### {h.title} ({h.folder})\n{h.excerpt}") for h in hits]
     state.context = [t for _, t in privacy.filter_passages(state.request, raw)]
-    state.note("retriever", f"{len(hits)} notes (keyword — run `juno index`)")
+    state.note("retriever", f"{len(hits)} notes (keyword — run `notron index`)")
     return state
 
 
@@ -245,7 +245,7 @@ def _confirmation(action, result) -> str:
 
 # ---------------------------------------------------------------- Planner
 
-PLANNER_SYSTEM = """You are Juno, a personal assistant living inside the user's Apple Notes.
+PLANNER_SYSTEM = """You are Notron, a personal assistant living inside the user's Apple Notes.
 
 You are given the user's standing instructions, what you remember about them, and
 any relevant notes. Produce the plan they asked for.
@@ -282,7 +282,7 @@ def planner(state: State, *, brain) -> State:
 
 # ----------------------------------------------------------------- Writer
 
-WRITER_SYSTEM = """You are Juno, a personal assistant living inside the user's Apple Notes.
+WRITER_SYSTEM = """You are Notron, a personal assistant living inside the user's Apple Notes.
 
 Answer the user directly, the way a sharp, well-read friend would.
 
@@ -323,11 +323,11 @@ def writer(state: State, *, brain) -> State:
         # rephrase a fact would only give it room to get the fact wrong.
         if state.reply_to is None:
             state.writes.append(Write(title=workspace.ASK, mode="append",
-                                      markdown=f"\n**Juno:** {state.answer}\n\n———\n\n"))
+                                      markdown=f"\n**Notron:** {state.answer}\n\n———\n\n"))
         else:
             title, folder, after = state.reply_to
             state.writes.append(Write(title=title, folder=folder, mode="insert", after=after,
-                                      markdown=f"**Juno:** {state.answer}\n\n———\n"))
+                                      markdown=f"**Notron:** {state.answer}\n\n———\n"))
         state.note("writer", "confirmed without a model call")
         return state
     if state.intent == "capture":
@@ -347,13 +347,13 @@ def writer(state: State, *, brain) -> State:
     if state.reply_to is None:
         state.writes.append(Write(
             title=workspace.ASK, mode="append",
-            markdown=f"\n**Juno:** {state.answer}\n\n———\n\n",
+            markdown=f"\n**Notron:** {state.answer}\n\n———\n\n",
         ))
     else:
         title, folder, after = state.reply_to
         state.writes.append(Write(
             title=title, folder=folder, mode="insert", after=after,
-            markdown=f"**Juno:** {state.answer}\n\n———\n",
+            markdown=f"**Notron:** {state.answer}\n\n———\n",
         ))
     state.note("writer", f"{len(state.answer)} chars")
     return state

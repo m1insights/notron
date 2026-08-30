@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""juno — a personal agent that lives inside your Apple Notes."""
+"""notron — a personal agent that lives inside your Apple Notes."""
 
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ def cmd_setup(args):
     print(f"\nSetting up {workspace.FOLDER} in Apple Notes\n")
     for title, state in workspace.bootstrap().items():
         print(f"  {state:8} {title}")
-    print(f"\n  Open Notes → {workspace.FOLDER} → {workspace.ABOUT} and tell Juno who you are.\n")
-    print("\n  Checking Juno can reach your apps…")
+    print(f"\n  Open Notes → {workspace.FOLDER} → {workspace.ABOUT} and tell Notron who you are.\n")
+    print("\n  Checking Notron can reach your apps…")
     cmd_permissions(args)
 
 
@@ -101,7 +101,7 @@ def cmd_care(args):
 def cmd_morning(args):
     from . import daily
 
-    print(f"\n  Juno's morning — {__import__('datetime').datetime.now():%A %d %B, %H:%M}\n")
+    print(f"\n  Notron's morning — {__import__('datetime').datetime.now():%A %d %B, %H:%M}\n")
     out = daily.morning(_brain(), dry_run=args.dry_run, on_step=lambda m: print(f"  · {m}"))
     print(f"\n{out.get('plan') or ''}\n")
     if out.get("care"):
@@ -120,7 +120,7 @@ def cmd_schedule(args):
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{daily.PLIST_LABEL}"],
                        capture_output=True)
         target.unlink(missing_ok=True)
-        print(f"\n  Juno's morning routine is off.\n")
+        print(f"\n  Notron's morning routine is off.\n")
         return
 
     project = pathlib.Path(__file__).resolve().parents[1]
@@ -134,8 +134,8 @@ def cmd_schedule(args):
     if r.returncode != 0:
         print(f"\n  Could not schedule: {r.stderr.strip()}\n", file=sys.stderr)
         raise SystemExit(1)
-    print(f"\n  Juno will run every morning at {args.hour:02d}:{args.minute:02d}.")
-    print(f"  Your Mac must be awake. Turn it off with: juno schedule --off\n")
+    print(f"\n  Notron will run every morning at {args.hour:02d}:{args.minute:02d}.")
+    print(f"  Your Mac must be awake. Turn it off with: notron schedule --off\n")
 
 
 def cmd_listen(args):
@@ -148,7 +148,7 @@ def cmd_listen(args):
     if args.off:
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True)
         target.unlink(missing_ok=True)
-        print("\n  Juno has stopped listening.\n")
+        print("\n  Notron has stopped listening.\n")
         return
 
     if args.install:
@@ -160,9 +160,9 @@ def cmd_listen(args):
         if r.returncode != 0:
             print(f"\n  Could not start: {r.stderr.strip()}\n", file=sys.stderr)
             raise SystemExit(1)
-        print(f"\n  Juno is listening, and will keep listening after you reboot.")
+        print(f"\n  Notron is listening, and will keep listening after you reboot.")
         print(f"  Type into Notes → {workspace.FOLDER} → {workspace.ASK}, from any device.")
-        print(f"  Stop her with: juno listen --off\n")
+        print(f"  Stop her with: notron listen --off\n")
         return
 
     print()
@@ -183,18 +183,18 @@ def cmd_graph(args):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="juno", description=__doc__)
+    p = argparse.ArgumentParser(prog="notron", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("setup", help="create the JUNO folder and its notes").set_defaults(fn=cmd_setup)
+    sub.add_parser("setup", help="create the NOTRON folder and its notes").set_defaults(fn=cmd_setup)
 
-    a = sub.add_parser("ask", help="ask Juno something")
+    a = sub.add_parser("ask", help="ask Notron something")
     a.add_argument("request", nargs="+")
     a.add_argument("--dry-run", action="store_true", help="run the graph, write nothing")
     a.add_argument("--quiet", action="store_true", help="print only the answer — for scripts/Shortcuts")
     a.set_defaults(fn=cmd_ask)
 
-    pl = sub.add_parser("plan", help="have Juno plan your day or week")
+    pl = sub.add_parser("plan", help="have Notron plan your day or week")
     pl.add_argument("--week", action="store_true")
     pl.add_argument("--dry-run", action="store_true")
     pl.set_defaults(fn=cmd_plan)
@@ -204,7 +204,7 @@ def main(argv=None):
     li.add_argument("--off", action="store_true", help="stop listening")
     li.set_defaults(fn=cmd_listen)
 
-    mo = sub.add_parser("morning", help="Juno's daily routine: catch up, plan, self-check")
+    mo = sub.add_parser("morning", help="Notron's daily routine: catch up, plan, self-check")
     mo.add_argument("--dry-run", action="store_true")
     mo.set_defaults(fn=cmd_morning)
 
@@ -214,18 +214,18 @@ def main(argv=None):
     sc.add_argument("--off", action="store_true", help="stop the daily run")
     sc.set_defaults(fn=cmd_schedule)
 
-    ca = sub.add_parser("care", help="what Juno needs from you today")
+    ca = sub.add_parser("care", help="what Notron needs from you today")
     ca.add_argument("--offline", action="store_true", help="skip the model, use plain wording")
     ca.add_argument("--dry-run", action="store_true")
     ca.set_defaults(fn=cmd_care)
 
-    ix = sub.add_parser("index", help="teach Juno your notes (run after adding a lot)")
+    ix = sub.add_parser("index", help="teach Notron your notes (run after adding a lot)")
     ix.add_argument("--rebuild", action="store_true", help="re-embed everything from scratch")
     ix.set_defaults(fn=cmd_index)
 
     sub.add_parser("models", help="list models this Nebius key can run").set_defaults(fn=cmd_models)
     sub.add_parser("graph", help="show the node graph").set_defaults(fn=cmd_graph)
-    sub.add_parser("permissions", help="check Juno can talk to Notes, Reminders and Calendar"
+    sub.add_parser("permissions", help="check Notron can talk to Notes, Reminders and Calendar"
                    ).set_defaults(fn=cmd_permissions)
     sub.add_parser("agenda", help="what's in your calendar and what's still open"
                    ).set_defaults(fn=cmd_agenda)

@@ -1,6 +1,6 @@
 """The Reminders app — real checkboxes you tap, real notifications, real phone sync.
 
-This exists because Apple Notes cannot be given a tappable checkbox by script. Juno
+This exists because Apple Notes cannot be given a tappable checkbox by script. Notron
 writes `☐` and `✅` as plain text into notes; Reminders is where a task can actually
 buzz. It is the most demonstrable thing she does.
 
@@ -8,7 +8,7 @@ Everything here goes through `eventkit`, not AppleScript. Reading 23 open remind
 took 65.7 seconds through the Reminders app and 0.093 seconds through EventKit — the
 same answer, from the same store, 700 times faster. See `eventkit.py` for why.
 
-There is no `delete` in this module and there never will be. Juno may tick something
+There is no `delete` in this module and there never will be. Notron may tick something
 off; removing it is the user's to do.
 """
 

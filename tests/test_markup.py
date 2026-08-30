@@ -1,7 +1,7 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import markup
+from notron import markup
 
 
 def test_title_leads_the_body_so_notes_names_it_right():
@@ -42,7 +42,7 @@ def test_html_in_user_text_is_escaped_not_executed():
 
 
 def test_round_trip_back_to_text():
-    body = markup.render("Ask Juno", "- one\n- two\n\nplain line")
+    body = markup.render("Ask Notron", "- one\n- two\n\nplain line")
     text = markup.to_text(body)
     assert "one" in text and "two" in text and "plain line" in text
     assert "<" not in text

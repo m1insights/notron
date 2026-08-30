@@ -1,9 +1,9 @@
 """Listening, so Notes itself is the interface.
 
-Two ways to reach Juno, both of them just typing in the Notes app:
+Two ways to reach Notron, both of them just typing in the Notes app:
 
-  * write in `📥 Ask Juno`, anywhere in the note; or
-  * write `#juno` in any note you own — the book idea, the meeting note, the
+  * write in `📥 Ask Notron`, anywhere in the note; or
+  * write `#notron` in any note you own — the book idea, the meeting note, the
     half-finished plan — and ask about that thing, in that place.
 
 Either way she answers directly underneath what you wrote, and draws no more
@@ -15,9 +15,9 @@ Three things this has to get right, all learned the hard way:
   * **Answering herself.** Her replies are signed, and signed turns are never
     read as questions.
   * **Blocking Notes.** Apple Notes serves one script request at a time, and a
-    slow one wedges the app for everybody — including Juno. So there is exactly
+    slow one wedges the app for everybody — including Notron. So there is exactly
     one loop, it never runs two requests at once, the Ask note is checked often
-    because it is one cheap read, and the full sweep for `#juno` runs on a much
+    because it is one cheap read, and the full sweep for `#notron` runs on a much
     longer cycle.
 """
 
@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from . import conversation, graph, mentions, notes, workspace
 
 ASK_POLL = 5           # seconds between checks of the Ask note
-SWEEP_EVERY = 20       # seconds between sweeps for #juno mentions (a survey is ~1s)
+SWEEP_EVERY = 20       # seconds between sweeps for #notron mentions (a survey is ~1s)
 SETTLE = 6             # how long your typing must be still before she answers
 MIN_CHARS = 2
 
@@ -129,7 +129,7 @@ class Watcher:
         self._say(f"listening to {workspace.ASK} — type in Notes on any device")
         try:
             n = self.scanner.prime()
-            self._say(f"watching {n} notes for #juno — tag me anywhere")
+            self._say(f"watching {n} notes for #notron — tag me anywhere")
         except Exception as e:
             self._say(f"  (couldn't survey your notes: {type(e).__name__}) — Ask note still works")
 
@@ -151,7 +151,7 @@ class Watcher:
                 time.sleep(self.ask_poll)
 
 
-WATCH_LABEL = "io.m1labs.juno.listen"
+WATCH_LABEL = "io.m1labs.notron.listen"
 
 
 def plist(python: str, project: str) -> str:
@@ -162,14 +162,14 @@ def plist(python: str, project: str) -> str:
   <key>Label</key><string>{WATCH_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{python}</string><string>-m</string><string>juno</string><string>listen</string>
+    <string>{python}</string><string>-m</string><string>notron</string><string>listen</string>
   </array>
   <key>WorkingDirectory</key><string>{project}</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>{project}/.juno/listen.log</string>
-  <key>StandardErrorPath</key><string>{project}/.juno/listen.log</string>
+  <key>StandardOutPath</key><string>{project}/.notron/listen.log</string>
+  <key>StandardErrorPath</key><string>{project}/.notron/listen.log</string>
 </dict>
 </plist>
 """

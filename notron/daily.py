@@ -1,4 +1,4 @@
-"""Juno's morning routine.
+"""Notron's morning routine.
 
 One command, run by macOS at a fixed hour: catch up on anything you wrote since
 yesterday, rebuild today's list, and tell you what she needs to keep working well.
@@ -28,7 +28,7 @@ def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
     try:
         say(f"Notes ready in {notes.warm_up():.1f}s")
     except Exception as e:
-        say(f"Notes did not answer ({type(e).__name__}) — run `juno permissions`")
+        say(f"Notes did not answer ({type(e).__name__}) — run `notron permissions`")
 
     # 1. Learn anything written since yesterday.
     if not dry_run:
@@ -53,7 +53,7 @@ def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
     return out
 
 
-PLIST_LABEL = "io.m1labs.juno.morning"
+PLIST_LABEL = "io.m1labs.notron.morning"
 
 
 def plist(python: str, project: str, hour: int, minute: int) -> str:
@@ -66,7 +66,7 @@ def plist(python: str, project: str, hour: int, minute: int) -> str:
   <array>
     <string>{python}</string>
     <string>-m</string>
-    <string>juno</string>
+    <string>notron</string>
     <string>morning</string>
   </array>
   <key>WorkingDirectory</key><string>{project}</string>
@@ -75,8 +75,8 @@ def plist(python: str, project: str, hour: int, minute: int) -> str:
     <key>Hour</key><integer>{hour}</integer>
     <key>Minute</key><integer>{minute}</integer>
   </dict>
-  <key>StandardOutPath</key><string>{project}/.juno/morning.log</string>
-  <key>StandardErrorPath</key><string>{project}/.juno/morning.log</string>
+  <key>StandardOutPath</key><string>{project}/.notron/morning.log</string>
+  <key>StandardErrorPath</key><string>{project}/.notron/morning.log</string>
   <key>RunAtLoad</key><false/>
 </dict>
 </plist>

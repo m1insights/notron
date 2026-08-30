@@ -1,8 +1,8 @@
-"""Finding the places you have tagged Juno in your own notes.
+"""Finding the places you have tagged Notron in your own notes.
 
 The Ask note is a good front door, but it is not where thinking happens. Thinking
 happens in the note about the book, the note about the move, the note from a
-meeting eight months ago. Writing `#juno` in one of those turns it into a
+meeting eight months ago. Writing `#notron` in one of those turns it into a
 conversation without moving anything out of it.
 
 She answers directly underneath the line you tagged, and only there. In a note
@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 
 from . import conversation, notes, workspace
 
-STATE = pathlib.Path(__file__).resolve().parents[1] / ".juno" / "seen.json"
+STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "seen.json"
 
 
 @dataclass
@@ -45,10 +45,10 @@ class Scanner:
         """Get ready to watch, without answering everything ever written.
 
         On the very first run this records the current state of every note, so
-        that a `#juno` you typed two years ago does not suddenly get a reply.
+        that a `#notron` you typed two years ago does not suddenly get a reply.
 
         On every run after that it loads what was recorded last time — because a
-        restart must not lose a tag. If you write `#juno` and the machine reboots
+        restart must not lose a tag. If you write `#notron` and the machine reboots
         before she gets to it, she still owes you an answer, and she knows it.
         """
         if STATE.exists():
@@ -80,7 +80,7 @@ class Scanner:
         That means notes touched since the last look — and also any note already
         known to be waiting on an answer. A note that changed once and was then
         marked seen would otherwise be reported a single time, which is not
-        enough: Juno waits for your typing to settle before she replies, and
+        enough: Notron waits for your typing to settle before she replies, and
         settling takes at least two looks.
         """
         out = []
@@ -95,7 +95,7 @@ class Scanner:
         return out
 
     def scan(self) -> list[Mention]:
-        """Every unanswered `#juno` in a note that changed since the last look."""
+        """Every unanswered `#notron` in a note that changed since the last look."""
         found: list[Mention] = []
         for n in self.changed():
             try:

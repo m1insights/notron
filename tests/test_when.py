@@ -2,7 +2,7 @@ import sys, pathlib
 from datetime import datetime
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import when
+from notron import when
 
 
 def test_an_iso_string_from_the_model_becomes_a_real_datetime():

@@ -1,6 +1,6 @@
 """Looking things up on the web, when the answer cannot be in your notes.
 
-Juno knows what her model knows and what you have written down. Neither covers
+Notron knows what her model knows and what you have written down. Neither covers
 what happened this morning, what a thing costs today, or whether a restaurant is
 open. For those she searches — but only when the router says the question
 actually needs it, because a search is slow and everything else is not.
@@ -22,7 +22,7 @@ TIMEOUT = 20
 
 
 class NoSearchKey(RuntimeError):
-    """No Tavily key configured. Juno still answers, just without the web."""
+    """No Tavily key configured. Notron still answers, just without the web."""
 
 
 @dataclass(frozen=True)

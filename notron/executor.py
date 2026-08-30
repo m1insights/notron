@@ -1,4 +1,4 @@
-"""The only code in JUNO that is allowed to change a note.
+"""The only code in NOTRON that is allowed to change a note.
 
 No language model runs here. The model proposes; the Guard judges; this applies
 and records. Keeping the write path dumb is what makes the agent safe to leave
@@ -29,7 +29,7 @@ class Executor:
     # -- public API ------------------------------------------------------
 
     def replace(self, title: str, body_markdown: str, *, folder: str = workspace.FOLDER) -> WriteResult:
-        """Rewrite a note Juno owns."""
+        """Rewrite a note Notron owns."""
         return self._apply(folder, title, body_markdown, mode="replace")
 
     def append(self, title: str, body_markdown: str, *, folder: str = workspace.FOLDER) -> WriteResult:

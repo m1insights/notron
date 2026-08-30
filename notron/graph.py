@@ -1,4 +1,4 @@
-"""JUNO's graph.
+"""NOTRON's graph.
 
 Not an agent in a while-loop. A declared network of specialised nodes with
 explicit edges, so it is obvious — to you and to a reviewer — exactly what runs,
@@ -79,7 +79,7 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
         if on_node:
             on_node(name, state)
         if state.intent == "ignore" and name == "router":
-            state.note("graph", "halted — nothing addressed to Juno")
+            state.note("graph", "halted — nothing addressed to Notron")
             break
     return state
 

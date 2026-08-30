@@ -1,45 +1,45 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import conversation, markup, notedoc
+from notron import conversation, markup, notedoc
 
 
-IGNORE = ("📥 Ask Juno", "Type anything below this line", "header")
+IGNORE = ("📥 Ask Notron", "Type anything below this line", "header")
 
 
 def note(md):
-    return markup.render("📥 Ask Juno", md)
+    return markup.render("📥 Ask Notron", md)
 
 
 def test_a_question_typed_at_the_top_is_found():
     """The bug that lost a real message: the note says 'type below this line',
     which is at the top, but the reader only looked at the bottom."""
-    body = note("Type anything below this line and Juno will answer underneath it.\n\n"
-                "Hi Juno. How are you?\n\n———\n\n**Juno:** an older answer\n\n———\n")
+    body = note("Type anything below this line and Notron will answer underneath it.\n\n"
+                "Hi Notron. How are you?\n\n———\n\n**Notron:** an older answer\n\n———\n")
     qs = conversation.unanswered(body, ignore=IGNORE)
     assert len(qs) == 1
     assert "How are you?" in qs[0].text
 
 
 def test_a_question_at_the_bottom_is_found_too():
-    body = note("header\n\n———\n\n**Juno:** old answer\n\n———\n\nwhat's on today?")
+    body = note("header\n\n———\n\n**Notron:** old answer\n\n———\n\nwhat's on today?")
     qs = conversation.unanswered(body, ignore=IGNORE)
     assert [q.text for q in qs] == ["what's on today?"]
 
 
 def test_an_answered_question_is_not_asked_again():
-    body = note("header\n\n———\n\nwhat's on today?\n\n**Juno:** three things\n\n———\n")
+    body = note("header\n\n———\n\nwhat's on today?\n\n**Notron:** three things\n\n———\n")
     assert conversation.unanswered(body, ignore=IGNORE) == []
 
 
 def test_two_questions_in_different_places_are_both_found():
-    body = note("header\n\nfirst thing\n\n———\n\n**Juno:** answered that\n\n———\n\nsecond thing")
+    body = note("header\n\nfirst thing\n\n———\n\n**Notron:** answered that\n\n———\n\nsecond thing")
     qs = conversation.unanswered(body, ignore=IGNORE)
     assert [q.text for q in qs] == ["first thing", "second thing"]
 
 
-def test_junos_own_words_are_never_treated_as_a_question():
-    body = note("header\n\n**Juno:** I answered already\n")
+def test_notrons_own_words_are_never_treated_as_a_question():
+    body = note("header\n\n**Notron:** I answered already\n")
     assert conversation.unanswered(body, ignore=IGNORE) == []
 
 
@@ -47,14 +47,14 @@ def test_in_someone_elses_note_she_only_answers_when_tagged():
     body = markup.render("Book idea", "A story about a lighthouse.\n\nchapter two is weak")
     assert conversation.unanswered(body, require_tag=True) == []
 
-    tagged = markup.render("Book idea", "A story about a lighthouse.\n\n#juno is chapter two weak?")
+    tagged = markup.render("Book idea", "A story about a lighthouse.\n\n#notron is chapter two weak?")
     qs = conversation.unanswered(tagged, require_tag=True)
     assert len(qs) == 1 and "chapter two" in qs[0].text
 
 
 def test_the_tag_is_stripped_before_she_reads_it():
-    assert conversation.strip_tag("#juno what do you think?") == "what do you think?"
-    assert conversation.strip_tag("hey @Juno help") == "hey  help".replace("  ", " ")
+    assert conversation.strip_tag("#notron what do you think?") == "what do you think?"
+    assert conversation.strip_tag("hey @Notron help") == "hey  help".replace("  ", " ")
 
 
 def test_the_reply_lands_directly_under_what_you_wrote():
@@ -80,13 +80,13 @@ def test_splitting_and_rejoining_a_note_changes_nothing():
 def test_a_long_reply_of_hers_is_one_turn_not_five_new_questions():
     """Only the first line of her reply is signed. Without a closing rule, her
     own headings and bullets came back as fresh questions from the user."""
-    body = note("header\n\n**Juno:** here is what you owe\n\n"
+    body = note("header\n\n**Notron:** here is what you owe\n\n"
                 "## What's still owed\n\n- one thing\n- another thing\n\n———\n")
     assert conversation.unanswered(body, ignore=IGNORE) == []
 
 
 def test_a_real_question_after_her_long_reply_is_still_seen():
-    body = note("header\n\n**Juno:** here is what you owe\n\n- one\n- two\n\n———\n\nand what about Friday?")
+    body = note("header\n\n**Notron:** here is what you owe\n\n- one\n- two\n\n———\n\nand what about Friday?")
     qs = conversation.unanswered(body, ignore=IGNORE)
     assert [q.text for q in qs] == ["and what about Friday?"]
 
@@ -94,9 +94,9 @@ def test_a_real_question_after_her_long_reply_is_still_seen():
 def test_the_question_is_the_line_you_tagged_not_the_whole_paragraph():
     turn = ("A story about a lighthouse keeper.\n"
             "Act two falls apart.\n"
-            "#juno what would give act two some pressure?")
+            "#notron what would give act two some pressure?")
     q = conversation.tagged_lines(turn)
-    assert q == "#juno what would give act two some pressure?"
+    assert q == "#notron what would give act two some pressure?"
     assert conversation.strip_tag(q) == "what would give act two some pressure?"
 
 
@@ -111,9 +111,9 @@ def test_boundaries_survive_the_newlines_apple_notes_puts_between_blocks():
 def test_a_new_question_above_an_old_exchange_is_not_swallowed():
     """A real lost message: typed at the top of the note, above an older
     question that already had a reply. The two ran together as one turn, saw
-    Juno's old answer underneath, and counted as answered."""
+    Notron's old answer underneath, and counted as answered."""
     body = note("header\n\n\n\nHow would you rate Stranded versus Fonda Lee?\n\n\n\n"
-                "Hi Juno, I'm about to read a book.\n\n**Juno:** Noted.\n\n———\n")
+                "Hi Notron, I'm about to read a book.\n\n**Notron:** Noted.\n\n———\n")
     qs = conversation.unanswered(body, ignore=IGNORE)
     assert len(qs) == 1
     assert "Fonda Lee" in qs[0].text

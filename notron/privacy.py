@@ -1,9 +1,9 @@
-"""Keeping your secrets out of the notes Juno writes.
+"""Keeping your secrets out of the notes Notron writes.
 
 An assistant that reads everything you own will, sooner or later, read the note
 where you keep your passwords — and then helpfully quote it back in a plan that
 syncs to your phone and anywhere else that note goes. That is not hypothetical;
-it happened on the first live run of Juno's morning routine.
+it happened on the first live run of Notron's morning routine.
 
 Two defences, both applied by default:
 
@@ -52,7 +52,7 @@ HIGH_ENTROPY = re.compile(
 
 REDACTED = "[redacted]"
 
-# Notes people would not want quoted back at them. Juno may know they exist and
+# Notes people would not want quoted back at them. Notron may know they exist and
 # may work with them when asked directly, but they never get pulled in as
 # background material for an unrelated question — and never reproduced verbatim.
 PRIVATE_TITLE = re.compile(

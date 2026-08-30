@@ -1,10 +1,10 @@
 """The Guard node: the last thing between a model's idea and your notes.
 
-Every proposed write passes through `check`. Nothing else in JUNO is permitted
+Every proposed write passes through `check`. Nothing else in NOTRON is permitted
 to call `notes.write_body` directly. Three guarantees, in plain terms:
 
-  1. Juno can never write to 📌 About Me. Your instructions are yours.
-  2. Outside her own folder Juno may only APPEND. She cannot delete or
+  1. Notron can never write to 📌 About Me. Your instructions are yours.
+  2. Outside her own folder Notron may only APPEND. She cannot delete or
      rewrite a note you wrote.
   3. No write may carry a password, PIN or key, whatever the model intended.
   4. Every allowed write is logged before it happens.
@@ -61,7 +61,7 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str) -
     if outside and mode == "replace":
         return Verdict(
             False,
-            f"{title!r} is outside {workspace.FOLDER}; Juno may only add to it, never rewrite it.",
+            f"{title!r} is outside {workspace.FOLDER}; Notron may only add to it, never rewrite it.",
         )
 
     if mode == "append" and old_body and not new_body.startswith(old_body):
@@ -102,7 +102,7 @@ def latest_hour(about: str) -> int | None:
 
 
 def check_action(action, *, about: str = "", request: str = "", now: datetime | None = None) -> Verdict:
-    """Judge one thing Juno wants to do outside Notes.
+    """Judge one thing Notron wants to do outside Notes.
 
     The two hard promises live here. A calendar event may only ever be created —
     the user's instruction note says nothing already in their calendar gets moved

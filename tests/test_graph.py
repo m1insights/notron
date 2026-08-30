@@ -3,8 +3,8 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import graph, nodes, workspace
-from juno.state import State
+from notron import graph, nodes, workspace
+from notron.state import State
 
 
 class FakeBrain:
@@ -92,8 +92,8 @@ def test_a_capture_still_leaves_a_visible_reply_or_she_reads_it_forever():
 def test_a_reply_meant_for_a_spot_in_a_note_is_actually_inserted_there():
     """The dispatch once fell through to 'replace' for insert writes, and the
     Guard refused every one of them — silently, from the user's point of view."""
-    from juno import nodes
-    from juno.state import State, Write
+    from notron import nodes
+    from notron.state import State, Write
 
     applied = []
 
@@ -119,7 +119,7 @@ def test_a_reply_meant_for_a_spot_in_a_note_is_actually_inserted_there():
                                     folder="Notes", after=7)])
         nodes.executor(state)
     finally:
-        from juno.executor import Executor as Real
+        from notron.executor import Executor as Real
         nodes.Executor = Real
 
     assert applied == [("insert", "Book idea", 7)]
@@ -129,7 +129,7 @@ def test_she_is_allowed_to_know_things_that_are_not_in_your_notes():
     """She once refused to compare two novels because neither appeared in the
     user's notes. Notes are for facts about the user, not a limit on what she
     may know."""
-    from juno import nodes
+    from notron import nodes
 
     prompt = nodes.WRITER_SYSTEM.lower()
     assert "about the world" in prompt
@@ -137,7 +137,7 @@ def test_she_is_allowed_to_know_things_that_are_not_in_your_notes():
 
 
 def test_your_notes_are_never_treated_as_evidence_about_the_world():
-    from juno import nodes
+    from notron import nodes
 
     writer = nodes.WRITER_SYSTEM.lower()
     assert "never evidence about a book" in writer
@@ -197,7 +197,7 @@ def test_a_scheduling_reply_costs_no_smart_model_call():
 
 
 def test_planning_the_day_reads_the_real_calendar_first(monkeypatch):
-    from juno import nodes
+    from notron import nodes
 
     monkeypatch.setattr(nodes, "_agenda_text", lambda: "- 09:30 Standup")
     brain = FakeBrain(intent="plan")
@@ -208,7 +208,7 @@ def test_planning_the_day_reads_the_real_calendar_first(monkeypatch):
 def test_a_calendar_that_cannot_be_read_never_stops_the_plan(monkeypatch):
     """Automation approval can be revoked at any time. A missing calendar costs
     her context, not the whole morning."""
-    from juno import nodes
+    from notron import nodes
 
     def boom():
         raise RuntimeError("not approved")
@@ -227,7 +227,7 @@ def test_the_declared_order_still_matches_the_declared_edges():
 
 
 def test_the_planner_is_told_not_to_plan_over_a_real_appointment():
-    from juno import nodes
+    from notron import nodes
 
     system = nodes.PLANNER_SYSTEM.lower()
     assert "calendar" in system

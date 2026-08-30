@@ -11,13 +11,13 @@ class Write:
     title: str
     markdown: str
     mode: str = "replace"       # "replace" | "append" | "insert"
-    folder: str | None = None   # None -> JUNO's own folder
+    folder: str | None = None   # None -> NOTRON's own folder
     after: int | None = None    # insert mode: put the reply after this block
 
 
 @dataclass
 class Action:
-    """Something Juno wants to do outside Notes. Nothing happens until the Guard
+    """Something Notron wants to do outside Notes. Nothing happens until the Guard
     passes it, and the Guard is plain code."""
     kind: str                        # "reminder" | "event"
     op: str                          # reminder: create|complete   event: create

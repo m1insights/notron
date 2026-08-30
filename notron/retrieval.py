@@ -14,7 +14,7 @@ from . import markup, notes, workspace
 STOP = {
     "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "my",
     "me", "i", "is", "are", "was", "what", "when", "how", "do", "did", "you",
-    "juno", "about", "that", "this", "it", "at", "be", "have", "has",
+    "notron", "about", "that", "this", "it", "at", "be", "have", "has",
 }
 
 

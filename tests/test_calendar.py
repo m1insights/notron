@@ -2,7 +2,7 @@ import sys, pathlib
 from datetime import datetime
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import calendar as cal
+from notron import calendar as cal
 
 SAMPLE = [
     {"calendar": "Work", "title": "Standup", "start": "2026-09-03T09:30",

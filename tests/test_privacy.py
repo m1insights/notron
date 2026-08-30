@@ -1,10 +1,10 @@
-"""Regression tests for a real leak: Juno's first live morning run copied two of
+"""Regression tests for a real leak: Notron's first live morning run copied two of
 the user's passwords out of their notes and into the plan it wrote."""
 
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import guard, privacy, workspace
+from notron import guard, privacy, workspace
 
 
 def test_the_exact_leak_that_happened():

@@ -1,16 +1,16 @@
-"""The JUNO folder in Apple Notes — the agent's whole operating surface."""
+"""The NOTRON folder in Apple Notes — the agent's whole operating surface."""
 
 from __future__ import annotations
 
-AGENT = "JUNO"
+AGENT = "NOTRON"
 FOLDER = f"🤖 {AGENT}"
 
 ABOUT = "📌 About Me"
-ASK = "📥 Ask Juno"
+ASK = "📥 Ask Notron"
 TODAY = "☀️ Today"
 WEEK = "🗓️ This Week"
 MEMORY = "🧠 Memory"
-CARE = "🌱 Take Care of Juno"
+CARE = "🌱 Take Care of Notron"
 LOG = "📊 Log"
 
 #: Notes the agent must never write to. The user owns these outright.
@@ -25,7 +25,7 @@ SHARED = frozenset({ASK})
 SYSTEM_NOTES = (ABOUT, ASK, TODAY, WEEK, MEMORY, CARE, LOG)
 
 SEEDS: dict[str, str] = {
-    ABOUT: """This note is **yours**. Juno reads it before every single thing she does, and she can never write to it. Edit it whenever you like.
+    ABOUT: """This note is **yours**. Notron reads it before every single thing she does, and she can never write to it. Edit it whenever you like.
 
 ## Who I am
 Name:
@@ -43,27 +43,27 @@ Where I live:
 ## What matters right now
 -
 """,
-    ASK: """Type anything below this line and Juno will answer underneath it.
+    ASK: """Type anything below this line and Notron will answer underneath it.
 
 ———
 """,
-    TODAY: """Juno rebuilds this every morning. Tell her "done with X" and she ticks it off.
+    TODAY: """Notron rebuilds this every morning. Tell her "done with X" and she ticks it off.
 
-- [ ] Nothing yet — Juno hasn't run.
+- [ ] Nothing yet — Notron hasn't run.
 """,
-    WEEK: """Juno rebuilds this every Sunday night.
+    WEEK: """Notron rebuilds this every Sunday night.
 
 Nothing planned yet.
 """,
-    MEMORY: """What Juno has learned about you. She writes here; you can correct anything.
+    MEMORY: """What Notron has learned about you. She writes here; you can correct anything.
 
 Nothing learned yet.
 """,
-    CARE: """Juno rewrites this every morning. It's what she needs from you to keep working well.
+    CARE: """Notron rewrites this every morning. It's what she needs from you to keep working well.
 
 She hasn't checked herself over yet.
 """,
-    LOG: """Everything Juno did, newest first. Nothing happens that isn't written here.
+    LOG: """Everything Notron did, newest first. Nothing happens that isn't written here.
 
 ———
 """,
@@ -71,7 +71,7 @@ She hasn't checked herself over yet.
 
 
 def bootstrap() -> dict[str, str]:
-    """Create the JUNO folder and any missing system notes. Never overwrites."""
+    """Create the NOTRON folder and any missing system notes. Never overwrites."""
     from . import markup, notes
 
     notes.ensure_folder(FOLDER)

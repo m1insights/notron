@@ -1,7 +1,7 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from juno import reminders
+from notron import reminders
 
 SAMPLE = [
     {"id": "x-1", "title": "Buy milk", "list": "Shopping", "due": "2026-09-03T09:00"},
@@ -24,7 +24,7 @@ def test_no_reminders_at_all_is_an_empty_list_not_a_crash():
     assert reminders.open_items(caller=_fake([])) == []
 
 
-def test_the_summary_juno_reads_is_short_enough_for_a_prompt():
+def test_the_summary_notron_reads_is_short_enough_for_a_prompt():
     many = [{"id": f"x-{i}", "title": f"Thing {i}", "list": "Inbox", "due": ""}
             for i in range(60)]
     text = reminders.summary(caller=_fake(many))

@@ -6,9 +6,9 @@ is done, and if that takes long enough it simply times out. Worse, a slow enough
 request can wedge Notes for everyone, including the background listener, which
 then crashes and gets restarted, and asks again, and wedges it again.
 
-So every request in JUNO passes through here, and here takes a lock first. The
+So every request in NOTRON passes through here, and here takes a lock first. The
 lock is a real file lock, so it holds across processes: the listener running in
-the background and a `juno ask` you type in a terminal take turns instead of
+the background and a `notron ask` you type in a terminal take turns instead of
 fighting. Waiting a second is always better than a timeout.
 
 All dynamic values are passed as argv rather than interpolated into the script
@@ -23,7 +23,7 @@ import pathlib
 import subprocess
 import time
 
-LOCK = pathlib.Path(__file__).resolve().parents[1] / ".juno" / "notes.lock"
+LOCK = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "notes.lock"
 DEFAULT_TIMEOUT = 45
 LOCK_WAIT = 120
 
@@ -51,7 +51,7 @@ def run(script: str, *args: str, timeout: int = DEFAULT_TIMEOUT, retries: int = 
                 break
             except BlockingIOError:
                 if time.time() > deadline:
-                    raise NotesBusy("another Juno request has held Notes for two minutes")
+                    raise NotesBusy("another Notron request has held Notes for two minutes")
                 time.sleep(0.25)
 
         try:

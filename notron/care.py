@@ -1,9 +1,9 @@
-"""Take Care of Juno — the note where she tells you what she needs.
+"""Take Care of Notron — the note where she tells you what she needs.
 
 An assistant that reads your whole life has upkeep, and normally that upkeep is
 invisible until something breaks: the instruction note quietly bloats until it
 crowds out your actual question, hundreds of new notes never get learned, the
-log grows without bound, the bill drifts. Juno surfaces all of it as things you
+log grows without bound, the bill drifts. Notron surfaces all of it as things you
 can do for her, in her own voice, once a day.
 
 Every signal here is measured, never guessed. The model only writes the copy.
@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 from . import index, markup, notes, permissions, workspace
 from .brain import USAGE_LOG
 
-# Thresholds. Past these, Juno asks for help.
+# Thresholds. Past these, Notron asks for help.
 ABOUT_COMFORTABLE = 2500      # chars of instructions she re-reads on every single run
 ABOUT_HEAVY = 5000
 LOG_ENTRIES_MAX = 60
@@ -92,16 +92,16 @@ def check() -> list[Signal]:
         out.append(Signal(
             "index", "needs you",
             f"I haven't read any of your {len(live)} notes yet.",
-            "Run `juno index` once and I'll actually know your life.",
+            "Run `notron index` once and I'll actually know your life.",
         ))
     elif len(unlearned) > UNINDEXED_MAX:
         out.append(Signal(
             "index", "needs you",
             f"{len(unlearned)} notes have appeared since I last studied.",
-            "Run `juno index` — takes a minute and I'll catch up.",
+            "Run `notron index` — takes a minute and I'll catch up.",
         ))
     elif unlearned:
-        out.append(Signal("index", "nudge", f"{len(unlearned)} notes I haven't read yet.", "Run `juno index` when you get a sec."))
+        out.append(Signal("index", "nudge", f"{len(unlearned)} notes I haven't read yet.", "Run `notron index` when you get a sec."))
     else:
         out.append(Signal("index", "ok", f"I've read all {len(live)} of your notes.", ""))
 
@@ -153,7 +153,7 @@ def check() -> list[Signal]:
     return out
 
 
-CARE_SYSTEM = """You are Juno, a personal assistant who lives in someone's Apple Notes.
+CARE_SYSTEM = """You are Notron, a personal assistant who lives in someone's Apple Notes.
 
 You are writing your own daily upkeep note — the things you need from them to keep
 working well. You are given measured facts about your own state. Turn them into a

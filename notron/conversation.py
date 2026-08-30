@@ -1,8 +1,8 @@
-"""Working out what has been said to Juno and what she has not answered.
+"""Working out what has been said to Notron and what she has not answered.
 
 A note is a conversation if you treat it as one. People do not write neatly at
 the bottom — they reply in the middle, add a line at the top, come back to an old
-note and add a thought. So rather than assuming a position, Juno reads the whole
+note and add a thought. So rather than assuming a position, Notron reads the whole
 note as alternating turns and looks for any of yours that she has not answered.
 
 Her own turns are marked at the top and closed with a horizontal rule, so a reply
@@ -18,9 +18,9 @@ from dataclasses import dataclass
 
 from . import notedoc
 
-SIGNATURE = "Juno:"
+SIGNATURE = "Notron:"
 RULE = "———"
-TAG = re.compile(r"(?:^|\s)[#@]juno\b", re.I)
+TAG = re.compile(r"(?:^|\s)[#@]notron\b", re.I)
 
 # Blank blocks allowed inside one turn. Lines typed together stay together;
 # leave more space than this and it reads as a separate thought.
@@ -33,7 +33,7 @@ class Question:
     after: int          # insert the reply after this block index
 
 
-def _is_juno(text: str) -> bool:
+def _is_notron(text: str) -> bool:
     return text.lstrip().startswith(SIGNATURE)
 
 
@@ -61,12 +61,12 @@ def unanswered(
     ignore: tuple[str, ...] = (),
     require_tag: bool = False,
 ) -> list[Question]:
-    """Every turn of yours that Juno has not replied to yet.
+    """Every turn of yours that Notron has not replied to yet.
 
     A turn is a run of lines you wrote together. Lines typed one after another
     belong to the same thought and stay together; a real gap between paragraphs
     starts a new one. Getting this wrong loses messages: a question typed above
-    an older exchange was swallowed into it, saw Juno's old reply sitting
+    an older exchange was swallowed into it, saw Notron's old reply sitting
     underneath, and concluded it had already been answered.
 
     `ignore` lists the note's standing header lines, which are scenery rather
@@ -78,7 +78,7 @@ def unanswered(
     out: list[Question] = []
     i = 0
     while i < len(texts):
-        if _is_juno(texts[i]):
+        if _is_notron(texts[i]):
             # Everything through to her closing rule is one reply of hers.
             i += 1
             while i < len(texts) and texts[i].strip() != RULE:
@@ -91,7 +91,7 @@ def unanswered(
             continue
 
         parts, end, gap = [], i, 0
-        while i < len(texts) and not _is_juno(texts[i]) and texts[i].strip() != RULE:
+        while i < len(texts) and not _is_notron(texts[i]) and texts[i].strip() != RULE:
             if _is_furniture(texts[i], ignore):
                 gap += 1
                 if gap > MAX_GAP:      # a real break between two separate thoughts
@@ -102,13 +102,13 @@ def unanswered(
                 end = i
             i += 1
 
-        # Answered only if Juno speaks next. Blank space between does not count,
+        # Answered only if Notron speaks next. Blank space between does not count,
         # but a rule does: a reply on the far side of a rule belongs to a
         # different exchange, not to this question.
         peek = i
         while peek < len(texts) and _is_blank(texts[peek], ignore):
             peek += 1
-        answered = peek < len(texts) and _is_juno(texts[peek])
+        answered = peek < len(texts) and _is_notron(texts[peek])
 
         turn = "\n".join(parts).strip()
         if turn and not answered and (not require_tag or TAG.search(turn)):
