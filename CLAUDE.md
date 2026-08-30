@@ -11,7 +11,7 @@ Do not swap the model provider.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 77 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 139 tests, no API key or network needed
 .venv/bin/python -m juno setup           # create the 🤖 JUNO folder in Notes
 .venv/bin/python -m juno index           # embed all the user's notes (~2 min)
 .venv/bin/python -m juno ask "..."       # one-shot, for testing
@@ -19,6 +19,8 @@ Do not swap the model provider.
 .venv/bin/python -m juno listen --install  # background listener via launchd
 .venv/bin/python -m juno morning         # the daily routine
 .venv/bin/python -m juno graph           # print the node graph
+.venv/bin/python -m juno permissions     # can she reach Notes, Reminders, Calendar?
+.venv/bin/python -m juno agenda          # today, this week, and what's outstanding
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -40,9 +42,9 @@ a long query still delays the listener.
 A declared graph of specialised nodes, not one agent in a loop:
 
 ```
-watcher ─► router ─► retriever ─► researcher ─► planner ─► writer ─► executor
-  │          │          │            │            │          │          │
-no LLM     Nano      no LLM       Tavily       Super      Super    no LLM + Guard
+watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► writer ─► executor
+  │          │          │            │           │          │           │          │       │          │
+no LLM     Nano      no LLM       Tavily      no LLM       Super       Nano     no LLM   Super   no LLM + Guard
 ```
 
 Nodes decline work they do not own. Model tiers live in `brain.DEFAULT_MODELS`
@@ -52,7 +54,12 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | Module | Responsibility |
 |---|---|
 | `applescript.py` | The only place that shells out to `osascript`. Holds the lock. |
+| `eventkit.py` | Apple's calendar/reminder store, read directly. 700× faster than the apps. |
 | `notes.py` | Apple Notes read/write. Bulk queries only — see Performance. |
+| `reminders.py` | Create and complete reminders; never delete. |
+| `calendar.py` | Bounded date-range reads; create-only. |
+| `when.py` | Dates, moved between model, Python and AppleScript without drift. |
+| `permissions.py` | Which apps she is actually allowed to read — including write-only. |
 | `markup.py` | Markdown ⇄ the HTML subset Notes actually renders |
 | `notedoc.py` | A note as addressable blocks; provably lossless inserts |
 | `conversation.py` | Reads a note as turns; finds what she has not answered |
@@ -75,11 +82,16 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
    `Executor`.
 4. **Every write, allowed or blocked, is logged** to `📊 Log`.
 5. **Credentials and private notes never reach the model.** See `privacy.py`.
+6. **A calendar event may only ever be created.** No move, no delete, no update —
+   there is no code in `calendar.py` that could do it.
+7. **A reminder may be created or completed, never deleted.** Done is not gone.
 
-## Performance — measured on 358 real notes
+## Performance — measured on 358 notes, 1,263 reminders and 1,757 events
 
 These are not micro-optimisations; they decide whether a background agent is
 possible at all.
+
+**Notes: bulk AppleScript queries, addressed by index.**
 
 | Doing it the obvious way | Doing it right |
 |---|---|
@@ -89,6 +101,19 @@ possible at all.
 
 Notes also allows two folders with the same name, so looking one up by name can
 silently return the first one twice. Address folders by index.
+
+**Reminders and Calendar: never AppleScript. EventKit.**
+
+| Doing it the obvious way | Doing it right |
+|---|---|
+| 23 open reminders via the Reminders app — **65.7s** | via EventKit — **0.093s** |
+| 7-day calendar window via the Calendar app — **26.0s** | via EventKit — **0.025s** |
+
+`whose` filters in those two apps walk every object that has ever existed in them,
+so cost scales with the user's history, not the answer. Reminders cannot even return
+properties from a filtered set: `name of rs` raises
+`Can't get name of {reminder id "x-apple-reminder://…"}`. There is no tuning that
+closes a 700× gap — use `juno/eventkit.py`.
 
 ## Nemotron gotchas
 
@@ -110,6 +135,21 @@ silently return the first one twice. Address folders by index.
 - A note's title is always the first line of its body. Every writer leads with it.
 - A launchd agent needs its own macOS Automation approval for Notes; until the user
   grants it, its first request hangs rather than failing.
+- Three separate permissions, each with its own silent failure. **Notes** uses
+  AppleScript Automation, and an unapproved app *hangs* rather than failing.
+  **Calendar and Reminders** use EventKit, whose `write only` state is the nasty
+  one: it raises nothing and reports one calendar and zero events, so a blocked
+  calendar is indistinguishable from a free week. `juno permissions` reads the
+  numeric status instead of trusting a query.
+- EventKit reads are asynchronous and JXA has no `await`. A script that does not
+  pump `NSRunLoop.runModeBeforeDate` exits before the callback fires and returns
+  nothing, every time, with no error.
+- Do not replace the JXA scripts with a compiled Swift helper. EventKit access is
+  granted per binary, and an unsigned binary's identity changes on every rebuild —
+  so every edit to Juno would re-prompt, and a background listener can never answer
+  a prompt. `osascript` inherits the terminal's stable identity.
+- A dated reminder needs an explicit `EKAlarm`. A due date alone shows in the app
+  but does not notify, and a reminder that does not buzz is a note with a circle.
 
 ## Conventions
 

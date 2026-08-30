@@ -64,6 +64,32 @@ juno listen --off         # she stops
 There is a terminal route too — `juno ask "..."` — but it exists for testing. The
 note is the product.
 
+## She can set a reminder
+
+Type this into `📥 Ask Juno`:
+
+```
+remind me to call the pharmacy thursday at 10am
+```
+
+About fifteen seconds later, underneath it:
+
+```
+Juno: Reminder set: Call the pharmacy — Thursday 3 September at 10:00
+```
+
+And it is a real reminder — in the Reminders app, buzzing on your phone at
+10am Thursday, exactly the way one you set by hand would. Same thing for your
+calendar: "put a dentist appointment in my calendar for 2pm Friday" creates a
+real event.
+
+She can also tell you no. `📌 About Me` says "never schedule me before 9am"; ask
+her for something at 7am and she answers `I didn't set that. That's 07:00, and
+you asked me never to schedule anything before 09:00` and creates nothing. That
+rule — like "never move anything already in my calendar" and "never delete a
+reminder" — is enforced in plain code by the Guard, not by asking the model
+nicely. See [Safety: the Guard](#safety-the-guard).
+
 ## How it works for you
 
 Juno creates one folder, `🤖 JUNO`, with six notes:
@@ -128,6 +154,11 @@ it is code. Every proposed write passes through it:
    model sees it, and the Guard blocks any write containing one on the way out.
    `tests/test_privacy.py` pins that exact leak.
 4. **Every write, allowed or blocked, is logged** to `📊 Log` before it lands.
+5. **A calendar event may only ever be created** — never moved or deleted, on
+   your own standing instruction. There is no code in `calendar.py` that could
+   do either.
+6. **A reminder may be created or completed, never deleted.** Ticking one off
+   is not the same as making it disappear, and `reminders.py` has no delete path.
 
 No language model runs in the write path. The model proposes; the Guard judges;
 a dumb executor applies. That separation is the whole security model.
@@ -139,11 +170,9 @@ specialised nodes with explicit edges, so you can see exactly what runs, in what
 order, and on which model.
 
 ```
-  watcher ─► router ─► retriever ─► researcher ─► planner ─► writer ─► executor
-     │          │          │            │            │          │          │
-   no LLM     Nano      no LLM       Tavily       Super      Super      no LLM
-                                                                           │
-                                                                        [Guard]
+  watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► writer ─► executor
+     │          │          │            │           │          │           │          │       │          │
+   no LLM     Nano      no LLM       Tavily      no LLM      Super        Nano     no LLM   Super  no LLM + Guard
 ```
 
 - **watcher** — loads `📌 About Me` and `🧠 Memory`. No model, runs every time.
@@ -153,7 +182,14 @@ order, and on which model.
   Credential notes and private ones never reach the model. No model here.
 - **researcher** — Tavily web search, only when the answer cannot be in her head
   or in your notes. Fails soft: no key or a timeout costs the web, not the reply.
-- **planner** — Nemotron **Super 120B**. Only fires on planning intent.
+- **agenda** — reads today's real calendar and open reminders via EventKit. No
+  model, and only when the request is about the day.
+- **planner** — Nemotron **Super 120B**. Only fires on planning intent, plans
+  around what `agenda` actually found.
+- **scheduler** — Nemotron **Nano 30B**. Turns "remind me to..." into a
+  structured reminder or calendar action.
+- **doer** — no model. Applies the action through the Guard *before* the writer
+  runs, so she can never claim she set something that was actually blocked.
 - **writer** — Nemotron **Super 120B**. Composes the answer as Markdown.
 - **executor** — no model. Runs the Guard, applies the write, records the log.
 
@@ -195,6 +231,8 @@ Then open Notes → `🤖 JUNO` → `📌 About Me` and write a few lines about 
 .venv/bin/python -m juno schedule --hour 6   # let macOS run it every morning
 .venv/bin/python -m juno graph               # print the node graph
 .venv/bin/python -m juno models              # what your Nebius key can run
+.venv/bin/python -m juno permissions         # can she reach Notes, Reminders, Calendar?
+.venv/bin/python -m juno agenda              # today, this week, and what's outstanding
 ```
 
 Add `--dry-run` to any command to walk the graph and write nothing.
@@ -223,9 +261,10 @@ Tested on macOS 26.2, 2026-08-29. Apple documents almost none of this.
 | Read/write notes via AppleScript | Works |
 | `<h1>` `<b>` `<i>` `<ul>` `<ol>` `<table>` | All render |
 | `<a href>` | **href is stripped.** Emit bare URLs instead. |
-| `class="checklist"` (tap-to-tick boxes) | **Stripped.** Juno uses ☐ / ✅ text and you tell her when something's done. |
+| `class="checklist"` (tap-to-tick boxes) | **Stripped.** Juno uses ☐ / ✅ text and you tell her when something's done — or now, asks Reminders to make a real one. |
 | Note title | Taken from the first line of the body, always. |
 | iCloud | Every Mac-side write appears on your iPhone automatically. |
+| Reminders/Calendar via AppleScript | **Unusable at real-library scale** — 65.7s for 23 open reminders, 26s for a 7-day window. Read them through EventKit instead (0.093s / 0.025s) — see `juno/eventkit.py`. |
 
 ## Tests
 
