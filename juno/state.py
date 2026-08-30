@@ -27,6 +27,7 @@ class State:
     here: str = ""                   # the note she was tagged in, if any
     reply_to: tuple | None = None    # (title, folder, block index) to answer under
     context: list[str] = field(default_factory=list)
+    web: list[str] = field(default_factory=list)
     answer: str = ""
     writes: list[Write] = field(default_factory=list)
     results: list[str] = field(default_factory=list)

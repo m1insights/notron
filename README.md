@@ -139,18 +139,20 @@ specialised nodes with explicit edges, so you can see exactly what runs, in what
 order, and on which model.
 
 ```
-  watcher ─► router ─► retriever ─► planner ─► writer ─► executor
-     │          │          │           │          │          │
-   no LLM     Nano      no LLM       Super      Super      no LLM
-                                                             │
-                                                          [Guard]
+  watcher ─► router ─► retriever ─► researcher ─► planner ─► writer ─► executor
+     │          │          │            │            │          │          │
+   no LLM     Nano      no LLM       Tavily       Super      Super      no LLM
+                                                                           │
+                                                                        [Guard]
 ```
 
 - **watcher** — loads `📌 About Me` and `🧠 Memory`. No model, runs every time.
 - **router** — Nemotron **Nano 30B**. Classifies intent in ~200 tokens and
   decides whether the expensive nodes need to run at all. Most wake-ups stop here.
 - **retriever** — semantic search over every note, embedded once and cached.
-  Credential notes never reach the model. No reasoning model here.
+  Credential notes and private ones never reach the model. No model here.
+- **researcher** — Tavily web search, only when the answer cannot be in her head
+  or in your notes. Fails soft: no key or a timeout costs the web, not the reply.
 - **planner** — Nemotron **Super 120B**. Only fires on planning intent.
 - **writer** — Nemotron **Super 120B**. Composes the answer as Markdown.
 - **executor** — no model. Runs the Guard, applies the write, records the log.
@@ -161,6 +163,8 @@ a plan costs one Nano plus one Super. Cost scales with what you actually asked f
 ## Powered by
 
 - **[Nebius Token Factory](https://tokenfactory.nebius.com)** — all inference.
+- **[Tavily](https://tavily.com)** — web search, when the answer is not in her
+  head or your notes. Optional; leave the key out and she works without it.
 - **NVIDIA Nemotron 3** (Nano 30B / Super 120B / Ultra 550B) — open-source models.
 - **Apple Notes + iCloud** — the interface and the sync layer, free.
 

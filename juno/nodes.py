@@ -98,6 +98,33 @@ def retriever(state: State, *, brain=None, limit: int = 12) -> State:
     return state
 
 
+# ------------------------------------------------------------- Researcher
+
+def researcher(state: State, *, brain=None, limit: int = 5) -> State:
+    """Search the web, but only when the answer cannot come from anywhere else."""
+    if not state.needs_web:
+        return state
+
+    from . import research
+
+    if not research.available():
+        state.note("researcher", "no web access — add a Tavily key to .env")
+        return state
+
+    try:
+        answer, findings = research.search(state.request, limit=limit)
+    except Exception as e:
+        # A failed search should cost the user an answer, not the whole reply.
+        state.note("researcher", f"search failed ({type(e).__name__}) — answering without it")
+        return state
+
+    if answer:
+        state.web.append(f"### What the web says\n{answer}")
+    state.web.extend(f.as_context() for f in findings)
+    state.note("researcher", f"{len(findings)} sources")
+    return state
+
+
 # ---------------------------------------------------------------- Planner
 
 PLANNER_SYSTEM = """You are Juno, a personal assistant living inside the user's Apple Notes.
@@ -145,6 +172,10 @@ There are two kinds of question and they have different rules:
   something. Answer from what you know. Do not refuse a general question just
   because it is not in their notes; that is not what notes are for. Have a view
   and give it.
+
+When you have searched the web, prefer what you found there over what you
+remember, and give the link so they can check it. Say plainly when something is
+current information rather than something you already knew.
 
 Their notes tell you about *them*. They are never evidence about a book, an author,
 or anything else in the world. If a note happens to sit near a topic, that does not
@@ -224,6 +255,8 @@ def _prompt(state: State) -> str:
     ]
     if state.memory.strip():
         parts.append(f"# What you remember about them\n{state.memory}")
+    if state.web:
+        parts.append("# What you found on the web just now\n" + "\n\n".join(state.web))
     if state.here:
         parts.append(f"# The note they tagged you in\n{state.here}")
     if state.context:

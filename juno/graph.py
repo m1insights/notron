@@ -4,10 +4,10 @@ Not an agent in a while-loop. A declared network of specialised nodes with
 explicit edges, so it is obvious — to you and to a reviewer — exactly what runs,
 in what order, and on which model tier.
 
-    watcher ─► router ─► retriever ─► planner ─► writer ─► executor
-                  │          ▲           │         │          │
-                  └──────────┘           └─────────┴──────────┘
-                  (skipped when the router says no context is needed)
+    watcher ─► router ─► retriever ─► researcher ─► planner ─► writer ─► executor
+                  │          │             │           │         │          │
+                  └──────────┴─────────────┘           └─────────┴──────────┘
+                  (each skipped unless the router asked for it)
 
 Every node may decline: `retriever` no-ops unless the router asked for context,
 `planner` only fires on plan intent, `writer` steps aside for plans. The Guard
@@ -35,6 +35,7 @@ NODES: dict[str, Node] = {
     "watcher": nodes.watcher,
     "router": nodes.router,
     "retriever": nodes.retriever,
+    "researcher": nodes.researcher,
     "planner": nodes.planner,
     "writer": nodes.writer,
     "executor": nodes.executor,
@@ -43,12 +44,13 @@ NODES: dict[str, Node] = {
 EDGES = (
     Edge("watcher", "router"),
     Edge("router", "retriever"),
-    Edge("retriever", "planner"),
+    Edge("retriever", "researcher"),
+    Edge("researcher", "planner"),
     Edge("planner", "writer"),
     Edge("writer", "executor"),
 )
 
-ORDER = ("watcher", "router", "retriever", "planner", "writer", "executor")
+ORDER = ("watcher", "router", "retriever", "researcher", "planner", "writer", "executor")
 
 
 def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
