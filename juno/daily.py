@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from . import care, graph, index, workspace
+from . import care, graph, index, notes, workspace
 
 
 def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
@@ -19,6 +19,16 @@ def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
             on_step(msg)
 
     out: dict[str, object] = {"at": datetime.now().isoformat(timespec="minutes")}
+
+    # 0. Notes has a cold start of up to forty seconds after it has been idle.
+    #    Absorb it here, where waiting costs nobody anything. Reminders and
+    #    Calendar need no equivalent: EventKit reads the store directly and never
+    #    wakes those apps — which is the whole reason the agenda is cheap enough
+    #    to read per request.
+    try:
+        say(f"Notes ready in {notes.warm_up():.1f}s")
+    except Exception as e:
+        say(f"Notes did not answer ({type(e).__name__}) — run `juno permissions`")
 
     # 1. Learn anything written since yesterday.
     if not dry_run:
