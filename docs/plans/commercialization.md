@@ -54,13 +54,51 @@ is tokens per active user per day on Nemotron — the usage ledger in
 we price anything. Nano-first routing exists precisely so cost tracks what the user
 actually asked for.
 
+## Rename before we charge — a hard gate
+
+"Juno" is fine for a free, open-source hackathon entry. It is not fine on a paid
+product, and the rename must land **before the first dollar is taken**. Checked
+2026-08-29; not legal advice, and worth a lawyer's hour before filing anything.
+
+Three live conflicts, all in the same lane:
+
+1. **"JUNO AI"** — filed 2025-08-21 by TechBridge Solutions LLC (Brooklyn), serial
+   99349201, software and AI services class, in commercial use. Our exact phrase.
+2. **Juno — Python and Jupyter** (juno.sh, by MWM) — an active Apple-platform
+   software app that *added an AI assistant in 2026*. Same platform, same category,
+   same description. The most dangerous of the three.
+3. **Juno** (GT Gettaxi, rideshare) and Juno the email/ISP brand — both hold
+   software-class marks.
+
+Every obvious domain is gone too: `juno.app`, `junoai.com`, `heyjuno.com`,
+`getjuno.com`. Even keeping the name, there is no clean address to launch on.
+
+The precedent is recent and exact: Anthropic forced Clawdbot to rename twice and
+hand over its domains. Solo developer, beloved name, gone anyway.
+
+**The rename is cheap — do it with this work, not as a separate project.** The name
+lives in five constants: `AGENT` in `workspace.py`, `SIGNATURE` in
+`conversation.py`, and the two launchd labels in `watch.py` and `daily.py`. Roughly
+twenty minutes plus the folder rename in the user's own Notes, which needs a small
+migration so existing users do not lose their notes.
+
+Two directions worth considering:
+
+- **Rename outright.** `heynella.com` and `heywinnow.com` were both available when
+  checked — most short names are long gone, so expect to buy a `hey-` or `try-`
+  prefix or an unusual word.
+- **Keep Juno as the character, brand the product separately** — the Alexa/Echo
+  split. She stays Juno in the copy and on TikTok; the trademark sits on something
+  clean. This keeps the name we actually like and is probably the better answer.
+
 ## Sequence
 
-1. Ship the hackathon build public and open (due 2026-10-30).
+1. Ship the hackathon build public and open (due **2026-10-30, 10:00am PDT**).
 2. Reminders + Calendar — the features that make it a life manager rather than a
    notes toy. See `reminders-calendar.md`.
 3. Signed installer + permission onboarding. About a week, and it is the difference
-   between a demo and a product.
+   between a demo and a product. **Rename here** — it has to be settled before the
+   thing people download carries a brand.
 4. Hosted brain behind a subscription.
 5. Setapp submission.
 
