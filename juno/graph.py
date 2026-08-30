@@ -4,9 +4,9 @@ Not an agent in a while-loop. A declared network of specialised nodes with
 explicit edges, so it is obvious — to you and to a reviewer — exactly what runs,
 in what order, and on which model tier.
 
-    watcher ─► router ─► retriever ─► researcher ─► planner ─► writer ─► executor
-                  │          │             │           │         │          │
-                  └──────────┴─────────────┘           └─────────┴──────────┘
+    watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► writer ─► executor
+                  │          │             │           │         │           │           │       │          │
+                  └──────────┴─────────────┴───────────┘         └───────────┴───────────┴───────┴──────────┘
                   (each skipped unless the router asked for it)
 
 Every node may decline: `retriever` no-ops unless the router asked for context,
@@ -36,7 +36,10 @@ NODES: dict[str, Node] = {
     "router": nodes.router,
     "retriever": nodes.retriever,
     "researcher": nodes.researcher,
+    "agenda": nodes.agenda,
     "planner": nodes.planner,
+    "scheduler": nodes.scheduler,
+    "doer": nodes.doer,
     "writer": nodes.writer,
     "executor": nodes.executor,
 }
@@ -45,12 +48,16 @@ EDGES = (
     Edge("watcher", "router"),
     Edge("router", "retriever"),
     Edge("retriever", "researcher"),
-    Edge("researcher", "planner"),
-    Edge("planner", "writer"),
+    Edge("researcher", "agenda"),
+    Edge("agenda", "planner"),
+    Edge("planner", "scheduler"),
+    Edge("scheduler", "doer"),
+    Edge("doer", "writer"),
     Edge("writer", "executor"),
 )
 
-ORDER = ("watcher", "router", "retriever", "researcher", "planner", "writer", "executor")
+ORDER = ("watcher", "router", "retriever", "researcher", "agenda",
+         "planner", "scheduler", "doer", "writer", "executor")
 
 
 def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
@@ -65,7 +72,7 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
     state = State(request=request, trigger=trigger, reply_to=reply_to, here=here)
     for name in ORDER:
         fn = NODES[name]
-        if name == "executor":
+        if name in ("executor", "doer"):
             state = fn(state, brain=brain, dry_run=dry_run)
         else:
             state = fn(state, brain=brain)

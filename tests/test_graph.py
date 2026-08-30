@@ -145,3 +145,90 @@ def test_your_notes_are_never_treated_as_evidence_about_the_world():
 
     router = nodes.ROUTER_SYSTEM.lower()
     assert "needs_context is false for questions about the world" in router
+
+
+class SchedulingBrain(FakeBrain):
+    """A brain that routes to `remind` and extracts a structured action."""
+
+    def __init__(self, intent="remind", when=None):
+        super().__init__(intent=intent)
+        from datetime import datetime, timedelta
+        self.when = when or (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT09:00")
+
+    def ask_json(self, **kw):
+        self.calls.append(("json", kw.get("tier")))
+        if "extract" in kw.get("system", "").lower():
+            return {"kind": "reminder", "op": "create",
+                    "title": "Call the pharmacy", "when": self.when}
+        return {"intent": self.intent, "needs_context": False, "needs_web": False, "why": "t"}
+
+
+def test_a_reminder_request_produces_an_action_not_a_note_write():
+    brain = SchedulingBrain()
+    state = graph.run("remind me to call the pharmacy", brain=brain, dry_run=True)
+    assert [a.title for a in state.actions] == ["Call the pharmacy"]
+    assert state.actions[0].kind == "reminder"
+
+
+def test_extraction_runs_on_the_cheap_tier():
+    brain = SchedulingBrain()
+    graph.run("remind me to call the pharmacy", brain=brain, dry_run=True)
+    assert ("json", "fast") in brain.calls
+    assert ("json", "smart") not in brain.calls
+
+
+def test_the_reply_says_what_actually_happened_not_what_was_intended():
+    """The whole reason `doer` runs before `writer`: if the Guard blocks the
+    action, she must not have already claimed she set it."""
+    from datetime import datetime, timedelta
+    past = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%dT09:00")
+    brain = SchedulingBrain(when=past)
+    state = graph.run("remind me to call the pharmacy", brain=brain, dry_run=True)
+    assert "Reminder set:" not in state.answer, "must not claim success on a blocked action"
+    assert "didn't set" in state.answer.lower()
+    assert any("✗" in r for r in state.results)
+
+
+def test_a_scheduling_reply_costs_no_smart_model_call():
+    """Confirming a reminder is a fact, not an essay. It is composed in code."""
+    brain = SchedulingBrain()
+    graph.run("remind me to call the pharmacy", brain=brain, dry_run=True)
+    assert ("text", "smart") not in brain.calls
+
+
+def test_planning_the_day_reads_the_real_calendar_first(monkeypatch):
+    from juno import nodes
+
+    monkeypatch.setattr(nodes, "_agenda_text", lambda: "- 09:30 Standup")
+    brain = FakeBrain(intent="plan")
+    state = graph.run("plan my day", brain=brain, dry_run=True)
+    assert "Standup" in state.agenda
+
+
+def test_a_calendar_that_cannot_be_read_never_stops_the_plan(monkeypatch):
+    """Automation approval can be revoked at any time. A missing calendar costs
+    her context, not the whole morning."""
+    from juno import nodes
+
+    def boom():
+        raise RuntimeError("not approved")
+
+    monkeypatch.setattr(nodes, "_agenda_text", boom)
+    brain = FakeBrain(intent="plan")
+    state = graph.run("plan my day", brain=brain, dry_run=True)
+    assert state.writes
+    assert any("calendar" in t.lower() for t in state.trace)
+
+
+def test_the_declared_order_still_matches_the_declared_edges():
+    assert set(graph.ORDER) == set(graph.NODES)
+    for e in graph.EDGES:
+        assert graph.ORDER.index(e.frm) < graph.ORDER.index(e.to)
+
+
+def test_the_planner_is_told_not_to_plan_over_a_real_appointment():
+    from juno import nodes
+
+    system = nodes.PLANNER_SYSTEM.lower()
+    assert "calendar" in system
+    assert "already" in system

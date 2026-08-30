@@ -11,9 +11,9 @@ from datetime import datetime
 
 from . import markup, notes, privacy, workspace
 from .executor import Executor
-from .state import State, Write
+from .state import Action, State, Write
 
-INTENTS = ("question", "task", "capture", "plan", "ignore")
+INTENTS = ("question", "task", "capture", "plan", "remind", "schedule", "ignore")
 
 
 # ---------------------------------------------------------------- Watcher
@@ -36,6 +36,8 @@ Classify the request into exactly one intent:
 - task: they want something added, ticked off, or changed in their notes
 - capture: they dumped a thought to be filed, no reply needed
 - plan: they want a day or week planned
+- remind: they want a reminder set, or an existing one ticked off
+- schedule: they want something put in their calendar
 - ignore: not addressed to the assistant
 
 Reply with JSON only:
@@ -125,6 +127,122 @@ def researcher(state: State, *, brain=None, limit: int = 5) -> State:
     return state
 
 
+# ------------------------------------------------------------------ Agenda
+
+SCHEDULING = ("plan", "remind", "schedule")
+
+
+def _agenda_text() -> str:
+    """Today's calendar and what is still outstanding. Two app reads, no model."""
+    from . import calendar, reminders
+
+    return (f"## In your calendar today\n{calendar.brief()}\n\n"
+            f"## Still outstanding in Reminders\n{reminders.summary()}")
+
+
+def agenda(state: State, *, brain=None) -> State:
+    """No model. Reads the real day, but only when the request is about the day.
+
+    This is deliberately not in `watcher`: the watcher runs on every wake-up of the
+    listener, and firing a Calendar query every few seconds would wedge the very
+    app the plan depends on.
+    """
+    if state.intent not in SCHEDULING:
+        return state
+    try:
+        state.agenda = _agenda_text()
+    except Exception as e:
+        # Automation approval can be revoked at any time, and Calendar hangs rather
+        # than failing when it is. Losing context is survivable; losing the morning
+        # routine is not.
+        state.note("agenda", f"could not read calendar or reminders ({type(e).__name__})")
+        return state
+    state.note("agenda", f"{len(state.agenda)} chars of real commitments")
+    return state
+
+
+# --------------------------------------------------------------- Scheduler
+
+SCHEDULER_SYSTEM = """You extract one scheduling action from what someone said to their assistant.
+
+Reply with JSON only:
+{"kind": "reminder"|"event", "op": "create"|"complete", "title": "...",
+ "when": "YYYY-MM-DDTHH:MM" or "YYYY-MM-DD" or null,
+ "ends": "YYYY-MM-DDTHH:MM" or null, "where": "", "notes": ""}
+
+- kind is "event" only when they clearly mean their calendar: a meeting, an
+  appointment, something with other people or a fixed slot. Otherwise "reminder".
+- op is "complete" when they are telling you something is already done.
+- title is the task itself, in their words, with no "remind me to" in front of it.
+- when: resolve relative dates against today's date, which you are given. If they
+  gave no time of day, give the date only. Never invent a time they did not ask for.
+- Output nothing but the JSON object."""
+
+
+def scheduler(state: State, *, brain) -> State:
+    """Turns English into one structured Action. The only new model call, on Nano."""
+    if state.intent not in ("remind", "schedule"):
+        return state
+    try:
+        out = brain.ask_json(system=SCHEDULER_SYSTEM, user=_prompt(state),
+                             tier="fast", max_tokens=400)
+    except Exception as e:
+        state.note("scheduler", f"could not read that as a date ({type(e).__name__})")
+        state.answer = ("I couldn't work out the date from that. "
+                        "Say it as a day and a time and I'll set it.")
+        return state
+
+    action = Action(
+        kind=out.get("kind") or ("event" if state.intent == "schedule" else "reminder"),
+        op=out.get("op") or "create",
+        title=(out.get("title") or "").strip(),
+        when=out.get("when"),
+        ends=out.get("ends"),
+        where=out.get("where") or "",
+        notes=out.get("notes") or "",
+    )
+    state.actions.append(action)
+    state.note("scheduler", f"{action.op} {action.kind}: {action.title}")
+    return state
+
+
+# --------------------------------------------------------------------- Doer
+
+def doer(state: State, *, brain=None, dry_run: bool = False) -> State:
+    """No model. Applies the actions, then writes the truth into state.answer.
+
+    This runs before the writer on purpose. If the writer went first she could
+    announce a reminder the Guard was about to refuse.
+    """
+    if not state.actions:
+        return state
+    ex = Executor(dry_run=dry_run)
+    done: list[str] = []
+    for a in state.actions:
+        r = ex.do(a, about=state.about, request=state.request)
+        state.results.append(f"{'✓' if r.ok else '✗'} {a.kind} — {r.reason}")
+        done.append(_confirmation(a, r))
+    state.answer = "\n\n".join(done)
+    state.note("doer", f"{len(state.actions)} actions")
+    return state
+
+
+def _confirmation(action, result) -> str:
+    """Plain, specific, and always says the weekday out loud — a wrong date has to
+    be obvious at a glance, not discovered on the day."""
+    from . import when as when_mod
+
+    if not result.ok:
+        return f"I didn't set that. {result.reason}"
+    if action.op == "complete":
+        return f"Ticked off: {action.title}"
+    moment = when_mod.parse(action.when)
+    word = "In your calendar" if action.kind == "event" else "Reminder set"
+    if moment is None:
+        return f"{word}: {action.title}"
+    return f"{word}: {action.title} — {when_mod.human(moment)}"
+
+
 # ---------------------------------------------------------------- Planner
 
 PLANNER_SYSTEM = """You are Juno, a personal assistant living inside the user's Apple Notes.
@@ -138,7 +256,12 @@ Rules:
 - Be concrete. Real times, real days, real actions. Never say "consider" or "maybe".
 - Short. This is read on a phone.
 - Never invent facts about the user that are not in the material you were given.
-- Never repeat a password, PIN, key or account number, even if you can see one."""
+- Never repeat a password, PIN, key or account number, even if you can see one.
+- You are given their real calendar and their real open reminders. Plan around
+  what is already there. Never put work on top of an appointment, and never
+  invent a commitment that is not in the list you were given.
+- If something is already in Reminders, do not re-list it as a new task. Refer to
+  it, or leave it alone."""
 
 
 def planner(state: State, *, brain) -> State:
@@ -194,6 +317,18 @@ Rules:
 
 def writer(state: State, *, brain) -> State:
     if state.intent in ("ignore", "plan"):
+        return state
+    if state.intent in ("remind", "schedule"):
+        # The doer already said exactly what happened. Paying a smart model to
+        # rephrase a fact would only give it room to get the fact wrong.
+        if state.reply_to is None:
+            state.writes.append(Write(title=workspace.ASK, mode="append",
+                                      markdown=f"\n**Juno:** {state.answer}\n\n———\n\n"))
+        else:
+            title, folder, after = state.reply_to
+            state.writes.append(Write(title=title, folder=folder, mode="insert", after=after,
+                                      markdown=f"**Juno:** {state.answer}\n\n———\n"))
+        state.note("writer", "confirmed without a model call")
         return state
     if state.intent == "capture":
         state.writes.append(
@@ -261,5 +396,7 @@ def _prompt(state: State) -> str:
         parts.append(f"# The note they tagged you in\n{state.here}")
     if state.context:
         parts.append("# Their other relevant notes\n" + "\n\n".join(state.context))
+    if state.agenda:
+        parts.append(f"# Their real day, from Calendar and Reminders\n{state.agenda}")
     parts.append(f"# Their request\n{state.request}")
     return "\n\n".join(parts)
