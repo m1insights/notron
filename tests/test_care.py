@@ -30,6 +30,25 @@ def test_thresholds_are_ordered_sensibly():
     assert care.ABOUT_COMFORTABLE < care.ABOUT_HEAVY
 
 
+def test_mood_is_the_worst_signal_not_the_average():
+    signals = [Signal("a", "ok", "fine", ""), Signal("b", "needs you", "broken", "fix it"),
+               Signal("c", "nudge", "growing", "trim it")]
+    severity, emoji, label = care.overall_mood(signals)
+    assert severity == "needs you"
+    assert (emoji, label) == care.MOOD["needs you"]
+
+
+def test_mood_is_ok_when_every_signal_is_ok():
+    severity, _, _ = care.overall_mood([Signal("a", "ok", "fine", "")])
+    assert severity == "ok"
+
+
+def test_the_care_note_leads_with_the_mood_emoji():
+    body = care.compose([Signal("a", "ok", "fine", "")])
+    emoji, label = care.MOOD["ok"]
+    assert body.startswith(f"{emoji} {label}")
+
+
 def test_she_asks_for_help_when_an_app_stops_answering(monkeypatch):
     """Automation approval can be revoked in System Settings at any time, and the
     only symptom is silence. The care note is where silence becomes a sentence."""

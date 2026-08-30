@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 .env
 .notron/
+mac/.build/
+mac/Notron.app/

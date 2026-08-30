@@ -12,6 +12,7 @@ Every signal here is measured, never guessed. The model only writes the copy.
 from __future__ import annotations
 
 import json
+import pathlib
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -24,6 +25,17 @@ ABOUT_HEAVY = 5000
 LOG_ENTRIES_MAX = 60
 MEMORY_STALE_DAYS = 7
 UNINDEXED_MAX = 20
+
+# One glance, no need to open Notes: the menu bar app reads this file to show her
+# mood, and the care note leads with the same line. Worst signal wins — a single
+# "needs you" outweighs five that are fine, because that's the one that costs you.
+MOOD_FILE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "mood.json"
+_SEVERITY_RANK = ("needs you", "nudge", "ok")
+MOOD = {
+    "needs you": ("🤖🧰", "needs your help"),
+    "nudge": ("🤖📦", "carrying a lot"),
+    "ok": ("🤖✨", "feeling good"),
+}
 
 
 @dataclass
@@ -153,18 +165,26 @@ def check() -> list[Signal]:
     return out
 
 
+def overall_mood(signals: list[Signal]) -> tuple[str, str, str]:
+    """Worst severity across every signal wins. Returns (severity, emoji, label)."""
+    present = {s.severity for s in signals}
+    severity = next((s for s in _SEVERITY_RANK if s in present), "ok")
+    emoji, label = MOOD[severity]
+    return severity, emoji, label
+
+
 CARE_SYSTEM = """You are Notron, a personal assistant who lives in someone's Apple Notes.
 
 You are writing your own daily upkeep note — the things you need from them to keep
 working well. You are given measured facts about your own state. Turn them into a
-short note in your voice.
+short note in your voice. The note already opens with a one-line mood status above
+what you write, so don't repeat an overall verdict — start straight in.
 
 Rules:
 - Warm, direct, never needy or cutesy. You are a capable assistant asking for what
   you need, not a pet begging.
-- Lead with one line on how you're doing overall.
-- Then "## What I need from you" as a "- [ ]" list — only the items that actually
-  need them. If nothing does, say so and skip the list.
+- Start with "## What I need from you" as a "- [ ]" list — only the items that
+  actually need them. If nothing does, say so and skip the list.
 - Then "## How I'm doing" as a short bullet list of the healthy stuff.
 - Never invent a number. Use only the facts given.
 - Under 150 words. This is read on a phone."""
@@ -175,12 +195,14 @@ def compose(signals: list[Signal], brain=None) -> str:
         f"- [{s.severity}] {s.fact}" + (f" ASK: {s.ask}" if s.ask else "")
         for s in signals
     )
+    _, emoji, label = overall_mood(signals)
+    header = f"{emoji} {label}\n\n"
     if brain is None:
-        return _plain(signals)
+        return header + _plain(signals)
     written = brain.ask(system=CARE_SYSTEM, user=f"Facts about your state today:\n{facts}",
                         tier="fast", max_tokens=600)
     # This note must never be blank — it is the one that tells you something is wrong.
-    return written or _plain(signals)
+    return header + (written or _plain(signals))
 
 
 def _plain(signals: list[Signal]) -> str:
@@ -196,11 +218,27 @@ def _plain(signals: list[Signal]) -> str:
     return "\n".join(lines)
 
 
+def _write_mood(severity: str, emoji: str, label: str) -> None:
+    """Drops her current mood where the Mac menu bar app can read it. Best-effort —
+    a failed write here should never break the actual care note."""
+    try:
+        MOOD_FILE.parent.mkdir(parents=True, exist_ok=True)
+        MOOD_FILE.write_text(json.dumps({
+            "severity": severity, "emoji": emoji, "label": label,
+            "at": datetime.now().isoformat(),
+        }))
+    except OSError:
+        pass
+
+
 def run(brain=None, *, dry_run: bool = False):
     """Measure, compose, and write the care note."""
     from .executor import Executor
 
     signals = check()
+    severity, emoji, label = overall_mood(signals)
     body = compose(signals, brain)
+    if not dry_run:
+        _write_mood(severity, emoji, label)
     result = Executor(dry_run=dry_run).replace(workspace.CARE, body)
     return signals, body, result
