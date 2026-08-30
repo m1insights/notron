@@ -52,6 +52,13 @@ def cmd_ask(args):
     brain = _brain()
     request = " ".join(args.request)
 
+    if args.quiet:
+        # For a caller that just wants the words back — a Shortcut piping into
+        # "Speak Text", say. No trace, no blank lines, no results dump.
+        state = graph.run(request, brain=brain, dry_run=args.dry_run)
+        print(state.answer.strip() if state.answer else "I don't have anything to say to that.")
+        return
+
     def trace(name, state):
         if state.trace and state.trace[-1].startswith(name):
             print(f"  · {state.trace[-1]}")
@@ -184,6 +191,7 @@ def main(argv=None):
     a = sub.add_parser("ask", help="ask Juno something")
     a.add_argument("request", nargs="+")
     a.add_argument("--dry-run", action="store_true", help="run the graph, write nothing")
+    a.add_argument("--quiet", action="store_true", help="print only the answer — for scripts/Shortcuts")
     a.set_defaults(fn=cmd_ask)
 
     pl = sub.add_parser("plan", help="have Juno plan your day or week")
