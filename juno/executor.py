@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import guard, markup, notedoc, notes, workspace
+from . import calendar, guard, markup, notedoc, notes, reminders, workspace
 
 
 @dataclass(frozen=True)
@@ -18,6 +18,7 @@ class WriteResult:
     ok: bool
     reason: str
     note_id: str | None = None
+    ref: str | None = None       # reminder id / event uid
 
 
 class Executor:
@@ -74,6 +75,57 @@ class Executor:
 
         self._log(f"{mode} on *{title}* ({len(new_body)} chars)")
         return WriteResult(True, "written", note_id)
+
+    def do(self, action, *, about: str = "", request: str = "") -> WriteResult:
+        """Apply one thing outside Notes. Still no model anywhere in this path."""
+        verdict = guard.check_action(action, about=about, request=request)
+        if not verdict:
+            self._log(f"**BLOCKED** {action.op} {action.kind} *{action.title}* — {verdict.reason}")
+            return WriteResult(False, verdict.reason)
+
+        if self.dry_run:
+            return WriteResult(True, "dry run — nothing created")
+
+        try:
+            ref, detail = self._perform(action)
+        except LookupError as e:
+            self._log(f"**BLOCKED** {action.op} {action.kind} *{action.title}* — {e}")
+            return WriteResult(False, str(e))
+        except Exception as e:
+            # An app that is not approved yet hangs rather than failing, so a real
+            # exception here is worth saying out loud instead of swallowing.
+            self._log(f"**FAILED** {action.op} {action.kind} *{action.title}* — {type(e).__name__}: {e}")
+            return WriteResult(False, f"{action.kind} app said no ({type(e).__name__})")
+
+        self._log(f"{action.op} {action.kind} *{action.title}*{detail}")
+        return WriteResult(True, detail.strip(" —") or "done", ref=ref)
+
+    def _perform(self, action) -> tuple[str, str]:
+        if action.kind == "reminder" and action.op == "create":
+            ref = reminders.create(action.title, notes=action.notes,
+                                   list_name=action.where, when_iso=action.when)
+            return ref, self._said(action)
+
+        if action.kind == "reminder" and action.op == "complete":
+            hit = reminders.find_open(action.title)
+            if hit is None:
+                raise LookupError(f"couldn't find an open reminder called {action.title!r}")
+            reminders.complete(hit.id)
+            return hit.id, f" — ticked off “{hit.title}”"
+
+        if action.kind == "event" and action.op == "create":
+            ref = calendar.create(action.title, start_iso=action.when, end_iso=action.ends,
+                                  calendar_name=action.where, notes=action.notes)
+            return ref, self._said(action)
+
+        raise ValueError(f"nothing to do for {action.kind}/{action.op}")
+
+    @staticmethod
+    def _said(action) -> str:
+        from . import when as when_mod
+
+        moment = when_mod.parse(action.when)
+        return f" — {when_mod.human(moment)}" if moment else ""
 
     def _log(self, line: str) -> None:
         if not self.audit or self.dry_run:

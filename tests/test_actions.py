@@ -140,3 +140,71 @@ def test_an_empty_title_is_refused():
 
 def test_an_unknown_kind_is_refused_rather_than_guessed_at():
     assert not guard.check_action(Action(kind="email", op="create", title="Hi"), about="")
+
+
+# --- Executor.do — the one place an action is applied -----------------------
+
+def test_a_blocked_action_is_logged_and_never_reaches_the_app(monkeypatch):
+    """Invariant 4: every write, allowed or blocked, lands in the Log."""
+    from juno import executor as ex_mod
+
+    logged, created = [], []
+    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: logged.append(line))
+    monkeypatch.setattr(ex_mod.reminders, "create",
+                        lambda *a, **kw: created.append(a) or "x")
+
+    r = ex_mod.Executor().do(Action(kind="reminder", op="delete", title="Buy milk"), about="")
+    assert not r.ok
+    assert created == []
+    assert any("BLOCKED" in line for line in logged)
+
+
+def test_an_allowed_reminder_reaches_the_app_and_is_logged(monkeypatch):
+    from juno import executor as ex_mod
+
+    logged, created = [], []
+    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: logged.append(line))
+    monkeypatch.setattr(ex_mod.reminders, "create",
+                        lambda title, **kw: created.append(title) or "x-7")
+
+    soon = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT14:00")
+    r = ex_mod.Executor().do(Action(kind="reminder", op="create",
+                                    title="Call the pharmacy", when=soon), about="")
+    assert r.ok and r.ref == "x-7"
+    assert created == ["Call the pharmacy"]
+    assert logged
+
+
+def test_a_dry_run_touches_nothing(monkeypatch):
+    from juno import executor as ex_mod
+
+    called = []
+    monkeypatch.setattr(ex_mod.reminders, "create", lambda *a, **kw: called.append(a) or "x")
+    soon = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT14:00")
+    r = ex_mod.Executor(dry_run=True).do(
+        Action(kind="reminder", op="create", title="X", when=soon), about="")
+    assert r.ok and called == []
+
+
+def test_completing_looks_the_reminder_up_by_what_the_user_called_it(monkeypatch):
+    from juno import executor as ex_mod
+    from juno.reminders import Reminder
+
+    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: None)
+    monkeypatch.setattr(ex_mod.reminders, "find_open",
+                        lambda phrase, **kw: Reminder("Inbox", "x-3", "Call the pharmacy", ""))
+    done = []
+    monkeypatch.setattr(ex_mod.reminders, "complete", lambda rid, **kw: done.append(rid) or "ok")
+
+    r = ex_mod.Executor().do(Action(kind="reminder", op="complete",
+                                    title="call the pharmacy"), about="")
+    assert r.ok and done == ["x-3"]
+
+
+def test_ticking_off_something_that_isnt_there_says_so(monkeypatch):
+    from juno import executor as ex_mod
+
+    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: None)
+    monkeypatch.setattr(ex_mod.reminders, "find_open", lambda phrase, **kw: None)
+    r = ex_mod.Executor().do(Action(kind="reminder", op="complete", title="feed the cat"), about="")
+    assert not r.ok and "couldn't find" in r.reason.lower()
