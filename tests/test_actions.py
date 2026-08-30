@@ -192,7 +192,8 @@ def test_completing_looks_the_reminder_up_by_what_the_user_called_it(monkeypatch
 
     monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: None)
     monkeypatch.setattr(ex_mod.reminders, "find_open",
-                        lambda phrase, **kw: Reminder("Inbox", "x-3", "Call the pharmacy", ""))
+                        lambda phrase, **kw: Reminder(id="x-3", title="Call the pharmacy",
+                                                       list_name="Inbox", due=""))
     done = []
     monkeypatch.setattr(ex_mod.reminders, "complete", lambda rid, **kw: done.append(rid) or "ok")
 

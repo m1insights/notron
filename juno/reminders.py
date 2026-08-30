@@ -1,163 +1,138 @@
-"""The Reminders app — real checkboxes, real notifications, real phone sync.
+"""The Reminders app — real checkboxes you tap, real notifications, real phone sync.
 
-This exists because Apple Notes cannot be given a tappable checkbox by script.
-Juno writes `☐` and `✅` as plain text into notes; Reminders is where a task can
-actually buzz.
+This exists because Apple Notes cannot be given a tappable checkbox by script. Juno
+writes `☐` and `✅` as plain text into notes; Reminders is where a task can actually
+buzz. It is the most demonstrable thing she does.
 
-The Notes performance rules apply here with one refinement worth understanding:
-**what costs time is Apple events, not AppleScript loops.** Asking for
-`name of every reminder of l` is one event for the whole list; asking each
-reminder for its name in turn is one event each. So we fetch every property in
-bulk, then loop over the values already sitting in AppleScript memory to tidy
-them — which is free, and necessary, because `due date` comes back as
-`missing value` for undated reminders and a list containing `missing value`
-cannot be coerced to text.
+Everything here goes through `eventkit`, not AppleScript. Reading 23 open reminders
+took 65.7 seconds through the Reminders app and 0.093 seconds through EventKit — the
+same answer, from the same store, 700 times faster. See `eventkit.py` for why.
 
-Reminders is its own single-threaded script target and needs its own macOS
-Automation approval — see `juno permissions`.
+There is no `delete` in this module and there never will be. Juno may tick something
+off; removing it is the user's to do.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .applescript import run
+from . import eventkit
 
-COLD_START_TIMEOUT = 90
 MAX_IN_PROMPT = 25
+FETCH_SECONDS = 15
 
-RS = "\x1e"
-US = "\x1f"
+_OPEN = """
+var store = $.EKEventStore.alloc.init;
+var pred = store.predicateForIncompleteRemindersWithDueDateStartingEndingCalendars($(), $(), $());
+var out = null;
+store.fetchRemindersMatchingPredicateCompletion(pred, function (arr) {
+  var rows = [];
+  for (var i = 0; i < arr.count; i++) {
+    var r = arr.objectAtIndex(i);
+    var due = '';
+    if (!r.dueDateComponents.isNil()) {
+      var d = $.NSCalendar.currentCalendar.dateFromComponents(r.dueDateComponents);
+      if (!d.isNil()) {
+        var f = $.NSDateFormatter.alloc.init;
+        f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mm';
+        due = ObjC.unwrap(f.stringFromDate(d));
+      }
+    }
+    rows.push({
+      id: ObjC.unwrap(r.calendarItemIdentifier),
+      title: ObjC.unwrap(r.title) || '',
+      list: ObjC.unwrap(r.calendar.title) || '',
+      due: due
+    });
+  }
+  out = rows;
+});
+awaitDone(function () { return out !== null; }, %d);
+JSON.stringify(out === null ? [] : out);
+""" % FETCH_SECONDS
 
-_ISO = f"""
-on iso(d)
-  if d is missing value then return ""
-  set y to text -4 thru -1 of ("0000" & (year of d))
-  set m to text -2 thru -1 of ("00" & ((month of d) as integer))
-  set dy to text -2 thru -1 of ("00" & (day of d))
-  set h to text -2 thru -1 of ("00" & (hours of d))
-  set mi to text -2 thru -1 of ("00" & (minutes of d))
-  return y & "-" & m & "-" & dy & "T" & h & ":" & mi
-end iso
-"""
-
-_OPEN = _ISO + f"""
-on run argv
-  set rows to {{}}
-  tell application "Reminders"
-    repeat with l in lists
-      set ln to name of l
-      set rs to (every reminder of l whose completed is false)
-      if (count of rs) > 0 then
-        set ids to id of rs
-        set nms to name of rs
-        set dds to due date of rs
-        repeat with k from 1 to count of ids
-          set end of rows to ln & "{RS}" & (item k of ids) & "{RS}" & (item k of nms) & "{RS}" & (my iso(item k of dds))
-        end repeat
-      end if
-    end repeat
-  end tell
-  set text item delimiters to "{US}"
-  return rows as text
-end run
-"""
-
-_LISTS = f"""
-on run argv
-  tell application "Reminders" to set n to name of every list
-  set text item delimiters to "{US}"
-  return n as text
-end run
+_LISTS = """
+var store = $.EKEventStore.alloc.init;
+var cals = store.calendarsForEntityType($.EKEntityTypeReminder);
+var names = [];
+for (var i = 0; i < cals.count; i++) names.push(ObjC.unwrap(cals.objectAtIndex(i).title));
+JSON.stringify(names);
 """
 
 _CREATE = """
-on mkdate(y, m, d, h, mi)
-  set dt to current date
-  set day of dt to 1
-  set year of dt to y
-  set month of dt to m
-  set day of dt to d
-  set hours of dt to h
-  set minutes of dt to mi
-  set seconds of dt to 0
-  return dt
-end mkdate
-
-on run argv
-  set theName to item 1 of argv
-  set theBody to item 2 of argv
-  set listName to item 3 of argv
-  set hasDate to (item 4 of argv) is "1"
-  tell application "Reminders"
-    if listName is "" then
-      set l to default list
-    else
-      set l to list listName
-    end if
-    if hasDate then
-      set dt to my mkdate((item 5 of argv) as integer, (item 6 of argv) as integer, ¬
-                          (item 7 of argv) as integer, (item 8 of argv) as integer, ¬
-                          (item 9 of argv) as integer)
-      set r to make new reminder at l with properties {name:theName, body:theBody, due date:dt}
-    else
-      set r to make new reminder at l with properties {name:theName, body:theBody}
-    end if
-    return id of r
-  end tell
-end run
+var store = $.EKEventStore.alloc.init;
+var r = $.EKReminder.reminderWithEventStore(store);
+r.title = %(title)s;
+r.notes = %(notes)s;
+var listName = %(list)s;
+var target = $();
+var cals = store.calendarsForEntityType($.EKEntityTypeReminder);
+for (var i = 0; i < cals.count; i++) {
+  var c = cals.objectAtIndex(i);
+  if (listName && ObjC.unwrap(c.title) === listName) { target = c; break; }
+}
+if (target.isNil()) target = store.defaultCalendarForNewReminders;
+r.calendar = target;
+var iso = %(when)s;
+if (iso) {
+  var f = $.NSDateFormatter.alloc.init;
+  f.dateFormat = iso.length > 10 ? 'yyyy-MM-dd\\'T\\'HH:mm' : 'yyyy-MM-dd';
+  var d = f.dateFromString(iso);
+  var units = iso.length > 10
+    ? ($.NSCalendarUnitYear | $.NSCalendarUnitMonth | $.NSCalendarUnitDay | $.NSCalendarUnitHour | $.NSCalendarUnitMinute)
+    : ($.NSCalendarUnitYear | $.NSCalendarUnitMonth | $.NSCalendarUnitDay);
+  r.dueDateComponents = $.NSCalendar.currentCalendar.componentsFromDate(units, d);
+  if (iso.length > 10) r.addAlarm($.EKAlarm.alarmWithAbsoluteDate(d));
+}
+var err = Ref();
+var ok = store.saveReminderCommitError(r, true, err);
+JSON.stringify(ok ? {id: ObjC.unwrap(r.calendarItemIdentifier)} : {error: 'save failed'});
 """
 
 _COMPLETE = """
-on run argv
-  tell application "Reminders"
-    set r to reminder id (item 1 of argv)
-    set completed of r to true
-    return name of r
-  end tell
-end run
+var store = $.EKEventStore.alloc.init;
+var item = store.calendarItemWithIdentifier(%(id)s);
+if (item.isNil()) { JSON.stringify({error: 'not found'}); }
+else {
+  item.completed = true;
+  var err = Ref();
+  var ok = store.saveReminderCommitError(item, true, err);
+  JSON.stringify(ok ? {title: ObjC.unwrap(item.title)} : {error: 'save failed'});
+}
 """
 
 
 @dataclass(frozen=True)
 class Reminder:
-    list_name: str
     id: str
     title: str
+    list_name: str
     due: str          # ISO, or "" when undated
 
 
-def warm_up() -> float:
-    """Wake the Reminders app, absorbing its cold start somewhere that can wait."""
-    import time
+def _js(value: str) -> str:
+    """A Python string as a JavaScript literal. Everything user- or model-supplied
+    goes through here — a title with a quote in it must not be able to change what
+    the script does."""
+    import json
 
-    started = time.time()
-    run(_LISTS, timeout=COLD_START_TIMEOUT, retries=0)
-    return time.time() - started
-
-
-def lists(*, runner=None) -> list[str]:
-    raw = (runner or run)(_LISTS)
-    return [n for n in raw.split(US) if n.strip()]
+    return json.dumps(value or "")
 
 
-def open_items(*, runner=None) -> list[Reminder]:
-    """Every reminder not yet ticked, across every list, in one pass."""
-    raw = (runner or run)(_OPEN)
-    if not raw.strip():
-        return []
-    out: list[Reminder] = []
-    for row in raw.split(US):
-        parts = row.split(RS)
-        if len(parts) != 4 or not parts[2].strip():
-            continue
-        out.append(Reminder(list_name=parts[0], id=parts[1], title=parts[2], due=parts[3]))
-    return out
+def lists(*, caller=None) -> list[str]:
+    return (caller or eventkit.run)(_LISTS)
 
 
-def summary(*, runner=None, limit: int = MAX_IN_PROMPT) -> str:
+def open_items(*, caller=None) -> list[Reminder]:
+    rows = (caller or eventkit.run)(_OPEN)
+    return [Reminder(id=r.get("id", ""), title=r.get("title", ""),
+                     list_name=r.get("list", ""), due=r.get("due", ""))
+            for r in rows if r.get("title", "").strip()]
+
+
+def summary(*, caller=None, limit: int = MAX_IN_PROMPT) -> str:
     """What is outstanding, short enough to sit in a prompt without crowding it."""
-    items = open_items(runner=runner)
+    items = open_items(caller=caller)
     if not items:
         return "Nothing outstanding in Reminders."
     lines = [f"- {r.title}" + (f" (due {r.due})" if r.due else "") + f" [{r.list_name}]"
@@ -168,28 +143,33 @@ def summary(*, runner=None, limit: int = MAX_IN_PROMPT) -> str:
 
 
 def create(title: str, *, notes: str = "", list_name: str = "",
-           when_iso: str | None = None, runner=None) -> str:
-    """Make a reminder. Returns its id. Called only by the Executor."""
-    from . import when as when_mod
+           when_iso: str | None = None, caller=None) -> str:
+    """Make a reminder. Returns its id. Called only by the Executor.
 
-    dt = when_mod.parse(when_iso)
-    if dt is None:
-        args = (title, notes, list_name, "0", "0", "0", "0", "0", "0")
-    else:
-        args = (title, notes, list_name, "1") + when_mod.components(dt)
-    return (runner or run)(_CREATE, *args)
+    A dated reminder also gets an alarm — a due date alone shows in the app but does
+    not notify, and a reminder that does not buzz is just a note with a circle.
+    """
+    body = _CREATE % {"title": _js(title), "notes": _js(notes),
+                      "list": _js(list_name), "when": _js(when_iso or "")}
+    out = (caller or eventkit.run)(body)
+    if "error" in out:
+        raise eventkit.EventKitError(f"could not create the reminder: {out['error']}")
+    return out["id"]
 
 
-def complete(reminder_id: str, *, runner=None) -> str:
+def complete(reminder_id: str, *, caller=None) -> str:
     """Tick one off. There is deliberately no way to delete a reminder from here:
     the user's list is theirs, and 'done' must never quietly mean 'gone'."""
-    return (runner or run)(_COMPLETE, reminder_id)
+    out = (caller or eventkit.run)(_COMPLETE % {"id": _js(reminder_id)})
+    if "error" in out:
+        raise LookupError(f"could not tick that off: {out['error']}")
+    return out["title"]
 
 
-def find_open(phrase: str, *, runner=None) -> Reminder | None:
+def find_open(phrase: str, *, caller=None) -> Reminder | None:
     """The open reminder the user most likely means. Exact match, then substring,
     then the shortest title containing every word they said."""
-    items = open_items(runner=runner)
+    items = open_items(caller=caller)
     needle = phrase.strip().lower()
     if not needle:
         return None
