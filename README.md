@@ -26,9 +26,30 @@ instructions.
 
 ## How you talk to her
 
-You type into the `📥 Ask Juno` note. That's it — no terminal, no send button, no
-app to open. She watches that note, waits until you've stopped typing, answers
-underneath, and draws a line so the next thing you type is the next question.
+Two ways, both of them just typing in Notes.
+
+**Ask her directly.** Write in the `📥 Ask Juno` note — anywhere in it, top or
+bottom. She waits until you've stopped typing, answers directly underneath what
+you wrote, and draws a line so the next thing you type is the next question.
+
+**Or tag her where you're already thinking.** Write `#juno` in any note you own —
+the book idea, the meeting note, the half-finished plan — and ask about *that*
+thing, in *that* place:
+
+```
+Book idea — Lighthouse
+
+A story about a lighthouse keeper who starts receiving letters
+from someone who died forty years ago.
+
+Act two is where it falls apart — she just reads letters for sixty pages.
+
+#juno what would give act two some pressure?
+```
+
+She answers underneath that line, using the note itself as context. In a note that
+isn't hers she never speaks unless spoken to, and never changes a word you wrote —
+the Guard proves that character by character before every write.
 
 Because it's Apple Notes, this works from your iPhone: type on the sofa, iCloud
 carries it to the Mac, she thinks on Nebius, and the answer is on your phone about

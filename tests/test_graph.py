@@ -47,11 +47,11 @@ def test_a_day_plan_replaces_the_today_note():
     assert [w.title for w in state.writes] == [workspace.TODAY]
 
 
-def test_a_capture_is_appended_to_memory_and_costs_no_writer_call():
+def test_a_capture_is_remembered_without_paying_for_the_big_model():
     brain = FakeBrain(intent="capture")
     state = graph.run("my sister's birthday is in March", brain=brain, dry_run=True)
-    assert [w.title for w in state.writes] == [workspace.MEMORY]
-    assert ("text", "smart") not in brain.calls
+    assert workspace.MEMORY in [w.title for w in state.writes]
+    assert ("text", "smart") not in brain.calls, "a note to self needs no reasoning"
 
 
 def test_ignore_halts_the_graph_before_any_write():
@@ -76,3 +76,50 @@ def test_every_declared_edge_points_at_a_real_node():
     names = set(graph.NODES)
     for e in graph.EDGES:
         assert e.frm in names and e.to in names
+
+
+def test_a_capture_still_leaves_a_visible_reply_or_she_reads_it_forever():
+    """A turn answered without a reply in the note looks unanswered on the next
+    pass, and she answers it again, and again."""
+    brain = FakeBrain(intent="capture")
+    state = graph.run("I'm about to read Stranded by AK Duboff", brain=brain, dry_run=True)
+    titles = [w.title for w in state.writes]
+    assert workspace.MEMORY in titles, "the fact should be remembered"
+    assert workspace.ASK in titles, "and acknowledged where it was said"
+    assert state.answer
+
+
+def test_a_reply_meant_for_a_spot_in_a_note_is_actually_inserted_there():
+    """The dispatch once fell through to 'replace' for insert writes, and the
+    Guard refused every one of them — silently, from the user's point of view."""
+    from juno import nodes
+    from juno.state import State, Write
+
+    applied = []
+
+    class FakeExecutor:
+        def __init__(self, dry_run=False):
+            pass
+
+        def insert(self, title, md, *, after, folder):
+            applied.append(("insert", title, after))
+            return type("R", (), {"ok": True, "reason": "written"})()
+
+        def append(self, title, md, *, folder):
+            applied.append(("append", title, None))
+            return type("R", (), {"ok": True, "reason": "written"})()
+
+        def replace(self, title, md, *, folder):
+            applied.append(("replace", title, None))
+            return type("R", (), {"ok": True, "reason": "written"})()
+
+    nodes.Executor = FakeExecutor
+    try:
+        state = State(writes=[Write(title="Book idea", markdown="x", mode="insert",
+                                    folder="Notes", after=7)])
+        nodes.executor(state)
+    finally:
+        from juno.executor import Executor as Real
+        nodes.Executor = Real
+
+    assert applied == [("insert", "Book idea", 7)]

@@ -149,16 +149,27 @@ def writer(state: State, *, brain) -> State:
         state.writes.append(
             Write(title=workspace.MEMORY, markdown=f"\n- {state.request.strip()}\n", mode="append")
         )
-        state.answer = "Filed."
+        state.answer = "Noted — I'll remember that."
         state.note("writer", "captured to memory")
-        return state
+        # Fall through: a capture still gets a visible reply where it was said.
+        # Without one the note looks unanswered forever and she reads it again
+        # on every pass.
 
-    state.answer = brain.ask(
-        system=WRITER_SYSTEM, user=_prompt(state), tier="smart", max_tokens=1200
-    )
-    state.writes.append(
-        Write(title=workspace.ASK, markdown=f"\n**Juno:** {state.answer}\n\n———\n\n", mode="append")
-    )
+    else:
+        state.answer = brain.ask(
+            system=WRITER_SYSTEM, user=_prompt(state), tier="smart", max_tokens=1200
+        )
+    if state.reply_to is None:
+        state.writes.append(Write(
+            title=workspace.ASK, mode="append",
+            markdown=f"\n**Juno:** {state.answer}\n\n———\n\n",
+        ))
+    else:
+        title, folder, after = state.reply_to
+        state.writes.append(Write(
+            title=title, folder=folder, mode="insert", after=after,
+            markdown=f"**Juno:** {state.answer}\n\n———\n",
+        ))
     state.note("writer", f"{len(state.answer)} chars")
     return state
 
@@ -170,8 +181,12 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
     ex = Executor(dry_run=dry_run)
     for w in state.writes:
         folder = w.folder or workspace.FOLDER
-        fn = ex.append if w.mode == "append" else ex.replace
-        r = fn(w.title, w.markdown, folder=folder)
+        if w.mode == "insert":
+            r = ex.insert(w.title, w.markdown, after=w.after or 0, folder=folder)
+        elif w.mode == "append":
+            r = ex.append(w.title, w.markdown, folder=folder)
+        else:
+            r = ex.replace(w.title, w.markdown, folder=folder)
         state.results.append(f"{'✓' if r.ok else '✗'} {w.title} — {r.reason}")
     state.note("executor", f"{len(state.writes)} writes")
     return state
@@ -190,7 +205,9 @@ def _prompt(state: State) -> str:
     ]
     if state.memory.strip():
         parts.append(f"# What you remember about them\n{state.memory}")
+    if state.here:
+        parts.append(f"# The note they tagged you in\n{state.here}")
     if state.context:
-        parts.append("# Their relevant notes\n" + "\n\n".join(state.context))
+        parts.append("# Their other relevant notes\n" + "\n\n".join(state.context))
     parts.append(f"# Their request\n{state.request}")
     return "\n\n".join(parts)

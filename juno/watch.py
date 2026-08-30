@@ -1,113 +1,154 @@
-"""Watching the Ask note, so Notes itself is the interface.
+"""Listening, so Notes itself is the interface.
 
-This is the part that makes Juno feel like an assistant rather than a command.
-You type a question into `📥 Ask Juno` — on your Mac, or on your phone where
-iCloud carries it over in a few seconds — and she answers underneath it. No
-terminal, no app, no send button.
+Two ways to reach Juno, both of them just typing in the Notes app:
 
-How a turn is delimited: Juno ends every reply with a horizontal rule, so
-whatever sits after the last rule is by definition the thing you just typed and
-she has not answered yet. When she replies she writes a fresh rule, which empties
-the slot again.
+  * write in `📥 Ask Juno`, anywhere in the note; or
+  * write `#juno` in any note you own — the book idea, the meeting note, the
+    half-finished plan — and ask about that thing, in that place.
 
-Two problems the naive version gets wrong:
+Either way she answers directly underneath what you wrote, and draws no more
+attention to herself than that.
 
-  * Answering while you are still typing. Juno waits until the text has stopped
-    changing for a beat before she treats it as a finished thought.
-  * Answering herself. Her own reply changes the note, which looks exactly like
-    new input; she remembers what the note looked like after she wrote it.
+Three things this has to get right, all learned the hard way:
 
-A question left unanswered when she starts is not stale — it is the one you asked
-on your phone while this Mac was shut. She picks it up as soon as she wakes.
+  * **Answering mid-sentence.** She waits for your typing to go quiet first.
+  * **Answering herself.** Her replies are signed, and signed turns are never
+    read as questions.
+  * **Blocking Notes.** Apple Notes serves one script request at a time, and a
+    slow one wedges the app for everybody — including Juno. So there is exactly
+    one loop, it never runs two requests at once, the Ask note is checked often
+    because it is one cheap read, and the full sweep for `#juno` runs on a much
+    longer cycle.
 """
 
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from . import graph, markup, notes, workspace
+from . import conversation, graph, mentions, notes, workspace
 
-SEPARATOR = "———"
-POLL_SECONDS = 4
-SETTLE_SECONDS = 6          # how long your typing must be still before she answers
+ASK_POLL = 5           # seconds between checks of the Ask note
+SWEEP_EVERY = 20       # seconds between sweeps for #juno mentions (a survey is ~1s)
+SETTLE = 6             # how long your typing must be still before she answers
 MIN_CHARS = 2
 
-
-def pending_question(body_html: str) -> str:
-    """Whatever you typed after Juno's last reply."""
-    text = markup.to_text(body_html)
-    _, _, tail = text.rpartition(SEPARATOR)
-    if not tail and SEPARATOR not in text:
-        # She has never replied; everything after the intro line is fair game.
-        lines = text.split("\n")
-        tail = "\n".join(lines[2:])
-    return tail.strip()
+# The Ask note's own standing text, which nobody said out loud.
+ASK_FURNITURE = (workspace.ASK, "Type anything below this line")
 
 
 @dataclass
 class Watcher:
     brain: object
-    poll: float = POLL_SECONDS
-    settle: float = SETTLE_SECONDS
+    ask_poll: float = ASK_POLL
+    sweep_every: float = SWEEP_EVERY
+    settle: float = SETTLE
     on_event: object = None
+    scanner: mentions.Scanner = field(default_factory=mentions.Scanner)
+
+    _pending: dict = field(default_factory=dict)   # key -> (text, first seen at)
+    _ask_id: str | None = None
+
+    # ---------------------------------------------------------------- output
 
     def _say(self, msg: str) -> None:
         if self.on_event:
             self.on_event(msg)
 
-    def answer(self, question: str) -> str:
-        state = graph.run(question, brain=self.brain, trigger="notes")
+    # --------------------------------------------------------------- answering
+
+    def _answer(self, question: str, *, title: str, folder: str, after: int,
+                here: str = "") -> None:
+        self._say(f"\n> [{title}] {question}")
+        state = graph.run(
+            question, brain=self.brain, trigger="notes",
+            reply_to=(title, folder, after), here=here,
+        )
         for line in state.trace:
             self._say(f"  {line}")
-        return state.answer
+        for result in state.results:
+            self._say(f"  {result}")
+        if not any(r.startswith("✓") for r in state.results):
+            self._say("  nothing was written — she will read this again")
+        self._say(f"\n{state.answer}\n")
+
+    def _settled(self, key: str, text: str) -> bool:
+        """True once this exact text has sat unchanged long enough to be finished."""
+        was = self._pending.get(key)
+        if was is None or was[0] != text:
+            self._pending[key] = (text, time.time())
+            self._say(f"  saw [{key}]: {text[:60]}")
+            return False
+        return time.time() - was[1] >= self.settle
+
+    # ------------------------------------------------------------- the two jobs
+
+    def check_ask(self) -> None:
+        # A note's id is stable, so look it up once rather than listing the
+        # folder every few seconds — each listing is a request Notes must serve.
+        if self._ask_id is None:
+            note = notes.find_note(workspace.FOLDER, workspace.ASK)
+            if not note:
+                return
+            self._ask_id = note.id
+        body = notes.read_body(self._ask_id)
+        for q in conversation.unanswered(body, ignore=ASK_FURNITURE):
+            if len(q.text) < MIN_CHARS:
+                continue
+            if not self._settled(f"ask:{q.text[:40]}", q.text):
+                continue
+            self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER, after=q.after)
+            self._pending.clear()
+            return              # one at a time; the note has moved underneath us
+
+    def sweep_mentions(self) -> None:
+        found = self.scanner.scan()
+        if found:
+            self._say(f"  {len(found)} note(s) mention me")
+        for m in found:
+            if not self._settled(f"tag:{m.note_id}", m.question):
+                continue
+            body = notes.read_body(m.note_id)
+            from .markup import to_text
+            self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
+                         here=to_text(body)[:4000])
+            self._pending.pop(f"tag:{m.note_id}", None)
+            return
+
+    # ------------------------------------------------------------------- loop
 
     def run_forever(self) -> None:
-        note = notes.find_note(workspace.FOLDER, workspace.ASK)
-        if not note:
-            raise SystemExit(f"{workspace.ASK} is missing — run `juno setup` first.")
+        # Notes may have been idle for hours. Waking it is slow exactly once.
+        try:
+            took = notes.warm_up()
+            if took > 5:
+                self._say(f"woke the Notes app ({took:.0f}s — it had been asleep)")
+        except Exception as e:
+            self._say(f"  (Notes did not wake: {type(e).__name__}) — trying anyway")
 
         self._say(f"listening to {workspace.ASK} — type in Notes on any device")
+        try:
+            n = self.scanner.prime()
+            self._say(f"watching {n} notes for #juno — tag me anywhere")
+        except Exception as e:
+            self._say(f"  (couldn't survey your notes: {type(e).__name__}) — Ask note still works")
 
-        # Anything sitting unanswered at startup is a real question: you asked on
-        # your phone while this Mac was asleep. She answers it once she wakes.
-        last_seen = ""
-        waiting = pending_question(notes.read_body(note.id))
-        if waiting:
-            self._say(f"  something was waiting for me: {waiting[:60]}")
-        candidate, candidate_since = None, 0.0
-
+        last_sweep = last_beat = time.time()
         while True:
-            time.sleep(self.poll)
+            time.sleep(self.ask_poll)
             try:
-                body = notes.read_body(note.id)
-            except Exception as e:                      # Notes quits, machine sleeps
-                self._say(f"  (couldn't read Notes: {type(e).__name__}) — retrying")
-                continue
-
-            question = pending_question(body)
-
-            if question == last_seen or len(question) < MIN_CHARS:
-                candidate = None
-                continue
-
-            if question != candidate:
-                candidate, candidate_since = question, time.time()
-                self._say(f"  saw: {question[:60]}…" if len(question) > 60 else f"  saw: {question}")
-                continue
-
-            if time.time() - candidate_since < self.settle:
-                continue                                # still typing
-
-            self._say(f"\n> {question}")
-            try:
-                reply = self.answer(question)
-                self._say(f"\n{reply}\n")
+                self.check_ask()
+                if self.scanner.primed and time.time() - last_sweep >= self.sweep_every:
+                    last_sweep = time.time()
+                    self.sweep_mentions()
+                if time.time() - last_beat >= 300:
+                    last_beat = time.time()
+                    self._say(f"  still listening ({time.strftime('%H:%M')})")
             except Exception as e:
-                self._say(f"  failed: {type(e).__name__}: {e}")
-
-            last_seen = pending_question(notes.read_body(note.id))
-            candidate = None
+                # Notes quits, the machine sleeps, a request times out. None of
+                # these should end the day.
+                self._say(f"  (paused: {type(e).__name__}) — retrying")
+                time.sleep(self.ask_poll)
 
 
 WATCH_LABEL = "io.m1labs.juno.listen"
@@ -126,6 +167,7 @@ def plist(python: str, project: str) -> str:
   <key>WorkingDirectory</key><string>{project}</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>
   <key>StandardOutPath</key><string>{project}/.juno/listen.log</string>
   <key>StandardErrorPath</key><string>{project}/.juno/listen.log</string>
 </dict>

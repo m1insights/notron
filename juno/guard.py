@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from . import privacy, workspace
+from . import notedoc, privacy, workspace
 
 MAX_BODY_CHARS = 200_000
 
@@ -36,7 +36,7 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str) -
     if title in workspace.READ_ONLY:
         return Verdict(False, f"{title} is read-only — it is the user's instruction note.")
 
-    if mode not in ("replace", "append"):
+    if mode not in ("replace", "append", "insert"):
         return Verdict(False, f"unknown write mode {mode!r}")
 
     if not new_body.strip():
@@ -47,10 +47,16 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str) -
 
     outside = folder != workspace.FOLDER
     if outside and mode == "replace":
-        return Verdict(False, f"{title!r} is outside {workspace.FOLDER}; Juno may only append there.")
+        return Verdict(
+            False,
+            f"{title!r} is outside {workspace.FOLDER}; Juno may only add to it, never rewrite it.",
+        )
 
     if mode == "append" and old_body and not new_body.startswith(old_body):
         return Verdict(False, "append would not preserve the existing note content")
+
+    if mode == "insert" and old_body and not notedoc.preserves(old_body, new_body):
+        return Verdict(False, "insert would have changed or removed existing text")
 
     added = new_body[len(old_body):] if mode == "append" else new_body
     if privacy.contains_secret(added):

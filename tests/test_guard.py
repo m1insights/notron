@@ -21,9 +21,23 @@ def test_juno_may_rewrite_her_own_notes():
     assert guard.check(folder=workspace.FOLDER, title=workspace.TODAY, mode="replace", **OK)
 
 
-def test_a_note_outside_junos_folder_can_only_be_appended_to():
+def test_a_note_outside_junos_folder_can_never_be_rewritten():
     v = guard.check(folder="Notes", title="My Diary", mode="replace", **OK)
-    assert not v and "append" in v.reason
+    assert not v and "never rewrite" in v.reason
+
+
+def test_she_may_answer_inside_your_note_as_long_as_nothing_is_lost():
+    old = "<div>my book idea</div><div>chapter two</div>"
+    assert guard.check(folder="Notes", title="Book idea", mode="insert", old_body=old,
+                       new_body="<div>my book idea</div><div>Juno: try a cold open</div>"
+                                "<div>chapter two</div>")
+
+
+def test_an_insert_that_quietly_edits_your_words_is_blocked():
+    v = guard.check(folder="Notes", title="Book idea", mode="insert",
+                    old_body="<div>my book idea</div><div>chapter two</div>",
+                    new_body="<div>my BETTER book idea</div><div>chapter two</div>")
+    assert not v and "changed or removed" in v.reason
 
 
 def test_append_outside_the_folder_is_allowed():

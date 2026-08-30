@@ -52,9 +52,15 @@ ORDER = ("watcher", "router", "retriever", "planner", "writer", "executor")
 
 
 def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
+        reply_to: tuple | None = None, here: str = "",
         on_node: Callable[[str, State], None] | None = None) -> State:
-    """Walk the graph once."""
-    state = State(request=request, trigger=trigger)
+    """Walk the graph once.
+
+    `reply_to` is (note title, folder, block index) when the answer belongs
+    underneath something specific rather than at the end of the Ask note.
+    `here` is the note she was tagged in, which is context she gets for free.
+    """
+    state = State(request=request, trigger=trigger, reply_to=reply_to, here=here)
     for name in ORDER:
         fn = NODES[name]
         if name == "executor":

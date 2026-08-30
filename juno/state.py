@@ -10,8 +10,9 @@ class Write:
     """A proposed change to a note. Nothing is applied until the Guard passes it."""
     title: str
     markdown: str
-    mode: str = "replace"       # "replace" | "append"
+    mode: str = "replace"       # "replace" | "append" | "insert"
     folder: str | None = None   # None -> JUNO's own folder
+    after: int | None = None    # insert mode: put the reply after this block
 
 
 @dataclass
@@ -23,6 +24,8 @@ class State:
     intent: str = ""                 # set by Router
     needs_context: bool = False
     needs_web: bool = False
+    here: str = ""                   # the note she was tagged in, if any
+    reply_to: tuple | None = None    # (title, folder, block index) to answer under
     context: list[str] = field(default_factory=list)
     answer: str = ""
     writes: list[Write] = field(default_factory=list)

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import guard, markup, notes, workspace
+from . import guard, markup, notedoc, notes, workspace
 
 
 @dataclass(frozen=True)
@@ -35,15 +35,24 @@ class Executor:
         """Add to the end of a note without touching what is already there."""
         return self._apply(folder, title, body_markdown, mode="append")
 
+    def insert(self, title: str, body_markdown: str, *, after: int,
+               folder: str = workspace.FOLDER) -> WriteResult:
+        """Answer directly underneath the block someone wrote, wherever it sits."""
+        return self._apply(folder, title, body_markdown, mode="insert", after=after)
+
     # -- internals -------------------------------------------------------
 
-    def _apply(self, folder: str, title: str, body_markdown: str, *, mode: str) -> WriteResult:
+    def _apply(self, folder: str, title: str, body_markdown: str, *, mode: str,
+               after: int | None = None) -> WriteResult:
         note = notes.find_note(folder, title)
         old_body = notes.read_body(note.id) if note else ""
 
         if mode == "append":
-            addition = markup.to_html(body_markdown)
-            new_body = (old_body or markup.render(title, "")) + addition
+            new_body = (old_body or markup.render(title, "")) + markup.to_html(body_markdown)
+        elif mode == "insert":
+            if not old_body:
+                return WriteResult(False, "cannot insert into a note that does not exist")
+            new_body = notedoc.insert_after(old_body, after or 0, markup.to_html(body_markdown))
         else:
             new_body = markup.render(title, body_markdown)
 
