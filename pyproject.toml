@@ -1,0 +1,25 @@
+[project]
+name = "juno"
+version = "0.1.0"
+description = "A personal AI agent that lives inside Apple Notes"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+dependencies = ["openai>=1.60.0", "numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+juno = "juno.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/m1insights/juno"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
