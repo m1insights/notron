@@ -157,7 +157,7 @@ def writer(state: State, *, brain) -> State:
         system=WRITER_SYSTEM, user=_prompt(state), tier="smart", max_tokens=1200
     )
     state.writes.append(
-        Write(title=workspace.ASK, markdown=f"\n**Juno:** {state.answer}\n\n———\n", mode="append")
+        Write(title=workspace.ASK, markdown=f"\n**Juno:** {state.answer}\n\n———\n\n", mode="append")
     )
     state.note("writer", f"{len(state.answer)} chars")
     return state

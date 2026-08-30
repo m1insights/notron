@@ -24,6 +24,25 @@ turns it into an agent workspace.
 Your notes become three things at once: the interface, the memory, and the
 instructions.
 
+## How you talk to her
+
+You type into the `📥 Ask Juno` note. That's it — no terminal, no send button, no
+app to open. She watches that note, waits until you've stopped typing, answers
+underneath, and draws a line so the next thing you type is the next question.
+
+Because it's Apple Notes, this works from your iPhone: type on the sofa, iCloud
+carries it to the Mac, she thinks on Nebius, and the answer is on your phone about
+ten seconds later. And if you ask something at 2am while the Mac is shut, she picks
+it up the moment it wakes.
+
+```bash
+juno listen --install     # she listens from now on, through reboots
+juno listen --off         # she stops
+```
+
+There is a terminal route too — `juno ask "..."` — but it exists for testing. The
+note is the product.
+
 ## How it works for you
 
 Juno creates one folder, `🤖 JUNO`, with six notes:

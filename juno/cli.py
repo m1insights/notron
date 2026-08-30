@@ -110,6 +110,40 @@ def cmd_schedule(args):
     print(f"  Your Mac must be awake. Turn it off with: juno schedule --off\n")
 
 
+def cmd_listen(args):
+    import subprocess
+    from . import watch
+
+    label, project = watch.WATCH_LABEL, pathlib.Path(__file__).resolve().parents[1]
+    target = pathlib.Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+
+    if args.off:
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True)
+        target.unlink(missing_ok=True)
+        print("\n  Juno has stopped listening.\n")
+        return
+
+    if args.install:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(watch.plist(str(project / ".venv" / "bin" / "python"), str(project)))
+        subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True)
+        r = subprocess.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(target)],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"\n  Could not start: {r.stderr.strip()}\n", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"\n  Juno is listening, and will keep listening after you reboot.")
+        print(f"  Type into Notes → {workspace.FOLDER} → {workspace.ASK}, from any device.")
+        print(f"  Stop her with: juno listen --off\n")
+        return
+
+    print()
+    try:
+        watch.Watcher(_brain(), on_event=lambda m: print(m, flush=True)).run_forever()
+    except KeyboardInterrupt:
+        print("\n  Stopped listening.\n")
+
+
 def cmd_models(args):
     for m in _brain().available_models():
         mark = " ←" if "nemotron" in m.lower() else ""
@@ -135,6 +169,11 @@ def main(argv=None):
     pl.add_argument("--week", action="store_true")
     pl.add_argument("--dry-run", action="store_true")
     pl.set_defaults(fn=cmd_plan)
+
+    li = sub.add_parser("listen", help="watch the Ask note and answer what you type")
+    li.add_argument("--install", action="store_true", help="keep listening in the background, always")
+    li.add_argument("--off", action="store_true", help="stop listening")
+    li.set_defaults(fn=cmd_listen)
 
     mo = sub.add_parser("morning", help="Juno's daily routine: catch up, plan, self-check")
     mo.add_argument("--dry-run", action="store_true")
