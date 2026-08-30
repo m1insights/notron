@@ -25,6 +25,19 @@ def cmd_setup(args):
     for title, state in workspace.bootstrap().items():
         print(f"  {state:8} {title}")
     print(f"\n  Open Notes → {workspace.FOLDER} → {workspace.ABOUT} and tell Juno who you are.\n")
+    print("\n  Checking Juno can reach your apps…")
+    cmd_permissions(args)
+
+
+def cmd_permissions(args):
+    from . import permissions
+
+    print()
+    for c in permissions.check():
+        print(f"  {'✓' if c.ok else '✗'} {c.app:10} {c.detail}")
+        if c.fix:
+            print(f"    → {c.fix}")
+    print()
 
 
 def cmd_ask(args):
@@ -196,6 +209,8 @@ def main(argv=None):
 
     sub.add_parser("models", help="list models this Nebius key can run").set_defaults(fn=cmd_models)
     sub.add_parser("graph", help="show the node graph").set_defaults(fn=cmd_graph)
+    sub.add_parser("permissions", help="check Juno can talk to Notes, Reminders and Calendar"
+                   ).set_defaults(fn=cmd_permissions)
 
     args = p.parse_args(argv)
     args.fn(args)
