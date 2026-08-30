@@ -28,3 +28,18 @@ def test_the_care_note_is_never_blank_when_the_model_says_nothing():
 
 def test_thresholds_are_ordered_sensibly():
     assert care.ABOUT_COMFORTABLE < care.ABOUT_HEAVY
+
+
+def test_she_asks_for_help_when_an_app_stops_answering(monkeypatch):
+    """Automation approval can be revoked in System Settings at any time, and the
+    only symptom is silence. The care note is where silence becomes a sentence."""
+    from juno import permissions
+
+    monkeypatch.setattr(care.permissions, "check", lambda: [
+        permissions.Check("Notes", True, "ready", ""),
+        permissions.Check("Reminders", False, "no answer", "Turn on Reminders"),
+    ])
+    signals = care.check()
+    apps = [s for s in signals if s.key == "apps"]
+    assert apps and apps[0].severity == "needs you"
+    assert "Reminders" in apps[0].fact

@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from . import index, markup, notes, workspace
+from . import index, markup, notes, permissions, workspace
 from .brain import USAGE_LOG
 
 # Thresholds. Past these, Juno asks for help.
@@ -137,6 +137,18 @@ def check() -> list[Signal]:
             f"This week: {u['calls']} thoughts, {u['in'] + u['out']:,} tokens on Nebius.",
             "",
         ))
+
+    # 6. Apps she is no longer allowed to talk to. The symptom is silence, so it
+    #    has to be said out loud somewhere the user will read it.
+    blocked = [c.app for c in permissions.check() if not c.ok]
+    if blocked:
+        out.append(Signal(
+            "apps", "needs you",
+            f"I can't reach {', '.join(blocked)} any more.",
+            "System Settings → Privacy & Security → Automation, switch them back on.",
+        ))
+    else:
+        out.append(Signal("apps", "ok", "Notes, Reminders and Calendar all answer.", ""))
 
     return out
 

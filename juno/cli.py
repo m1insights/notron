@@ -40,6 +40,14 @@ def cmd_permissions(args):
     print()
 
 
+def cmd_agenda(args):
+    from . import calendar, reminders
+
+    print(f"\n  Today\n\n{calendar.brief()}\n")
+    print(f"  This week\n\n{calendar.week()}\n")
+    print(f"  Outstanding\n\n{reminders.summary()}\n")
+
+
 def cmd_ask(args):
     brain = _brain()
     request = " ".join(args.request)
@@ -211,6 +219,8 @@ def main(argv=None):
     sub.add_parser("graph", help="show the node graph").set_defaults(fn=cmd_graph)
     sub.add_parser("permissions", help="check Juno can talk to Notes, Reminders and Calendar"
                    ).set_defaults(fn=cmd_permissions)
+    sub.add_parser("agenda", help="what's in your calendar and what's still open"
+                   ).set_defaults(fn=cmd_agenda)
 
     args = p.parse_args(argv)
     args.fn(args)
