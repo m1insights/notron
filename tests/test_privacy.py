@@ -54,3 +54,19 @@ def test_the_guard_blocks_a_write_carrying_a_secret():
 def test_the_guard_lets_an_ordinary_plan_through():
     assert guard.check(folder=workspace.FOLDER, title=workspace.TODAY, mode="replace",
                        old_body="<div>old</div>", new_body="<div>09:00 walk the dog</div>")
+
+
+def test_private_notes_are_not_dredged_up_for_an_unrelated_question():
+    """Asked to compare two novels, she pulled explicit personal material out of
+    the user's notes, quoted it verbatim, and presented it as being from one of
+    the books."""
+    passages = [("Roleplay log", "explicit private text"),
+                ("Journal", "how I actually felt that night"),
+                ("Book notes", "Fonda Lee, Jade City")]
+    kept = privacy.filter_passages("how does Stranded compare to Fonda Lee?", passages)
+    assert [t for t, _ in kept] == ["Book notes"]
+
+
+def test_but_she_still_works_with_them_when_you_ask_directly():
+    passages = [("Journal", "how I actually felt")]
+    assert privacy.filter_passages("what did my journal say about last week?", passages)

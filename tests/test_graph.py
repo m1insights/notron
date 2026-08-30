@@ -123,3 +123,25 @@ def test_a_reply_meant_for_a_spot_in_a_note_is_actually_inserted_there():
         nodes.Executor = Real
 
     assert applied == [("insert", "Book idea", 7)]
+
+
+def test_she_is_allowed_to_know_things_that_are_not_in_your_notes():
+    """She once refused to compare two novels because neither appeared in the
+    user's notes. Notes are for facts about the user, not a limit on what she
+    may know."""
+    from juno import nodes
+
+    prompt = nodes.WRITER_SYSTEM.lower()
+    assert "about the world" in prompt
+    assert "do not refuse a general question" in prompt
+
+
+def test_your_notes_are_never_treated_as_evidence_about_the_world():
+    from juno import nodes
+
+    writer = nodes.WRITER_SYSTEM.lower()
+    assert "never evidence about a book" in writer
+    assert "never quote a note back word for word" in writer
+
+    router = nodes.ROUTER_SYSTEM.lower()
+    assert "needs_context is false for questions about the world" in router

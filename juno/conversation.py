@@ -22,6 +22,10 @@ SIGNATURE = "Juno:"
 RULE = "———"
 TAG = re.compile(r"(?:^|\s)[#@]juno\b", re.I)
 
+# Blank blocks allowed inside one turn. Lines typed together stay together;
+# leave more space than this and it reads as a separate thought.
+MAX_GAP = 1
+
 
 @dataclass(frozen=True)
 class Question:
@@ -31,6 +35,16 @@ class Question:
 
 def _is_juno(text: str) -> bool:
     return text.lstrip().startswith(SIGNATURE)
+
+
+def _is_blank(text: str, ignore: tuple[str, ...]) -> bool:
+    """Empty space or a note's standing header — never a rule."""
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if stripped == RULE or set(stripped) <= set("—-_ "):
+        return False
+    return any(stripped == line or stripped.startswith(line) for line in ignore)
 
 
 def _is_furniture(text: str, ignore: tuple[str, ...]) -> bool:
@@ -49,10 +63,16 @@ def unanswered(
 ) -> list[Question]:
     """Every turn of yours that Juno has not replied to yet.
 
+    A turn is a run of lines you wrote together. Lines typed one after another
+    belong to the same thought and stay together; a real gap between paragraphs
+    starts a new one. Getting this wrong loses messages: a question typed above
+    an older exchange was swallowed into it, saw Juno's old reply sitting
+    underneath, and concluded it had already been answered.
+
     `ignore` lists the note's standing header lines, which are scenery rather
     than anything anyone said. `require_tag` restricts this to turns that
-    actually mention her, which is how she behaves in notes that are not hers —
-    she stays quiet unless spoken to.
+    mention her, which is how she behaves in notes that are not hers — she stays
+    quiet unless spoken to.
     """
     texts = notedoc.texts(body_html)
     out: list[Question] = []
@@ -70,18 +90,27 @@ def unanswered(
             i += 1
             continue
 
-        # Gather this turn: consecutive blocks until Juno speaks or a rule lands.
-        parts, end = [], i
-        while (i < len(texts) and not _is_juno(texts[i])
-               and texts[i].strip() != RULE):
-            if texts[i].strip() and not _is_furniture(texts[i], ignore):
+        parts, end, gap = [], i, 0
+        while i < len(texts) and not _is_juno(texts[i]) and texts[i].strip() != RULE:
+            if _is_furniture(texts[i], ignore):
+                gap += 1
+                if gap > MAX_GAP:      # a real break between two separate thoughts
+                    break
+            else:
+                gap = 0
                 parts.append(texts[i].strip())
                 end = i
             i += 1
 
-        answered = i < len(texts) and _is_juno(texts[i])
-        turn = "\n".join(parts).strip()
+        # Answered only if Juno speaks next. Blank space between does not count,
+        # but a rule does: a reply on the far side of a rule belongs to a
+        # different exchange, not to this question.
+        peek = i
+        while peek < len(texts) and _is_blank(texts[peek], ignore):
+            peek += 1
+        answered = peek < len(texts) and _is_juno(texts[peek])
 
+        turn = "\n".join(parts).strip()
         if turn and not answered and (not require_tag or TAG.search(turn)):
             out.append(Question(text=turn, after=end))
 

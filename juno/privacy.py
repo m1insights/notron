@@ -52,10 +52,24 @@ HIGH_ENTROPY = re.compile(
 
 REDACTED = "[redacted]"
 
+# Notes people would not want quoted back at them. Juno may know they exist and
+# may work with them when asked directly, but they never get pulled in as
+# background material for an unrelated question — and never reproduced verbatim.
+PRIVATE_TITLE = re.compile(
+    r"\b(journal|diary|therapy|dream[s]?|confession[s]?|fantas(?:y|ies)|"
+    r"roleplay|rp\s?log|nsfw|intimate|sext|medical|diagnosis|prescription)\b",
+    re.I,
+)
+
 
 def is_vault(title: str) -> bool:
     """Does this note exist to store credentials?"""
     return bool(VAULT_TITLE.search(title))
+
+
+def is_private(title: str) -> bool:
+    """Is this the kind of note nobody wants quoted back at them?"""
+    return bool(PRIVATE_TITLE.search(title))
 
 
 def asked_for(request: str, title: str) -> bool:
@@ -100,7 +114,7 @@ def filter_passages(request: str, passages: list[tuple[str, str]]) -> list[tuple
     out = []
     for title, text in passages:
         vault = is_vault(title)
-        if vault and not asked_for(request, title):
+        if (vault or is_private(title)) and not asked_for(request, title):
             continue
         out.append((title, redact_vault(text) if vault else redact(text)))
     return out

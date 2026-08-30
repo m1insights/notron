@@ -106,3 +106,21 @@ def test_boundaries_survive_the_newlines_apple_notes_puts_between_blocks():
     old = "<div>a</div>\n<div>b</div>"
     assert notedoc.preserves(old, "<div>a</div>\n<div>NEW</div><div>b</div>")
     assert not notedoc.preserves(old, "<div>a</div>\n<div>CHANGED</div>")
+
+
+def test_a_new_question_above_an_old_exchange_is_not_swallowed():
+    """A real lost message: typed at the top of the note, above an older
+    question that already had a reply. The two ran together as one turn, saw
+    Juno's old answer underneath, and counted as answered."""
+    body = note("header\n\n\n\nHow would you rate Stranded versus Fonda Lee?\n\n\n\n"
+                "Hi Juno, I'm about to read a book.\n\n**Juno:** Noted.\n\n———\n")
+    qs = conversation.unanswered(body, ignore=IGNORE)
+    assert len(qs) == 1
+    assert "Fonda Lee" in qs[0].text
+
+
+def test_lines_typed_together_still_count_as_one_question():
+    body = note("header\n\n———\n\nplan my week\nI have a shoot Thursday")
+    qs = conversation.unanswered(body, ignore=IGNORE)
+    assert len(qs) == 1
+    assert "shoot Thursday" in qs[0].text
