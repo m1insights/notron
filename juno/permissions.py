@@ -1,28 +1,40 @@
-"""Which apps Juno is actually allowed to talk to.
+"""Which of your apps Juno is actually allowed to read.
 
-macOS gates AppleScript per app, per calling process. The failure mode is the
-nasty kind: an app you have not been granted does not refuse you, it *hangs*,
-waiting on a dialog. A launchd background job can never show that dialog, so the
-listener sits there looking wedged. Measured 2026-08-30: Notes answered in 0.12s,
-Reminders and Calendar had not answered after forty seconds each.
+Three separate permissions, and each fails in its own quiet way:
 
-So we ask each app one trivial question with a short deadline, and read silence
-as "not approved yet" rather than "broken".
+  * **Notes** uses AppleScript Automation. An unapproved app does not refuse —
+    it *hangs*, waiting on a dialog a background job can never answer.
+  * **Calendar and Reminders** use EventKit, which has four states, and the
+    dangerous one is `write only`. Write-only access does not raise anything. It
+    reports one calendar and zero events, so a blocked calendar is indistinguishable
+    from a free week. Measured on this Mac 2026-08-30: Calendar was write-only and
+    looked empty all day.
+
+So this module reads the numeric authorization status rather than trying a query
+and believing the answer.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import eventkit
 from .applescript import run
 
 PROBE_TIMEOUT = 8
 
-PROBES = {
-    "Notes": 'on run argv\n tell application "Notes" to return (count of every folder) as text\nend run',
-    "Reminders": 'on run argv\n tell application "Reminders" to return (count of every list) as text\nend run',
-    "Calendar": 'on run argv\n tell application "Calendar" to return (count of every calendar) as text\nend run',
-}
+# EKAuthorizationStatus
+NOT_DETERMINED, RESTRICTED, DENIED, FULL, WRITE_ONLY = 0, 1, 2, 3, 4
+
+_STATUS = """
+ObjC.import('EventKit');
+JSON.stringify({
+  events: $.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent),
+  reminders: $.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)
+});
+"""
+
+_NOTES = 'on run argv\n tell application "Notes" to return (count of every folder) as text\nend run'
 
 
 @dataclass(frozen=True)
@@ -33,18 +45,45 @@ class Check:
     fix: str
 
 
-FIX = ("Open System Settings → Privacy & Security → Automation and switch on {app} "
-       "for your terminal, then run `juno permissions` again.")
+PANE = {"Calendar": "Calendars", "Reminders": "Reminders"}
+
+EXPLAIN = {
+    NOT_DETERMINED: ("has not been asked yet", True),
+    RESTRICTED: ("is restricted by a profile on this Mac", True),
+    DENIED: ("is denied", True),
+    FULL: ("full access", False),
+    WRITE_ONLY: ("is write only — Juno can add things but cannot read them, "
+                 "so your calendar will look empty", True),
+}
 
 
-def check(runner=None) -> list[Check]:
-    runner = runner or (lambda s: run(s, timeout=PROBE_TIMEOUT, retries=0))
+def _read() -> dict:
+    return eventkit.run(_STATUS)
+
+
+def check(reader=None, notes_runner=None) -> list[Check]:
     out: list[Check] = []
-    for app, script in PROBES.items():
-        try:
-            answer = runner(script)
-        except Exception as e:
-            out.append(Check(app, False, f"no answer ({type(e).__name__})", FIX.format(app=app)))
-            continue
-        out.append(Check(app, True, f"ready ({answer.strip()} items)", ""))
+
+    notes_runner = notes_runner or (lambda: run(_NOTES, timeout=PROBE_TIMEOUT, retries=0))
+    try:
+        answer = notes_runner()
+        out.append(Check("Notes", True, f"ready ({answer.strip()} folders)", ""))
+    except Exception as e:
+        out.append(Check("Notes", False, f"no answer ({type(e).__name__})",
+                         "System Settings → Privacy & Security → Automation, "
+                         "switch on Notes for your terminal."))
+
+    try:
+        status = (reader or _read)()
+    except Exception as e:
+        for app in ("Calendar", "Reminders"):
+            out.append(Check(app, False, f"could not be checked ({type(e).__name__})", ""))
+        return out
+
+    for app, key in (("Calendar", "events"), ("Reminders", "reminders")):
+        code = int(status.get(key, NOT_DETERMINED))
+        detail, broken = EXPLAIN.get(code, (f"unknown status {code}", True))
+        fix = (f"System Settings → Privacy & Security → {PANE[app]}, "
+               f"give your terminal full access.") if broken else ""
+        out.append(Check(app, not broken, detail, fix))
     return out

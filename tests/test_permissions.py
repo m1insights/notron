@@ -4,19 +4,23 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from juno import permissions
 
 
-def test_a_hang_is_reported_as_missing_permission_not_a_broken_app():
-    """The first request to an unapproved app hangs forever rather than failing.
-    Measured 2026-08-30: Notes answered in 0.12s, Reminders and Calendar never
-    answered at all. A timeout here means a dialog nobody can see."""
-    def always_hangs(script, *args, **kw):
-        raise TimeoutError("no answer")
-
-    checks = permissions.check(runner=always_hangs)
-    reminders = next(c for c in checks if c.app == "Reminders")
-    assert not reminders.ok
-    assert "Automation" in reminders.fix
+def test_write_only_calendar_access_is_reported_as_a_problem():
+    """The state that cost the most time to diagnose. Write-only access does not
+    fail — it reports one calendar and zero events, so the calendar looks empty
+    instead of blocked. Measured 2026-08-30: events=4, reminders=3."""
+    checks = permissions.check(reader=lambda: {"events": 4, "reminders": 3})
+    cal = next(c for c in checks if c.app == "Calendar")
+    assert not cal.ok
+    assert "write" in cal.detail.lower()
+    assert "Calendars" in cal.fix
 
 
-def test_an_app_that_answers_is_reported_ready():
-    checks = permissions.check(runner=lambda *a, **kw: "Groceries")
-    assert all(c.ok for c in checks)
+def test_full_access_to_both_is_reported_ready():
+    checks = permissions.check(reader=lambda: {"events": 3, "reminders": 3})
+    assert all(c.ok for c in checks if c.app in ("Calendar", "Reminders"))
+
+
+def test_never_asked_and_denied_are_told_apart():
+    checks = {c.app: c for c in permissions.check(reader=lambda: {"events": 0, "reminders": 2})}
+    assert "not been asked" in checks["Calendar"].detail
+    assert "denied" in checks["Reminders"].detail
