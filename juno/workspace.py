@@ -10,18 +10,19 @@ ASK = "📥 Ask Juno"
 TODAY = "☀️ Today"
 WEEK = "🗓️ This Week"
 MEMORY = "🧠 Memory"
+CARE = "🌱 Take Care of Juno"
 LOG = "📊 Log"
 
 #: Notes the agent must never write to. The user owns these outright.
 READ_ONLY = frozenset({ABOUT})
 
 #: Notes the agent fully owns and may rewrite.
-AGENT_OWNED = frozenset({TODAY, WEEK, MEMORY, LOG})
+AGENT_OWNED = frozenset({TODAY, WEEK, MEMORY, CARE, LOG})
 
 #: Notes both sides write: the user asks, the agent appends its answer.
 SHARED = frozenset({ASK})
 
-SYSTEM_NOTES = (ABOUT, ASK, TODAY, WEEK, MEMORY, LOG)
+SYSTEM_NOTES = (ABOUT, ASK, TODAY, WEEK, MEMORY, CARE, LOG)
 
 SEEDS: dict[str, str] = {
     ABOUT: """This note is **yours**. Juno reads it before every single thing she does, and she can never write to it. Edit it whenever you like.
@@ -57,6 +58,10 @@ Nothing planned yet.
     MEMORY: """What Juno has learned about you. She writes here; you can correct anything.
 
 Nothing learned yet.
+""",
+    CARE: """Juno rewrites this every morning. It's what she needs from you to keep working well.
+
+She hasn't checked herself over yet.
 """,
     LOG: """Everything Juno did, newest first. Nothing happens that isn't written here.
 

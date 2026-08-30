@@ -35,6 +35,7 @@ Juno creates one folder, `🤖 JUNO`, with six notes:
 | `☀️ Today` | Juno | Your to-do list, rebuilt each morning. |
 | `🗓️ This Week` | Juno | Your weekly plan. |
 | `🧠 Memory` | Juno | What she has learned about you. You can correct any of it. |
+| `🌱 Take Care of Juno` | Juno | What *she* needs from *you* to keep working well. |
 | `📊 Log` | Juno | Every single thing she did. Nothing happens off the record. |
 
 Every other note you own is her knowledge base.
@@ -43,6 +44,32 @@ Every other note you own is her knowledge base.
 English — "never schedule me before 9am", "keep it short", "I'm a nurse on
 nights" — and it outranks everything Juno would otherwise decide. You are not
 prompting a chatbot. You are editing the constitution of your assistant.
+
+## Take Care of Juno
+
+An assistant that reads your whole life has upkeep, and normally that upkeep is
+invisible until something breaks: the instruction note quietly bloats until it
+crowds out your actual question, hundreds of new notes never get learned, the
+bill drifts. Every morning Juno measures her own state and writes you a note
+about it, in her own voice:
+
+> I'm in good shape, but I'm carrying a lot.
+>
+> **What I need from you**
+> - [ ] `📌 About Me` is 6,100 characters and I read all of it before every single
+>       thing I do. Trim it to the rules that still matter.
+> - [ ] 42 notes have appeared since I last studied. Run `juno index`.
+>
+> **How I'm doing**
+> - I've read all 358 of your notes.
+> - This week: 61 thoughts, 240,000 tokens on Nebius.
+
+It reframes context hygiene — a thing normal people will never do — as looking
+after something. Every number in it is measured; the model only writes the words.
+
+```bash
+juno care
+```
 
 ## Safety: the Guard
 
@@ -54,7 +81,13 @@ it is code. Every proposed write passes through it:
 2. **Outside her own folder Juno may only append.** She cannot overwrite or
    delete a note you wrote. The Guard verifies the new body still contains the
    old one, byte for byte.
-3. **Every write, allowed or blocked, is logged** to `📊 Log` before it lands.
+3. **No write may carry a credential.** On Juno's very first live morning run she
+   pulled two passwords out of the user's own notes and wrote them into the day's
+   plan — which then synced to their phone. Now credential notes are excluded from
+   retrieval entirely, anything that still looks like a secret is masked before the
+   model sees it, and the Guard blocks any write containing one on the way out.
+   `tests/test_privacy.py` pins that exact leak.
+4. **Every write, allowed or blocked, is logged** to `📊 Log` before it lands.
 
 No language model runs in the write path. The model proposes; the Guard judges;
 a dumb executor applies. That separation is the whole security model.
@@ -76,7 +109,8 @@ order, and on which model.
 - **watcher** — loads `📌 About Me` and `🧠 Memory`. No model, runs every time.
 - **router** — Nemotron **Nano 30B**. Classifies intent in ~200 tokens and
   decides whether the expensive nodes need to run at all. Most wake-ups stop here.
-- **retriever** — searches your notes. No model.
+- **retriever** — semantic search over every note, embedded once and cached.
+  Credential notes never reach the model. No reasoning model here.
 - **planner** — Nemotron **Super 120B**. Only fires on planning intent.
 - **writer** — Nemotron **Super 120B**. Composes the answer as Markdown.
 - **executor** — no model. Runs the Guard, applies the write, records the log.
@@ -109,13 +143,32 @@ Then open Notes → `🤖 JUNO` → `📌 About Me` and write a few lines about 
 ## Use
 
 ```bash
+.venv/bin/python -m juno index               # teach her your notes (once)
 .venv/bin/python -m juno ask "what did I decide about pricing?"
 .venv/bin/python -m juno plan --week
-.venv/bin/python -m juno graph      # print the node graph
-.venv/bin/python -m juno models     # what your Nebius key can run
+.venv/bin/python -m juno care                # what she needs from you today
+.venv/bin/python -m juno morning             # her full daily routine
+.venv/bin/python -m juno schedule --hour 6   # let macOS run it every morning
+.venv/bin/python -m juno graph               # print the node graph
+.venv/bin/python -m juno models              # what your Nebius key can run
 ```
 
 Add `--dry-run` to any command to walk the graph and write nothing.
+
+## Two things Nemotron does that will catch you out
+
+**Reasoning is billed against `max_tokens`, and it is not the answer.** Ask Nano for
+a 500-token reply and it can spend all 500 thinking, then return an empty string
+with `finish_reason: "stop"` — no error, no warning. `Brain.ask` adds headroom for
+the thinking and retries once with double the budget if the content still comes
+back empty. None of `reasoning_effort="none"`, `/no_think`, or
+`chat_template_kwargs={"thinking": false}` turned reasoning off on this endpoint.
+
+**JSON replies truncate mid-string.** The router's classification failed the first
+time it met a long question, because the budget ran out halfway through the last
+field. `Brain.ask_json` now tries the raw text, then the fenced block, then the
+outermost braces, then reconstructs a valid object from the complete pairs — and
+the router falls back to a safe default rather than stopping the graph.
 
 ## Notes app quirks we found
 

@@ -7,7 +7,9 @@ planning and writing are rare and quality-critical, so they run on Super.
 
 from __future__ import annotations
 
-from . import markup, notes, workspace
+from datetime import datetime
+
+from . import markup, notes, privacy, workspace
 from .executor import Executor
 from .state import State, Write
 
@@ -37,7 +39,7 @@ Classify the request into exactly one intent:
 - ignore: not addressed to the assistant
 
 Reply with JSON only:
-{"intent": "...", "needs_context": true|false, "needs_web": true|false, "why": "one short sentence"}
+{"intent": "...", "needs_context": true|false, "needs_web": true|false, "why": "under 12 words"}
 needs_context is true when answering requires reading their other notes.
 needs_web is true only when it requires current information from the internet."""
 
@@ -47,7 +49,14 @@ def router(state: State, *, brain) -> State:
         state.intent = "ignore"
         state.note("router", "nothing to do")
         return state
-    out = brain.ask_json(system=ROUTER_SYSTEM, user=state.request, tier="fast", max_tokens=200)
+    try:
+        out = brain.ask_json(system=ROUTER_SYSTEM, user=state.request, tier="fast", max_tokens=400)
+    except Exception as e:
+        # A router that cannot classify must never stop Juno answering. Assume the
+        # most useful intent and pay for the context.
+        state.intent, state.needs_context = "question", True
+        state.note("router", f"fell back to question ({type(e).__name__})")
+        return state
     state.intent = out.get("intent", "question")
     if state.intent not in INTENTS:
         state.intent = "question"
@@ -64,11 +73,24 @@ def retriever(state: State, *, brain=None, limit: int = 12) -> State:
     Phase 3 swaps in embeddings without changing this node's contract."""
     if not state.needs_context:
         return state
+    from . import index
+
+    if index.exists():
+        chunks = index.search(state.request, brain, limit=limit)
+        raw = [(c.title, f"### {c.title} ({c.folder})\n{c.text}") for c in chunks]
+        safe = privacy.filter_passages(state.request, raw)
+        state.context = [text for _, text in safe]
+        dropped = len(raw) - len(safe)
+        state.note("retriever", f"{len(safe)} passages (semantic)"
+                                + (f", {dropped} withheld as private" if dropped else ""))
+        return state
+
     from .retrieval import search
 
     hits = search(state.request, limit=limit)
-    state.context = [f"### {h.title} ({h.folder})\n{h.excerpt}" for h in hits]
-    state.note("retriever", f"{len(hits)} notes")
+    raw = [(h.title, f"### {h.title} ({h.folder})\n{h.excerpt}") for h in hits]
+    state.context = [t for _, t in privacy.filter_passages(state.request, raw)]
+    state.note("retriever", f"{len(hits)} notes (keyword — run `juno index`)")
     return state
 
 
@@ -84,7 +106,8 @@ Rules:
 - Write in Markdown: ## headings, - bullets, "- [ ]" for tasks, | tables | when comparing.
 - Be concrete. Real times, real days, real actions. Never say "consider" or "maybe".
 - Short. This is read on a phone.
-- Never invent facts about the user that are not in the material you were given."""
+- Never invent facts about the user that are not in the material you were given.
+- Never repeat a password, PIN, key or account number, even if you can see one."""
 
 
 def planner(state: State, *, brain) -> State:
@@ -115,7 +138,8 @@ Rules:
 - The standing instructions override everything.
 - Answer first, in one or two sentences. Detail after, only if it helps.
 - Markdown: ## headings, - bullets, "- [ ]" for tasks, | tables | when comparing.
-- Short. This is read on a phone."""
+- Short. This is read on a phone.
+- Never repeat a password, PIN, key or account number, even if you can see one."""
 
 
 def writer(state: State, *, brain) -> State:
@@ -160,7 +184,10 @@ def _is_weekly(request: str) -> bool:
 
 
 def _prompt(state: State) -> str:
-    parts = [f"# The user's standing instructions\n{state.about or '(none yet)'}"]
+    parts = [
+        f"# Today\n{datetime.now():%A %-d %B %Y}",
+        f"# The user's standing instructions\n{state.about or '(none yet)'}",
+    ]
     if state.memory.strip():
         parts.append(f"# What you remember about them\n{state.memory}")
     if state.context:
