@@ -16,6 +16,20 @@ class Write:
 
 
 @dataclass
+class Action:
+    """Something Juno wants to do outside Notes. Nothing happens until the Guard
+    passes it, and the Guard is plain code."""
+    kind: str                        # "reminder" | "event"
+    op: str                          # reminder: create|complete   event: create
+    title: str
+    when: str | None = None          # ISO 8601 local: "2026-09-03T09:00" or "2026-09-03"
+    ends: str | None = None          # events only
+    where: str = ""                  # list name / calendar name
+    notes: str = ""
+    target_id: str | None = None     # set by the doer for "complete"
+
+
+@dataclass
 class State:
     trigger: str = "manual"          # what woke the graph
     request: str = ""                # what the user actually typed
@@ -28,6 +42,8 @@ class State:
     reply_to: tuple | None = None    # (title, folder, block index) to answer under
     context: list[str] = field(default_factory=list)
     web: list[str] = field(default_factory=list)
+    agenda: str = ""                          # today's calendar + open reminders
+    actions: list[Action] = field(default_factory=list)
     answer: str = ""
     writes: list[Write] = field(default_factory=list)
     results: list[str] = field(default_factory=list)
