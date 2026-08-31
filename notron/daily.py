@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from . import care, graph, index, notes, workspace
+from . import care, graph, index, notes, reflect, workspace
 
 
 def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
@@ -36,6 +36,10 @@ def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
         stats = index.build(brain, on_progress=say)
         out["indexed"] = stats
         say(f"learned {stats['embedded']} new passages")
+
+    # 1.5 Learn from yesterday's own answers — the misses, if any.
+    say("reflecting on yesterday's answers")
+    out["reflect"] = reflect.run(brain, dry_run=dry_run, on_step=say)
 
     # 2. Rebuild today's list from your notes and standing instructions.
     say("rebuilding ☀️ Today")

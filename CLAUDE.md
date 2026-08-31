@@ -11,7 +11,7 @@ Do not swap the model provider.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 155 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 164 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing
@@ -21,6 +21,7 @@ Do not swap the model provider.
 .venv/bin/python -m notron graph           # print the node graph
 .venv/bin/python -m notron permissions     # can she reach Notes, Reminders, Calendar?
 .venv/bin/python -m notron agenda          # today, this week, and what's outstanding
+.venv/bin/python -m notron reflect         # learn from her own answers that missed
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -70,6 +71,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `privacy.py` | Keeps credentials and private notes out of answers |
 | `index.py` / `retrieval.py` | Semantic search over the user's notes |
 | `care.py` / `daily.py` | "Take Care of Notron" and the morning routine |
+| `reflect.py` | The self-improvement loop — lessons from answers that missed |
 
 ## Invariants — do not break these
 
@@ -150,6 +152,17 @@ closes a 700× gap — use `notron/eventkit.py`.
   a prompt. `osascript` inherits the terminal's stable identity.
 - A dated reminder needs an explicit `EKAlarm`. A due date alone shows in the app
   but does not notify, and a reminder that does not buzz is a note with a circle.
+
+## The self-improvement loop (`reflect.py`)
+
+Runs inside `notron morning` and on demand via `notron reflect`. Plain code finds
+the evidence (corrections and re-asked questions in the Ask note — no model, so a
+quiet day costs zero calls); Super proposes ≤3 lessons, each forced to quote the
+transcript verbatim (string-checked in code); a **separate** Nano call verifies
+them against 📌 About Me and the existing lessons; the Guard writes the survivors
+to 📖 Lessons (capped at 12). Every prompt then carries the lessons *below* the
+standing instructions — About Me always wins, and the user can delete any lesson
+by editing the note. Run record: `.notron/reflect.json`, append-only.
 
 ## The Ask-note chat contract
 

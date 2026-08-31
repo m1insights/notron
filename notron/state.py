@@ -37,6 +37,7 @@ class State:
     request: str = ""                # what the user actually typed
     about: str = ""                  # 📌 About Me — the standing instructions
     memory: str = ""                 # 🧠 Memory — long-term facts
+    lessons: str = ""                # 📖 Lessons — rules she taught herself
     intent: str = ""                 # set by Router
     needs_context: bool = False
     needs_web: bool = False

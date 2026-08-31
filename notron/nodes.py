@@ -20,7 +20,8 @@ INTENTS = ("question", "task", "capture", "plan", "remind", "schedule", "ignore"
 
 def watcher(state: State, *, brain=None) -> State:
     """No model. Reads the user's standing instructions and long-term memory."""
-    for title, attr in ((workspace.ABOUT, "about"), (workspace.MEMORY, "memory")):
+    for title, attr in ((workspace.ABOUT, "about"), (workspace.MEMORY, "memory"),
+                        (workspace.LESSONS, "lessons")):
         n = notes.find_note(workspace.FOLDER, title)
         if n:
             setattr(state, attr, markup.to_text(notes.read_body(n.id)))
@@ -408,6 +409,9 @@ def _prompt(state: State) -> str:
         f"# Today\n{datetime.now():%A %-d %B %Y}",
         f"# The user's standing instructions\n{state.about or '(none yet)'}",
     ]
+    if state.lessons.strip() and "Nothing learned yet" not in state.lessons:
+        parts.append("# Lessons you have taught yourself — follow them unless the "
+                     f"standing instructions above say otherwise\n{state.lessons}")
     if state.memory.strip():
         parts.append(f"# What you remember about them\n{state.memory}")
     if state.web:

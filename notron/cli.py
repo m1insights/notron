@@ -98,6 +98,21 @@ def cmd_care(args):
     print(f"  {'\u2713' if result.ok else '\u2717'} {workspace.CARE} — {result.reason}\n")
 
 
+def cmd_reflect(args):
+    from . import reflect
+
+    print()
+    out = reflect.run(_brain(), dry_run=args.dry_run, on_step=lambda m: print(f"  · {m}"))
+    if out.get("skipped"):
+        print(f"  {out['skipped']}\n")
+        return
+    print(f"\n  {out['misses']} miss(es), {out['proposed']} lesson(s) proposed, "
+          f"{len(out['kept'])} kept\n")
+    for l in out["kept"]:
+        print(f"  + {l}")
+    print()
+
+
 def cmd_morning(args):
     from . import daily
 
@@ -213,6 +228,10 @@ def main(argv=None):
     sc.add_argument("--minute", type=int, default=30)
     sc.add_argument("--off", action="store_true", help="stop the daily run")
     sc.set_defaults(fn=cmd_schedule)
+
+    rf = sub.add_parser("reflect", help="learn from her own answers that missed")
+    rf.add_argument("--dry-run", action="store_true")
+    rf.set_defaults(fn=cmd_reflect)
 
     ca = sub.add_parser("care", help="what Notron needs from you today")
     ca.add_argument("--offline", action="store_true", help="skip the model, use plain wording")
