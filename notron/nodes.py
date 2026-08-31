@@ -66,6 +66,14 @@ def router(state: State, *, brain) -> State:
     state.intent = out.get("intent", "question")
     if state.intent not in INTENTS:
         state.intent = "question"
+    if state.intent == "ignore" and state.trigger in ("notes", "manual"):
+        # Everything that reaches the router today was said *to* her — typed in
+        # the Ask note, tagged #notron, or given on the command line. A router
+        # that answers "not addressed to the assistant" is wrong by construction,
+        # and the silence it causes is worse than a redundant answer: the note
+        # stays unanswered, so the listener asks the model again forever.
+        state.intent = "question"
+        state.note("router", "overrode ignore — this surface is always addressed to her")
     state.needs_context = bool(out.get("needs_context"))
     state.needs_web = bool(out.get("needs_web"))
     state.note("router", f"{state.intent} — {out.get('why', '')}")
@@ -321,21 +329,23 @@ def writer(state: State, *, brain) -> State:
     if state.intent in ("remind", "schedule"):
         # The doer already said exactly what happened. Paying a smart model to
         # rephrase a fact would only give it room to get the fact wrong.
-        if state.reply_to is None:
-            state.writes.append(Write(title=workspace.ASK, mode="append",
-                                      markdown=f"\n**Notron:** {state.answer}\n\n———\n\n"))
-        else:
-            title, folder, after = state.reply_to
-            state.writes.append(Write(title=title, folder=folder, mode="insert", after=after,
-                                      markdown=f"**Notron:** {state.answer}\n\n———\n"))
+        state.writes.append(_reply(state))
         state.note("writer", "confirmed without a model call")
         return state
     if state.intent == "capture":
-        state.writes.append(
-            Write(title=workspace.MEMORY, markdown=f"\n- {state.request.strip()}\n", mode="append")
-        )
-        state.answer = "Noted — I'll remember that."
-        state.note("writer", "captured to memory")
+        fact = state.request.strip()
+        # A capture used to append unconditionally, so saying the same thing
+        # twice (or the graph running twice on one message) piled up identical
+        # bullets in Memory — eleven copies of one fact, once, in production.
+        if fact and fact.lower() in state.memory.lower():
+            state.answer = "Already noted."
+            state.note("writer", "capture skipped — already in memory")
+        else:
+            state.writes.append(
+                Write(title=workspace.MEMORY, markdown=f"\n- {fact}\n", mode="append")
+            )
+            state.answer = "Noted — I'll remember that."
+            state.note("writer", "captured to memory")
         # Fall through: a capture still gets a visible reply where it was said.
         # Without one the note looks unanswered forever and she reads it again
         # on every pass.
@@ -344,19 +354,28 @@ def writer(state: State, *, brain) -> State:
         state.answer = brain.ask(
             system=WRITER_SYSTEM, user=_prompt(state), tier="smart", max_tokens=1200
         )
-    if state.reply_to is None:
-        state.writes.append(Write(
-            title=workspace.ASK, mode="append",
-            markdown=f"\n**Notron:** {state.answer}\n\n———\n\n",
-        ))
-    else:
-        title, folder, after = state.reply_to
-        state.writes.append(Write(
-            title=title, folder=folder, mode="insert", after=after,
-            markdown=f"**Notron:** {state.answer}\n\n———\n",
-        ))
+    state.writes.append(_reply(state))
     state.note("writer", f"{len(state.answer)} chars")
     return state
+
+
+def _reply(state: State) -> Write:
+    """Her turn, set as a different voice.
+
+    A note has no chat bubbles, so typography does the job instead: your words
+    stay plain, hers are italic under a bold signature, and a rule closes the
+    turn. The signature is also how `conversation` knows a turn is hers — keep
+    them in step.
+    """
+    body = f"**Notron:**\n{markup.voice(state.answer)}\n\n———\n"
+    if state.reply_to is None:
+        return Write(title=workspace.ASK, mode="append", markdown=f"\n{body}\n")
+    title, folder, after = state.reply_to
+    # The last line of the request is the block the reply sits under; the index
+    # is only a hint, because the user may still be typing above it.
+    anchor = state.request.strip().split("\n")[-1].strip()
+    return Write(title=title, folder=folder, mode="insert", after=after,
+                 anchor=anchor, markdown=body)
 
 
 # ---------------------------------------------------------------- Executor
@@ -367,7 +386,8 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
     for w in state.writes:
         folder = w.folder or workspace.FOLDER
         if w.mode == "insert":
-            r = ex.insert(w.title, w.markdown, after=w.after or 0, folder=folder)
+            r = ex.insert(w.title, w.markdown, after=w.after or 0, folder=folder,
+                          anchor=w.anchor)
         elif w.mode == "append":
             r = ex.append(w.title, w.markdown, folder=folder)
         else:

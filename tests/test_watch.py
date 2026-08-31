@@ -150,3 +150,31 @@ def test_what_is_still_owed_survives_a_restart(tmp_path, monkeypatch):
     after_restart = mentions.Scanner()
     after_restart.prime()
     assert after_restart.scan(), "the unanswered tag must survive the restart"
+
+
+def test_a_question_that_cannot_be_answered_is_rested_not_retried_forever():
+    """A question that produced no write stayed 'unanswered' in the note, so
+    every poll sent it to the model again — a quiet API bill for one stuck
+    message, at one call every eleven seconds."""
+    w = watch.Watcher(brain=None)
+    key = "ask:stuck question"
+    assert w._worth_trying(key)
+    w._attempted(key, wrote=False)
+    assert w._worth_trying(key), "one failure deserves a second try"
+    w._attempted(key, wrote=False)
+    assert not w._worth_trying(key), "two failures earn a rest, not a loop"
+
+
+def test_the_rest_ends_after_the_cooldown():
+    w = watch.Watcher(brain=None)
+    key = "ask:stuck question"
+    w._failures[key] = (w.MAX_TRIES, time.time() - w.COOLDOWN - 1)
+    assert w._worth_trying(key)
+
+
+def test_a_successful_answer_clears_the_failure_count():
+    w = watch.Watcher(brain=None)
+    key = "ask:recovered"
+    w._attempted(key, wrote=False)
+    w._attempted(key, wrote=True)
+    assert key not in w._failures

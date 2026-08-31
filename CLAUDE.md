@@ -11,7 +11,7 @@ Do not swap the model provider.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 139 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 155 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing
@@ -150,6 +150,18 @@ closes a 700× gap — use `notron/eventkit.py`.
   a prompt. `osascript` inherits the terminal's stable identity.
 - A dated reminder needs an explicit `EKAlarm`. A due date alone shows in the app
   but does not notify, and a reminder that does not buzz is a note with a circle.
+
+## The Ask-note chat contract
+
+- Her turn: `**Notron:**` on its own line, prose italicised by `markup.voice`
+  (structure — headings, lists, tables — stays upright), closed with `———`.
+  `conversation.SIGNATURE` matches that bold signature; change both or neither.
+- The router may never return `ignore` for notes/manual triggers — everything on
+  those surfaces is addressed to her, and silence makes the listener re-ask the
+  model forever. A question that still produces no write gets `Watcher.MAX_TRIES`
+  attempts, then rests for `COOLDOWN` seconds.
+- An insert re-finds its question by text at write time (`notedoc.locate`) —
+  the block index is only a hint, because the user keeps typing while she thinks.
 
 ## Conventions
 

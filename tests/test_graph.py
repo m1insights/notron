@@ -54,10 +54,20 @@ def test_a_capture_is_remembered_without_paying_for_the_big_model():
     assert ("text", "smart") not in brain.calls, "a note to self needs no reasoning"
 
 
-def test_ignore_halts_the_graph_before_any_write():
-    state, _ = _run("ignore")
+def test_an_empty_request_halts_the_graph_before_any_write():
+    state = graph.run("", brain=FakeBrain(), dry_run=True)
     assert state.writes == []
     assert "halted" in " ".join(state.trace)
+
+
+def test_the_router_cannot_silently_ignore_something_typed_at_her():
+    """The router once classed 'Reply with the single word: ready' as ignore —
+    not addressed to the assistant — in the Ask note, where everything is. The
+    user saw dead air, and the listener sent the question back to the model on
+    every poll, forever."""
+    state, _ = _run("ignore")
+    assert state.intent == "question"
+    assert state.writes, "a message typed at her must always get a visible reply"
 
 
 def test_routing_runs_on_the_cheap_tier_and_writing_on_the_smart_one():
@@ -76,6 +86,19 @@ def test_every_declared_edge_points_at_a_real_node():
     names = set(graph.NODES)
     for e in graph.EDGES:
         assert e.frm in names and e.to in names
+
+
+def test_a_capture_does_not_duplicate_a_fact_already_in_memory():
+    """The Memory note once collected the same fact eleven times — every capture
+    of it appended a fresh bullet instead of checking what was already there."""
+    from notron.state import State
+
+    fact = "I am about to read a book. Stranded by AK Duboff."
+    state = State(request=fact, intent="capture", memory=f"- {fact}\n")
+    state = nodes.writer(state, brain=FakeBrain(intent="capture"))
+    assert workspace.MEMORY not in [w.title for w in state.writes], \
+        "already-known fact should not be written again"
+    assert workspace.ASK in [w.title for w in state.writes], "still acknowledge it was heard"
 
 
 def test_a_capture_still_leaves_a_visible_reply_or_she_reads_it_forever():
@@ -101,7 +124,7 @@ def test_a_reply_meant_for_a_spot_in_a_note_is_actually_inserted_there():
         def __init__(self, dry_run=False):
             pass
 
-        def insert(self, title, md, *, after, folder):
+        def insert(self, title, md, *, after, folder, anchor=""):
             applied.append(("insert", title, after))
             return type("R", (), {"ok": True, "reason": "written"})()
 

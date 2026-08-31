@@ -124,3 +124,19 @@ def test_lines_typed_together_still_count_as_one_question():
     qs = conversation.unanswered(body, ignore=IGNORE)
     assert len(qs) == 1
     assert "shoot Thursday" in qs[0].text
+
+
+def test_a_reply_finds_its_question_again_after_the_note_shifted():
+    """The block index is captured when the listener reads the note; the user
+    keeps typing while the model thinks. Every block below their edit shifts,
+    and an uncorrected index puts the answer under the wrong words."""
+    # The user adds two paragraphs above while the model is thinking.
+    shifted = markup.render("📥 Ask", "groceries\n\nring the bank\n\nWhat day is it?")
+    at = notedoc.locate(shifted, "What day is it?", near=1)
+    assert "What day is it?" in markup.to_text(notedoc.blocks(shifted)[at])
+
+
+def test_a_missing_anchor_falls_back_to_the_index():
+    body = markup.render("📥 Ask", "a\n\nb")
+    assert notedoc.locate(body, "not in the note", near=2) == 2
+    assert notedoc.locate(body, "", near=3) == 3

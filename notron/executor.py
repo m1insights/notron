@@ -37,14 +37,15 @@ class Executor:
         return self._apply(folder, title, body_markdown, mode="append")
 
     def insert(self, title: str, body_markdown: str, *, after: int,
-               folder: str = workspace.FOLDER) -> WriteResult:
+               folder: str = workspace.FOLDER, anchor: str = "") -> WriteResult:
         """Answer directly underneath the block someone wrote, wherever it sits."""
-        return self._apply(folder, title, body_markdown, mode="insert", after=after)
+        return self._apply(folder, title, body_markdown, mode="insert", after=after,
+                           anchor=anchor)
 
     # -- internals -------------------------------------------------------
 
     def _apply(self, folder: str, title: str, body_markdown: str, *, mode: str,
-               after: int | None = None) -> WriteResult:
+               after: int | None = None, anchor: str = "") -> WriteResult:
         note = notes.find_note(folder, title)
         old_body = notes.read_body(note.id) if note else ""
 
@@ -53,7 +54,10 @@ class Executor:
         elif mode == "insert":
             if not old_body:
                 return WriteResult(False, "cannot insert into a note that does not exist")
-            new_body = notedoc.insert_after(old_body, after or 0, markup.to_html(body_markdown))
+            # The note may have changed since the block index was captured —
+            # the user keeps typing while the model thinks. Re-find the words.
+            at = notedoc.locate(old_body, anchor, near=after or 0)
+            new_body = notedoc.insert_after(old_body, at, markup.to_html(body_markdown))
         else:
             new_body = markup.render(title, body_markdown)
 

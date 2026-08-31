@@ -110,3 +110,30 @@ Two directions worth considering:
   permissions, managing launchd. Underestimating this is how the project stalls.
 - **Open source means someone can fork and host it.** The defence is the hosted
   brain and the brand, not the code — it is only ~1,400 lines.
+
+## 2026-08-30 — Renamed to Notron; native Siri app built
+
+The rename above landed: package, Notes folder, GitHub repo, and the agent's own
+memory of itself are all Notron now.
+
+Also landed: a real answer to item #2 in "What is free vs paid" — "no Terminal."
+The original plan for voice ("Hey Siri, ask Notron…") was a hand-built macOS
+Shortcut: open the Shortcuts app, add four actions, paste a Python path into a
+shell-script step, record a Siri phrase. Fine for us; unshippable to a normal
+downloader who has never seen a terminal.
+
+Replaced it with a native macOS menu-bar app (`mac/` — Swift, App Intents). It
+registers "Hey Siri, ask Notron ___" with the OS itself the moment it's installed
+and opened once — no Shortcuts app, no pasted paths, no dictation step. Built,
+compiled, signed (ad-hoc), and confirmed running locally today.
+
+Two blockers before this ships inside the paid DMG, ~half a day combined:
+
+1. **Bundle a portable Python runtime inside the app.** Right now it shells out to
+   this machine's dev Python by absolute path — works here, not on a downloaded
+   copy on someone else's Mac.
+2. **Real Developer ID signing + notarization, not ad-hoc.** Not just a Gatekeeper
+   checkbox: an ad-hoc signature changes on every rebuild, and Siri's per-app trust
+   is tied to that signature — the same reason CLAUDE.md's invariant #6 already
+   rules out a compiled EventKit helper. A stable signed identity is what keeps the
+   Siri phrase working across app updates instead of silently going quiet.

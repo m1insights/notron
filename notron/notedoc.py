@@ -57,6 +57,26 @@ def insert_after(html: str, index: int, new_html: str) -> str:
     return "".join(parts)
 
 
+def locate(html: str, anchor: str, *, near: int) -> int:
+    """The index of the block whose text is `anchor`, preferring the one nearest
+    `near`.
+
+    Between the listener reading a note and the executor writing the answer, the
+    user may keep typing — on the phone, mid-sync — and every block below their
+    edit shifts. An index captured before the shift then points at the wrong
+    block, and the answer lands under the wrong words. So the index is treated
+    as a hint and the words as the truth: find the anchor text again at write
+    time, closest to where it used to be.
+    """
+    want = anchor.strip()
+    if not want:
+        return near
+    hits = [i for i, t in enumerate(texts(html)) if t.strip() == want]
+    if not hits:
+        return near
+    return min(hits, key=lambda i: abs(i - near))
+
+
 def preserves(old: str, new: str) -> bool:
     """Is `new` exactly `old` with whole blocks inserted at a block boundary?
 

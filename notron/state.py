@@ -13,6 +13,8 @@ class Write:
     mode: str = "replace"       # "replace" | "append" | "insert"
     folder: str | None = None   # None -> NOTRON's own folder
     after: int | None = None    # insert mode: put the reply after this block
+    anchor: str = ""            # insert mode: the text the reply belongs under,
+                                # so it can be found again if the note moved
 
 
 @dataclass

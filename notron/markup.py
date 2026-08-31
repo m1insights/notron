@@ -115,6 +115,30 @@ def render(title: str, markdown: str) -> str:
     return f"<div><h1>{_inline(title)}</h1></div>" + to_html(markdown)
 
 
+_STRUCTURAL = re.compile(r"^\s*(#{1,3}\s|[-*]\s|\d+[.)]\s|\||☐|✅|———|\*\*Notron)")
+
+
+def voice(markdown: str) -> str:
+    """Set Notron's prose in italics, so her turns read as a different voice.
+
+    In a note there are no chat bubbles — the only thing separating what you
+    typed from what she wrote is typography. Your words stay plain; hers are
+    italic. Only running prose is slanted: headings, lists, tables and
+    checkboxes keep their structure, because italicising a table makes it
+    harder to read, not easier to attribute.
+    """
+    out = []
+    for line in markdown.replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+        if not stripped or _STRUCTURAL.match(line):
+            out.append(line)
+        elif stripped.startswith("*") and stripped.endswith("*"):
+            out.append(line)                      # already emphasised
+        else:
+            out.append(f"*{stripped}*")
+    return "\n".join(out)
+
+
 _TAG = re.compile(r"<[^>]+>")
 _BLOCK_END = re.compile(r"</(div|p|li|tr|h[1-6]|ul|ol|table)>", re.I)
 

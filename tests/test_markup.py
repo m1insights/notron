@@ -46,3 +46,18 @@ def test_round_trip_back_to_text():
     text = markup.to_text(body)
     assert "one" in text and "two" in text and "plain line" in text
     assert "<" not in text
+
+
+def test_her_voice_is_italic_but_structure_is_left_standing():
+    """In a note there are no chat bubbles — typography is the only thing that
+    separates what you typed from what she wrote."""
+    out = markup.voice("Answer first.\n\n## A heading\n- a bullet\n| a | table |\n☐ a task")
+    assert "*Answer first.*" in out
+    assert "## A heading" in out and "*## A heading*" not in out
+    assert "- a bullet" in out
+    assert "| a | table |" in out
+    assert "☐ a task" in out
+
+
+def test_already_emphasised_lines_are_not_double_wrapped():
+    assert markup.voice("*already italic*") == "*already italic*"

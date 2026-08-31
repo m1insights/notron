@@ -47,7 +47,14 @@ class Watcher:
     scanner: mentions.Scanner = field(default_factory=mentions.Scanner)
 
     _pending: dict = field(default_factory=dict)   # key -> (text, first seen at)
+    _failures: dict = field(default_factory=dict)  # key -> (count, last attempt at)
     _ask_id: str | None = None
+
+    # A question that produced no write stays "unanswered" in the note, so the
+    # next poll would send it to the model again, and again, forever — a quiet
+    # API bill for one stuck message. Two honest tries, then a long pause.
+    MAX_TRIES = 2
+    COOLDOWN = 1800
 
     # ---------------------------------------------------------------- output
 
@@ -58,7 +65,7 @@ class Watcher:
     # --------------------------------------------------------------- answering
 
     def _answer(self, question: str, *, title: str, folder: str, after: int,
-                here: str = "") -> None:
+                here: str = "") -> bool:
         self._say(f"\n> [{title}] {question}")
         state = graph.run(
             question, brain=self.brain, trigger="notes",
@@ -68,9 +75,24 @@ class Watcher:
             self._say(f"  {line}")
         for result in state.results:
             self._say(f"  {result}")
-        if not any(r.startswith("✓") for r in state.results):
+        wrote = any(r.startswith("✓") for r in state.results)
+        if not wrote:
             self._say("  nothing was written — she will read this again")
         self._say(f"\n{state.answer}\n")
+        return wrote
+
+    def _worth_trying(self, key: str) -> bool:
+        count, at = self._failures.get(key, (0, 0.0))
+        return count < self.MAX_TRIES or time.time() - at >= self.COOLDOWN
+
+    def _attempted(self, key: str, wrote: bool) -> None:
+        if wrote:
+            self._failures.pop(key, None)
+        else:
+            count, _ = self._failures.get(key, (0, 0.0))
+            self._failures[key] = (count + 1, time.time())
+            if count + 1 >= self.MAX_TRIES:
+                self._say(f"  giving [{key}] a rest — trying again in {self.COOLDOWN // 60} min")
 
     def _settled(self, key: str, text: str) -> bool:
         """True once this exact text has sat unchanged long enough to be finished."""
@@ -95,10 +117,18 @@ class Watcher:
         for q in conversation.unanswered(body, ignore=ASK_FURNITURE):
             if len(q.text) < MIN_CHARS:
                 continue
-            if not self._settled(f"ask:{q.text[:40]}", q.text):
+            key = f"ask:{q.text[:40]}"
+            if not self._worth_trying(key):
                 continue
-            self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER, after=q.after)
-            self._pending.clear()
+            if not self._settled(key, q.text):
+                continue
+            wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
+                                 after=q.after)
+            self._attempted(key, wrote)
+            # Only the Ask note moved underneath us; a tag elsewhere is still
+            # settling on its own clock and keeps its timer.
+            for stale in [k for k in self._pending if k.startswith("ask:")]:
+                self._pending.pop(stale, None)
             return              # one at a time; the note has moved underneath us
 
     def sweep_mentions(self) -> None:
@@ -106,13 +136,17 @@ class Watcher:
         if found:
             self._say(f"  {len(found)} note(s) mention me")
         for m in found:
-            if not self._settled(f"tag:{m.note_id}", m.question):
+            key = f"tag:{m.note_id}"
+            if not self._worth_trying(key):
+                continue
+            if not self._settled(key, m.question):
                 continue
             body = notes.read_body(m.note_id)
             from .markup import to_text
-            self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                         here=to_text(body)[:4000])
-            self._pending.pop(f"tag:{m.note_id}", None)
+            wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
+                                 here=to_text(body)[:4000])
+            self._attempted(key, wrote)
+            self._pending.pop(key, None)
             return
 
     # ------------------------------------------------------------------- loop
