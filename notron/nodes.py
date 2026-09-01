@@ -122,7 +122,7 @@ def retriever(state: State, *, brain=None, limit: int = 12) -> State:
 
 # ------------------------------------------------------------- Researcher
 
-def researcher(state: State, *, brain=None, limit: int = 5) -> State:
+def researcher(state: State, *, brain=None) -> State:
     """Search the web, but only when the answer cannot come from anywhere else."""
     if not state.needs_web:
         return state
@@ -134,16 +134,28 @@ def researcher(state: State, *, brain=None, limit: int = 5) -> State:
         return state
 
     try:
-        answer, findings = research.search(state.request, limit=limit)
+        answer, findings = research.search(state.request, limit=8)
     except Exception as e:
         # A failed search should cost the user an answer, not the whole reply.
         state.note("researcher", f"search failed ({type(e).__name__}) — answering without it")
         return state
 
+    # Journals first, content farms last — and dropped entirely when at least
+    # two better sources came back. A Cialis answer once cited a thin
+    # AI-content site with the same weight as the European Urology trial
+    # beside it; ranking is plain code, like the Guard, because the writer
+    # cites whatever it is handed.
+    findings.sort(key=lambda f: research.quality(f.url))  # stable: Tavily order kept per tier
+    good = [f for f in findings if research.quality(f.url) < 3]
+    kept = good if len(good) >= 2 else findings
+    dropped = len(findings) - len(kept)
+    kept = kept[:5]
+
     if answer:
         state.web.append(f"### What the web says\n{answer}")
-    state.web.extend(f.as_context() for f in findings)
-    state.note("researcher", f"{len(findings)} sources")
+    state.web.extend(f.as_context() for f in kept)
+    state.note("researcher", f"{len(kept)} sources"
+                             + (f" ({dropped} low-quality dropped)" if dropped > 0 else ""))
     return state
 
 

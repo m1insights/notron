@@ -62,3 +62,52 @@ def test_journals_outrank_institutions_outrank_content_farms():
 def test_quality_never_raises_on_junk_input():
     assert research.quality("") == 3
     assert research.quality("not a url at all") == 3
+
+
+def _finding(url):
+    return research.Finding(title=url, url=url, snippet="s")
+
+
+def test_content_farms_are_dropped_when_better_sources_exist(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "x")
+    monkeypatch.setattr(research, "search", lambda *a, **k: ("", [
+        _finding("https://ubiehealth.com/a"),
+        _finding("https://pubmed.ncbi.nlm.nih.gov/1"),
+        _finding("https://random-blog.io/b"),
+        _finding("https://clevelandclinic.org/c"),
+    ]))
+    state = State(request="cialis?", needs_web=True)
+    nodes.researcher(state)
+    joined = "\n".join(state.web)
+    assert "pubmed" in joined and "clevelandclinic" in joined
+    assert "ubiehealth" not in joined and "random-blog" not in joined
+    assert any("dropped" in t for t in state.trace)
+
+
+def test_a_content_farm_is_kept_when_it_is_most_of_what_came_back(monkeypatch):
+    """Filtering must never starve the writer: one journal + one blog is a
+    thin answer, not a reason to throw half of it away."""
+    monkeypatch.setenv("TAVILY_API_KEY", "x")
+    monkeypatch.setattr(research, "search", lambda *a, **k: ("", [
+        _finding("https://random-blog.io/only"),
+        _finding("https://pubmed.ncbi.nlm.nih.gov/1"),
+    ]))
+    state = State(request="obscure supplement?", needs_web=True)
+    nodes.researcher(state)
+    assert "random-blog" in "\n".join(state.web)
+
+
+def test_journals_come_first_and_at_most_five_findings_pass(monkeypatch):
+    monkeypatch.setenv("TAVILY_API_KEY", "x")
+    monkeypatch.setattr(research, "search", lambda *a, **k: ("", [
+        _finding(f"https://blog{i}.io/x") for i in range(4)
+    ] + [
+        _finding("https://pubmed.ncbi.nlm.nih.gov/1"),
+        _finding("https://sciencedirect.com/2"),
+        _finding("https://examine.com/3"),
+    ]))
+    state = State(request="cialis?", needs_web=True)
+    nodes.researcher(state)
+    findings = [w for w in state.web if not w.startswith("### What the web says")]
+    assert len(findings) <= 5
+    assert "pubmed" in findings[0] or "sciencedirect" in findings[0]
