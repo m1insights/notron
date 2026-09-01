@@ -45,3 +45,20 @@ def test_the_researcher_sits_in_the_declared_graph():
     assert "researcher" in graph.NODES
     assert "researcher" in graph.ORDER
     assert any(e.frm == "retriever" and e.to == "researcher" for e in graph.EDGES)
+
+
+def test_journals_outrank_institutions_outrank_content_farms():
+    """A Cialis answer once cited ubiehealth.com — a thin AI-content site —
+    with the same visual weight as the European Urology trial next to it."""
+    assert research.quality("https://pubmed.ncbi.nlm.nih.gov/15661417") == 1
+    assert research.quality("https://www.sciencedirect.com/science/article/abs/pii/S03") == 1
+    assert research.quality("https://link.springer.com/article/10.1186/x") == 1
+    assert research.quality("https://health.clevelandclinic.org/what-is-ashwagandha") == 2
+    assert research.quality("https://examine.com/supplements/tongkat-ali/") == 2
+    assert research.quality("https://ubiehealth.com/doctors-note/tadalafil") == 3
+    assert research.quality("https://random-wellness-blog.io/cialis") == 3
+
+
+def test_quality_never_raises_on_junk_input():
+    assert research.quality("") == 3
+    assert research.quality("not a url at all") == 3

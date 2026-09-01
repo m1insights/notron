@@ -89,3 +89,34 @@ def search(query: str, *, limit: int = 5, depth: str = "basic") -> tuple[str, li
         for r in data.get("results", [])
     ]
     return (data.get("answer") or "").strip(), findings
+
+
+# Domain tiers for ranking findings. Suffix-matched, so subdomains count.
+# Tier 1: peer-reviewed journals and study databases. Tier 2: institutions a
+# pharmacist would accept. Everything else is tier 3 and yields to better.
+JOURNALS = (
+    "ncbi.nlm.nih.gov", "doi.org", "sciencedirect.com", "springer.com",
+    "nature.com", "nejm.org", "thelancet.com", "jamanetwork.com", "bmj.com",
+    "cochranelibrary.com", "mdpi.com", "tandfonline.com", "wiley.com",
+    "oup.com", "academic.oup.com", "cambridge.org", "frontiersin.org",
+    "europeanurology.com", "clinicaltrials.gov",
+)
+INSTITUTIONS = (
+    "nih.gov", "medlineplus.gov", "fda.gov", "who.int", "cdc.gov",
+    "mayoclinic.org", "clevelandclinic.org", "health.harvard.edu",
+    "hopkinsmedicine.org", "examine.com", "lpi.oregonstate.edu",
+)
+
+
+def quality(url: str) -> int:
+    """1 = journal/study database, 2 = trusted institution, 3 = the rest."""
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url).netloc or "").lower().lstrip("www.")
+    except ValueError:
+        return 3
+    for domains, tier in ((JOURNALS, 1), (INSTITUTIONS, 2)):
+        if any(host == d or host.endswith("." + d) for d in domains):
+            return tier
+    return 3
