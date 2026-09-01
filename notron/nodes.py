@@ -325,6 +325,8 @@ Citing sources:
   material you were given — their notes, or what you found on the web just now.
 - Never write a DOI or URL from memory. A remembered link is a guess, and a
   guessed link that happens to work is worse than one that does not.
+- Give every link bare, as plain text. Notes strips link markup, so [text](url)
+  and 【…】 wrappers come out as noise.
 - Given nothing from the web, keep claims general and say plainly they are from
   memory and unverified — above all for doses, interactions and health effects.
 
@@ -399,11 +401,14 @@ def _verify_links(state: State) -> None:
     from . import research
 
     if _URL is None:
-        _URL = re.compile(r"https?://[^\s)\]>\"']+")
+        # Printable ASCII only: the model wraps links in 【…】 markers, and a
+        # CJK bracket read as part of the URL once made every real citation in
+        # an answer look dead — the checker 404'd on `…/research】` four times.
+        _URL = re.compile(r"https?://[!-~]+")
     known = "\n".join(state.web + state.context) + state.here + state.request
     seen: list[str] = []
     for match in _URL.findall(state.answer):
-        url = match.rstrip(".,;:!?")
+        url = match.rstrip(".,;:!?\"')]>")
         if url in seen or url in known:
             continue
         seen.append(url)
@@ -414,7 +419,10 @@ def _verify_links(state: State) -> None:
         except Exception:
             alive = False
         if not alive:
-            state.answer = state.answer.replace(url, "(link removed — it didn't work when I checked)")
+            gone = "(link removed — it didn't work when I checked)"
+            wrapped = f"【{url}】"
+            target = wrapped if wrapped in state.answer else url
+            state.answer = state.answer.replace(target, gone)
             state.note("writer", f"dropped a dead link: {url}")
 
 

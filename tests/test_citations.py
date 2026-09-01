@@ -118,6 +118,32 @@ def test_link_checking_never_costs_the_answer(monkeypatch):
     assert state.writes, "the reply must still be written"
 
 
+def test_a_link_wrapped_in_cjk_brackets_is_still_recognised(monkeypatch):
+    """Asked about tongkat ali, the writer cited Tavily's own URLs wrapped in
+    【…】 markers. The checker read the closing bracket as part of the URL, so
+    every link the search had returned seconds earlier looked both unknown
+    and dead — all four real citations were dropped from a correct answer."""
+    url = "https://examine.com/supplements/tongkat-ali/research"
+
+    def explode(u, **k):
+        raise AssertionError(f"re-checked a link the research returned: {u}")
+
+    monkeypatch.setattr(research, "check_url", explode)
+    state = State(request="tongkat ali?", intent="question",
+                  web=[f"### Examine\ntongkat overview\n{url}"])
+    state = nodes.writer(state, brain=Brain(answer=f"Supported【{url}】, broadly."))
+    assert url in state.answer
+
+
+def test_a_dead_link_in_cjk_brackets_is_dropped_without_its_wrapper(monkeypatch):
+    monkeypatch.setattr(research, "check_url", lambda u, **k: False)
+    state = State(request="tongkat ali?", intent="question")
+    state = nodes.writer(state, brain=Brain(
+        answer="Supported【https://made.up/paper】, allegedly."))
+    assert "https://made.up/paper" not in state.answer
+    assert "【" not in state.answer and "】" not in state.answer
+
+
 def test_check_url_believes_http_status_not_hope(monkeypatch):
     import urllib.error, urllib.request
 
