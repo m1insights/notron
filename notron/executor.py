@@ -72,6 +72,20 @@ class Executor:
             return WriteResult(True, "dry run — nothing written", note.id if note else None)
 
         if note:
+            # `new_body` for append/insert is old_body plus something wedged in —
+            # built from a read that happened a moment ago. The model's thinking
+            # time sits in that gap, unlocked, and the user can keep typing in
+            # this exact note. Writing the stale version back is a full-body
+            # overwrite that silently eats or mangles whatever they typed in
+            # the meantime — that is the "sentence gets cut off" bug. So check
+            # the note hasn't moved right before committing, and if it has,
+            # skip this write rather than clobber it; the watcher tries again
+            # next pass. `replace` doesn't need this: its new_body comes from
+            # the model's output, not from old_body, so it can't be corrupted
+            # by a concurrent edit the same way.
+            if mode in ("append", "insert") and notes.read_body(note.id) != old_body:
+                return WriteResult(False, "the note changed while she was writing — "
+                                          "she'll try again next pass", note.id)
             notes.write_body(note.id, new_body)
             note_id = note.id
         else:

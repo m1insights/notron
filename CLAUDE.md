@@ -8,6 +8,16 @@ Built for the Nebius × NVIDIA Global AI Hackathon (Personal AI track, due
 run on Nebius Token Factory**, and **at least one NVIDIA open model must be used**.
 Do not swap the model provider.
 
+## Design
+
+Before building or changing ANY UI in the `mac/` companion app, read `docs/design/DESIGN.md`
+and use its tokens (`mac/Sources/Notron/DesignSystem.swift`). Never introduce a new
+colour, font size, radius, or spacing value that is not in that file — extend the
+token set there first. The Notes-native (light) skin is the default everywhere;
+the Operator (dark) skin is reserved for the Skills & Plugins screen only, since
+that screen is Advanced-tier only. Key screens and the magic moment are specced
+in `docs/design/02-screens.md`.
+
 ## Commands
 
 ```bash
@@ -152,6 +162,15 @@ closes a 700× gap — use `notron/eventkit.py`.
   a prompt. `osascript` inherits the terminal's stable identity.
 - A dated reminder needs an explicit `EKAlarm`. A due date alone shows in the app
   but does not notify, and a reminder that does not buzz is a note with a circle.
+- **A write is a full-body overwrite, and nothing locks the note while she
+  thinks.** `append`/`insert` build `new_body` from a body read at the start of
+  `_apply`; the model's thinking time sits in the gap after that read, unlocked,
+  and the user can keep typing in the very note being answered. Writing the
+  stale body back silently eats or mangles whatever they typed in that window —
+  seen live as a sentence cut off mid-word and Notron answering the garble next
+  pass. `_apply` now re-reads immediately before writing and skips the write if
+  the note moved; the watcher retries next poll. `replace` is exempt — its
+  `new_body` comes from the model's output, not from `old_body`.
 
 ## The self-improvement loop (`reflect.py`)
 
