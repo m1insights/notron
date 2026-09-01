@@ -327,6 +327,8 @@ Citing sources:
   guessed link that happens to work is worse than one that does not.
 - Give every link bare, as plain text. Notes strips link markup, so [text](url)
   and 【…】 wrappers come out as noise.
+- State a year, journal or author for a source only if the material you were
+  given says it. If the snippet does not name a year, give none.
 - Given nothing from the web, keep claims general and say plainly they are from
   memory and unverified — above all for doses, interactions and health effects.
 
