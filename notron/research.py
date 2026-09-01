@@ -39,6 +39,27 @@ def available() -> bool:
     return bool(os.environ.get("TAVILY_API_KEY", "").strip())
 
 
+def check_url(url: str, *, timeout: int = 5) -> bool:
+    """Does this URL actually resolve?
+
+    The writer is told to only emit links it was given, but a model told not
+    to invent links still occasionally does — seen live as a DOI one digit off
+    from the real paper's, sitting next to a correct one and looking exactly
+    as trustworthy. HEAD is enough: the question is "does this page exist",
+    not what it says.
+    """
+    request = urllib.request.Request(url, method="HEAD",
+                                     headers={"User-Agent": "notron/1.0"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status < 400
+    except urllib.error.HTTPError as e:
+        # 405 means the server refuses HEAD, which still proves the page exists.
+        return e.code == 405
+    except Exception:
+        return False
+
+
 def search(query: str, *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
     """Return Tavily's own summary answer plus the sources behind it."""
     key = os.environ.get("TAVILY_API_KEY", "").strip()

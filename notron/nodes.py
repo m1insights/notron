@@ -48,7 +48,10 @@ wrote down — their plans, their decisions, their deadlines, their people.
 needs_context is FALSE for questions about the world: books, authors, ideas, how
 something works, your opinion. Their notes are not evidence about those things, and
 pulling them in makes the answer wrong.
-needs_web is true only when it requires current information from the internet."""
+needs_web is true whenever a good answer would state specific checkable facts —
+studies, doses, drug or supplement effects, products, prices, news, anything
+current. When in doubt, true: a search is cheap, and a citation from memory may
+be misremembered or invented."""
 
 
 def router(state: State, *, brain) -> State:
@@ -77,6 +80,14 @@ def router(state: State, *, brain) -> State:
         state.note("router", "overrode ignore — this surface is always addressed to her")
     state.needs_context = bool(out.get("needs_context"))
     state.needs_web = bool(out.get("needs_web"))
+    if state.intent == "question" and not state.needs_context and not state.needs_web:
+        # The router once tagged "caffeine and theanine together?" as general
+        # knowledge and skipped the researcher; the writer then cited two papers
+        # from training memory, and whether they were real was luck. A world
+        # question answered from neither notes nor web is exactly where
+        # fabricated citations come from, so it always gets a search.
+        state.needs_web = True
+        state.note("router", "world question — searching so any citation is real")
     state.note("router", f"{state.intent} — {out.get('why', '')}")
     return state
 
@@ -309,6 +320,14 @@ When you have searched the web, prefer what you found there over what you
 remember, and give the link so they can check it. Say plainly when something is
 current information rather than something you already knew.
 
+Citing sources:
+- Name a specific study, author, journal, DOI or link ONLY if it appears in the
+  material you were given — their notes, or what you found on the web just now.
+- Never write a DOI or URL from memory. A remembered link is a guess, and a
+  guessed link that happens to work is worse than one that does not.
+- Given nothing from the web, keep claims general and say plainly they are from
+  memory and unverified — above all for doses, interactions and health effects.
+
 Their notes tell you about *them*. They are never evidence about a book, an author,
 or anything else in the world. If a note happens to sit near a topic, that does not
 make it a source about that topic — say what you actually know instead.
@@ -355,9 +374,48 @@ def writer(state: State, *, brain) -> State:
         state.answer = brain.ask(
             system=WRITER_SYSTEM, user=_prompt(state), tier="smart", max_tokens=1200
         )
+        _verify_links(state)
     state.writes.append(_reply(state))
     state.note("writer", f"{len(state.answer)} chars")
     return state
+
+
+_URL = None  # compiled lazily so `import nodes` stays cheap
+
+
+def _verify_links(state: State) -> None:
+    """Drop any link the model produced from memory that does not resolve.
+
+    Links that came in with the research or the user's notes are trusted —
+    Tavily returned them seconds ago, and a second HEAD request per link would
+    double the wait for nothing. Everything else is a link the model wrote
+    itself, and one of those has already shipped a fabricated DOI to a
+    pharmacist. Unverifiable is treated exactly like dead: only a link that
+    answered survives.
+    """
+    global _URL
+    import re
+
+    from . import research
+
+    if _URL is None:
+        _URL = re.compile(r"https?://[^\s)\]>\"']+")
+    known = "\n".join(state.web + state.context) + state.here + state.request
+    seen: list[str] = []
+    for match in _URL.findall(state.answer):
+        url = match.rstrip(".,;:!?")
+        if url in seen or url in known:
+            continue
+        seen.append(url)
+        if len(seen) > 5:  # bound the wait; five checks is already 25s worst case
+            break
+        try:
+            alive = research.check_url(url)
+        except Exception:
+            alive = False
+        if not alive:
+            state.answer = state.answer.replace(url, "(link removed — it didn't work when I checked)")
+            state.note("writer", f"dropped a dead link: {url}")
 
 
 def _reply(state: State) -> Write:
