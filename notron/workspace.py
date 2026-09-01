@@ -13,6 +13,7 @@ MEMORY = "🧠 Memory"
 LESSONS = "📖 Lessons"
 CARE = "🌱 Take Care of Notron"
 LOG = "📊 Log"
+DUMP = "🧠 Brain Dump"
 
 #: Notes the agent must never write to. The user owns these outright.
 READ_ONLY = frozenset({ABOUT})
@@ -20,10 +21,11 @@ READ_ONLY = frozenset({ABOUT})
 #: Notes the agent fully owns and may rewrite.
 AGENT_OWNED = frozenset({TODAY, WEEK, MEMORY, LESSONS, CARE, LOG})
 
-#: Notes both sides write: the user asks, the agent appends its answer.
-SHARED = frozenset({ASK})
+#: Notes both sides write: the user asks, the agent appends its answer — or,
+#: in the dump, the user throws lines in and the agent ticks them as filed.
+SHARED = frozenset({ASK, DUMP})
 
-SYSTEM_NOTES = (ABOUT, ASK, TODAY, WEEK, MEMORY, LESSONS, CARE, LOG)
+SYSTEM_NOTES = (ABOUT, ASK, DUMP, TODAY, WEEK, MEMORY, LESSONS, CARE, LOG)
 
 SEEDS: dict[str, str] = {
     ABOUT: """This note is **yours**. Notron reads it before every single thing she does, and she can never write to it. Edit it whenever you like.
@@ -45,6 +47,10 @@ Where I live:
 -
 """,
     ASK: """Type anything below this line and Notron will answer underneath it.
+
+———
+""",
+    DUMP: """Throw anything in here, one thought per line. When you've stopped for a while, Notron files each line into the right note and ticks it — nothing is ever deleted.
 
 ———
 """,

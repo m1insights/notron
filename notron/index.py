@@ -165,3 +165,16 @@ def search(query: str, brain, *, limit: int = 8) -> list[Chunk]:
 
 def exists() -> bool:
     return CACHE.exists()
+
+
+def glimpses(chars: int = 100) -> dict[str, str]:
+    """The opening of every indexed note, by note id — enough for a model to
+    tell what a note is about without reading it. No index, no glimpses."""
+    out: dict[str, str] = {}
+    try:
+        for note_id, chunks in _load().items():
+            if chunks and chunks[0].get("text"):
+                out[note_id] = " ".join(chunks[0]["text"].split())[:chars]
+    except (OSError, ValueError):
+        pass
+    return out

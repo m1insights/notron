@@ -42,14 +42,30 @@ class Executor:
         return self._apply(folder, title, body_markdown, mode="insert", after=after,
                            anchor=anchor)
 
+    def mark(self, title: str, marks: list[tuple[str, int, str]], *,
+             folder: str = workspace.FOLDER) -> WriteResult:
+        """Tick lines as filed: a ✓ in front, a receipt after, nothing else.
+        Each mark is (the line's text, a block hint, the receipt)."""
+        return self._apply(folder, title, "", mode="mark", marks=marks)
+
     # -- internals -------------------------------------------------------
 
     def _apply(self, folder: str, title: str, body_markdown: str, *, mode: str,
-               after: int | None = None, anchor: str = "") -> WriteResult:
+               after: int | None = None, anchor: str = "",
+               marks: list[tuple[str, int, str]] | None = None) -> WriteResult:
         note = notes.find_note(folder, title)
         old_body = notes.read_body(note.id) if note else ""
 
-        if mode == "append":
+        if mode == "mark":
+            if not old_body:
+                return WriteResult(False, "cannot mark a note that does not exist")
+            # Lines are found by their words, not their position — the user
+            # may have added a line above since the Filer read the note.
+            new_body, ticked = notedoc.mark_lines(old_body, marks or [])
+            if not ticked:
+                return WriteResult(False, "nothing to tick — those lines have changed or gone",
+                                   note.id if note else None)
+        elif mode == "append":
             new_body = (old_body or markup.render(title, "")) + markup.to_html(body_markdown)
         elif mode == "insert":
             if not old_body:
@@ -83,7 +99,7 @@ class Executor:
             # next pass. `replace` doesn't need this: its new_body comes from
             # the model's output, not from old_body, so it can't be corrupted
             # by a concurrent edit the same way.
-            if mode in ("append", "insert") and notes.read_body(note.id) != old_body:
+            if mode in ("append", "insert", "mark") and notes.read_body(note.id) != old_body:
                 return WriteResult(False, "the note changed while she was writing — "
                                           "she'll try again next pass", note.id)
             notes.write_body(note.id, new_body)

@@ -31,6 +31,7 @@ class Mention:
     folder: str
     question: str
     after: int
+    raw: str = ""        # the whole turn, tags intact — what the Filer ticks
 
 
 @dataclass
@@ -117,6 +118,7 @@ class Scanner:
                     note_id=n.id, title=n.title, folder=n.folder,
                     question=conversation.strip_tag(conversation.tagged_lines(q.text)),
                     after=q.after,
+                    raw=q.text,
                 ))
 
         # Save *after* working out what is still owed. Saving inside `changed()`

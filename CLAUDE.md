@@ -32,6 +32,7 @@ in `docs/design/02-screens.md`.
 .venv/bin/python -m notron permissions     # can she reach Notes, Reminders, Calendar?
 .venv/bin/python -m notron agenda          # today, this week, and what's outstanding
 .venv/bin/python -m notron reflect         # learn from her own answers that missed
+.venv/bin/python -m notron file            # sort 🧠 Brain Dump into the right notes now
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -53,9 +54,9 @@ a long query still delays the listener.
 A declared graph of specialised nodes, not one agent in a loop:
 
 ```
-watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► writer ─► executor
-  │          │          │            │           │          │           │          │       │          │
-no LLM     Nano      no LLM       Tavily      no LLM       Super       Nano     no LLM   Super   no LLM + Guard
+watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► writer ─► executor
+  │          │          │            │           │          │           │          │        │       │          │
+no LLM     Nano      no LLM       Tavily      no LLM       Super       Nano     no LLM   Super   Super   no LLM + Guard
 ```
 
 Nodes decline work they do not own. Model tiers live in `brain.DEFAULT_MODELS`
@@ -74,7 +75,8 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `markup.py` | Markdown ⇄ the HTML subset Notes actually renders |
 | `notedoc.py` | A note as addressable blocks; provably lossless inserts |
 | `conversation.py` | Reads a note as turns; finds what she has not answered |
-| `mentions.py` | Sweeps every note for `#notron` |
+| `mentions.py` | Sweeps every note for `#notron` / `@notron` |
+| `filer.py` | The Brain Dump: sorts lines into the user's own notes, ticks them, proposes new notes |
 | `guard.py` | The single choke point for every write |
 | `executor.py` | Applies writes. No model runs here, ever. |
 | `graph.py` / `nodes.py` / `state.py` | The graph and what flows along it |
@@ -97,6 +99,13 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 6. **A calendar event may only ever be created.** No move, no delete, no update —
    there is no code in `calendar.py` that could do it.
 7. **A reminder may be created or completed, never deleted.** Done is not gone.
+8. **The Filer never deletes a line.** Filing copies the line into the master note
+   and ticks the original — `✓ magnesium → Supplements` — via the `mark` write
+   mode, which `notedoc.marks_between` proves added only a `✓ ` after a line's
+   opening tag and a receipt before its closing tag. No fitting master note means
+   a proposal in the dump and a wait for `yes`; it never guesses a bucket, never
+   creates a note unasked. Lines that look like credentials are never filed and
+   never shown to the model.
 
 ## Performance — measured on 358 notes, 1,263 reminders and 1,757 events
 
@@ -171,6 +180,25 @@ closes a 700× gap — use `notron/eventkit.py`.
   pass. `_apply` now re-reads immediately before writing and skips the write if
   the note moved; the watcher retries next poll. `replace` is exempt — its
   `new_body` comes from the model's output, not from `old_body`.
+
+## The Brain Dump (`filer.py`)
+
+`🧠 Brain Dump` is a shared note in her folder: the user throws in one thought per
+line, and Notron files each into the right one of their own notes. Trigger is
+on-demand (`notron file`, or "file my brain dump" / "file this: …" anywhere she
+listens — routed in code by `nodes.FILE_WORDS`, no model asked) or automatic once
+the set of unfiled lines has sat unchanged for `watch.DUMP_SETTLE` (15 min): a
+timer would file half a thought. **Super** picks a title from the list of master
+notes (titles + a glimpse from the index, vault/private notes excluded) — not Nano:
+measured 2026-09-01, Nano took 43 s on a two-line prompt (235 s on five) and padded
+titles with the glimpse; Super answered in 1.3 s with the title exact. Plain code
+copies (`append`), ticks (`mark`), and — only after a `yes` typed under the
+proposal — creates a note in `filer.FILING_FOLDER` (`NOTRON_FILING_FOLDER`,
+default "Notes"). `.notron/filer.json` remembers verdicts and pending proposals so
+a dump that is only waiting on the user costs zero model calls per poll
+(`filer.worth_a_pass`). `@notron file this: …` on a line in any note goes through
+the same path and ticks that line where it sits; `conversation.unanswered` treats
+a ticked turn as answered, or the listener would re-ask it forever.
 
 ## The self-improvement loop (`reflect.py`)
 

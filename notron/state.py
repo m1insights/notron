@@ -42,6 +42,8 @@ class State:
     needs_context: bool = False
     needs_web: bool = False
     here: str = ""                   # the note she was tagged in, if any
+    source: str = ""                 # the exact lines she was tagged in, tags intact —
+                                     # what the Filer copies and ticks
     reply_to: tuple | None = None    # (title, folder, block index) to answer under
     context: list[str] = field(default_factory=list)
     web: list[str] = field(default_factory=list)
