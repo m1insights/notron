@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from . import markup, notes, privacy, workspace
+from . import conversation, markup, notes, privacy, workspace
 from .executor import Executor
 from .state import Action, State, Write
 
@@ -363,12 +363,12 @@ def writer(state: State, *, brain) -> State:
 def _reply(state: State) -> Write:
     """Her turn, set as a different voice.
 
-    A note has no chat bubbles, so typography does the job instead: your words
-    stay plain, hers are italic under a bold signature, and a rule closes the
-    turn. The signature is also how `conversation` knows a turn is hers — keep
-    them in step.
+    A note has no chat bubbles, so typography does the job instead: a light
+    rule opens her turn, your words stay plain, hers are italic under a bold
+    signature, and a heavier rule closes the turn. The signature is also how
+    `conversation` knows a turn is hers — keep them in step.
     """
-    body = f"**Notron:**\n{markup.voice(state.answer)}\n\n———\n"
+    body = f"{conversation.QA_RULE}\n\n**Notron:**\n{markup.voice(state.answer)}\n\n———\n"
     if state.reply_to is None:
         return Write(title=workspace.ASK, mode="append", markdown=f"\n{body}\n")
     title, folder, after = state.reply_to

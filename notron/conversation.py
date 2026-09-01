@@ -20,6 +20,9 @@ from . import notedoc
 
 SIGNATURE = "Notron:"
 RULE = "———"
+# The light break between your question and her reply. En dashes, not RULE's
+# em dashes — it must never be confused with the rule that closes an exchange.
+QA_RULE = "– – – – – – – – – –"
 TAG = re.compile(r"(?:^|\s)[#@]notron\b", re.I)
 
 # Blank blocks allowed inside one turn. Lines typed together stay together;

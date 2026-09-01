@@ -34,7 +34,7 @@ SETTLE = 6             # how long your typing must be still before she answers
 MIN_CHARS = 2
 
 # The Ask note's own standing text, which nobody said out loud.
-ASK_FURNITURE = (workspace.ASK, "Type anything below this line")
+ASK_FURNITURE = (workspace.ASK, "Type anything below this line", conversation.QA_RULE)
 
 
 @dataclass

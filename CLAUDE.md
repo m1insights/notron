@@ -166,7 +166,9 @@ by editing the note. Run record: `.notron/reflect.json`, append-only.
 
 ## The Ask-note chat contract
 
-- Her turn: `**Notron:**` on its own line, prose italicised by `markup.voice`
+- Her turn: opens with `conversation.QA_RULE` (a light en-dash break — never
+  `RULE`'s em dashes, which mean something different: see below), then
+  `**Notron:**` on its own line, prose italicised by `markup.voice`
   (structure — headings, lists, tables — stays upright), closed with `———`.
   `conversation.SIGNATURE` matches that bold signature; change both or neither.
 - The router may never return `ignore` for notes/manual triggers — everything on

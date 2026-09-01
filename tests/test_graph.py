@@ -3,7 +3,7 @@
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from notron import graph, nodes, workspace
+from notron import conversation, graph, nodes, workspace
 from notron.state import State
 
 
@@ -32,6 +32,11 @@ def test_a_question_produces_an_answer_appended_to_the_ask_note():
     assert state.answer
     assert [w.title for w in state.writes] == [workspace.ASK]
     assert state.writes[0].mode == "append"
+    # The light rule must open her turn, before the bold signature, so the
+    # question and reply read as visually separate — but conversation.py
+    # still has to recognise it as answered (see test_conversation.py).
+    body = state.writes[0].markdown
+    assert body.index(conversation.QA_RULE) < body.index("**Notron:**")
 
 
 def test_a_plan_replaces_the_week_note():
