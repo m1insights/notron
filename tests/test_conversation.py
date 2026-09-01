@@ -4,7 +4,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 from notron import conversation, markup, notedoc
 
 
-IGNORE = ("📥 Ask Notron", "Type anything below this line", "header")
+IGNORE = ("📥 Ask Notron", "Type anything below this line", "header", conversation.QA_RULE)
 
 
 def note(md):
@@ -140,3 +140,21 @@ def test_a_missing_anchor_falls_back_to_the_index():
     body = markup.render("📥 Ask", "a\n\nb")
     assert notedoc.locate(body, "not in the note", near=2) == 2
     assert notedoc.locate(body, "", near=3) == 3
+
+
+def test_the_light_rule_before_her_reply_still_reads_as_answered():
+    """QA_RULE (the break drawn before **Notron:**) must be scenery, not a
+    line of yours — otherwise the scan never finds her reply and she
+    re-answers the same question forever."""
+    body = note(f"header\n\n———\n\nwhat's on today?\n\n{conversation.QA_RULE}\n\n"
+                "**Notron:** three things\n\n———\n")
+    assert conversation.unanswered(body, ignore=IGNORE) == []
+
+
+def test_the_light_rule_is_never_mistaken_for_your_own_words():
+    """A stray QA_RULE line (one somehow left with no reply after it) must
+    never get folded into the recorded question text — it's furniture, same
+    as the standing header, not a line you wrote."""
+    body = note(f"header\n\n———\n\nwhat's on today?\n\n{conversation.QA_RULE}\n\nstill waiting")
+    qs = conversation.unanswered(body, ignore=IGNORE)
+    assert all(conversation.QA_RULE not in q.text for q in qs)

@@ -31,7 +31,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import markup, notes, workspace
+from . import conversation, markup, notes, workspace
 
 STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "reflect.json"
 
@@ -80,7 +80,8 @@ def exchanges(ask_body_html: str) -> list[Exchange]:
             q, a = [], None
             continue
         if not stripped or any(stripped.startswith(f) for f in
-                               (workspace.ASK, "Type anything below this line")):
+                               (workspace.ASK, "Type anything below this line",
+                                conversation.QA_RULE)):
             continue
         (q if a is None else a).append(stripped)
     if a is not None and q:
