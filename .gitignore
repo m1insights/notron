@@ -5,3 +5,5 @@ __pycache__/
 .notron/
 mac/.build/
 mac/Notron.app/
+
+.worktrees/
