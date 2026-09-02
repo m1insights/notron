@@ -113,6 +113,15 @@ def test_a_bulleted_dump_is_still_one_thought_per_line():
     assert [ln.text for ln in notedoc.lines(html)] == ["x", "first", "a", "b", "last"]
 
 
+def test_a_line_knows_when_a_blank_line_sits_above_it():
+    """A blank line is how someone separates thoughts. Whitespace Apple Notes
+    puts between elements is not a blank line; an empty <div><br></div> is."""
+    html = markup.render("x", "first\nsecond\n\nthird\n- a\n- b\n\n\nlast")
+    got = [(ln.text, ln.after_gap) for ln in notedoc.lines(html)]
+    assert got == [("x", False), ("first", False), ("second", False),
+                   ("third", True), ("a", False), ("b", False), ("last", True)]
+
+
 def test_a_mark_ticks_the_line_and_adds_the_receipt_inside_its_own_element():
     html = "<div><h1>x</h1></div>\n<div>magnesium at night</div>\n<div><br></div>"
     line = notedoc.find_line(html, "magnesium at night", near=1)
