@@ -95,7 +95,7 @@ def store(monkeypatch, tmp_path):
     from notron import notes, index
     for name in ("find_note", "read_body", "write_body", "create_note", "list_all_notes"):
         monkeypatch.setattr(notes, name, getattr(s, name))
-    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     monkeypatch.setattr(filer, "STATE", tmp_path / "filer.json")
     s.add(workspace.LOG, "Everything Notron did.\n\n———\n", folder=workspace.FOLDER)
     return s
@@ -275,7 +275,7 @@ def test_secret_looking_lines_never_reach_the_model_and_glimpses_are_redacted(mo
     monkeypatch.setattr(notes, "list_all_notes", lambda: [
         Note("n1", "Supplements", "Notes", "x"), Note("n2", "Passwords", "Notes", "x"),
         Note("n3", "Journal", "Notes", "x"), Note("n4", workspace.ASK, workspace.FOLDER, "x")])
-    monkeypatch.setattr(index, "glimpses", lambda chars=100: {"n1": "api key sk-abcdefghijklmnopqrstuvwxyz1234 daily"})
+    monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {"n1": "api key sk-abcdefghijklmnopqrstuvwxyz1234 daily"})
     ms = filer.masters()
     assert [m.title for m in ms] == ["Supplements"]
     assert "sk-abc" not in ms[0].glimpse and "[redacted]" in ms[0].glimpse

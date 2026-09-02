@@ -124,7 +124,7 @@ def test_scan_reports_suggestions_until_the_user_has_chosen(monkeypatch, state):
     monkeypatch.setattr(notes, "list_all_notes", lambda: [
         note("n1", "Passwords"), note("n2", "Groceries", days_ago=2), note("n3", "Groceries", days_ago=500),
         note("n4", "x", folder=workspace.FOLDER)])
-    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     out = library.scan()
     assert out["configured"] is False
     rows = {r["id"]: r for r in out["notes"]}
@@ -139,7 +139,7 @@ def test_scan_reports_suggestions_until_the_user_has_chosen(monkeypatch, state):
 def test_scan_reports_the_users_choices_once_made(monkeypatch, state):
     from notron import notes, index
     monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Passwords"), note("n2", "Groceries")])
-    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     library.save(library.Library(homes={"n1"}, decided={"n1", "n2"}))
     rows = {r["id"]: r for r in library.scan()["notes"]}
     assert rows["n1"]["state"] == "home", "the user's choice, even against the guess"
@@ -220,7 +220,7 @@ def test_the_cli_sets_a_home_by_title_and_refuses_an_ambiguous_one(monkeypatch, 
     from notron import cli, notes, index
     monkeypatch.setattr(notes, "list_all_notes", lambda: [
         note("n1", "Supps", days_ago=1), note("n2", "Supps", days_ago=300), note("n3", "Groceries")])
-    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     cli.main(["library", "--home", "Groceries", "--start-from", "2026"])
     lib = library.load()
     assert lib.homes == {"n3"} and lib.start_from == datetime(2026, 1, 1)
@@ -235,7 +235,7 @@ def test_the_cli_scan_prints_json_for_the_app(monkeypatch, state, capsys):
     import json
     from notron import cli, notes, index
     monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Groceries")])
-    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     cli.main(["library", "scan"])
     out = json.loads(capsys.readouterr().out)
     assert out["notes"][0]["title"] == "Groceries" and "counts" in out
@@ -296,7 +296,7 @@ def test_peek_holds_a_note_whose_body_looks_like_credentials(monkeypatch):
 def test_scan_flags_a_private_note_too_not_only_a_password_one(monkeypatch, state):
     from notron import notes, index
     monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Therapy journal")])
-    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     assert library.scan()["notes"][0]["sensitive"] is True
 
 
@@ -304,7 +304,7 @@ def test_scan_flags_a_password_note_so_the_panel_can_hold_it_back(monkeypatch, s
     from notron import notes, index
     monkeypatch.setattr(notes, "list_all_notes",
                         lambda: [note("n1", "Passwords"), note("n2", "Groceries")])
-    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     rows = {r["id"]: r for r in library.scan()["notes"]}
     assert rows["n1"]["sensitive"] is True
     assert rows["n2"]["sensitive"] is False
@@ -334,3 +334,18 @@ def test_peek_without_a_note_id_says_which_note(monkeypatch, state, capsys):
     with pytest.raises(SystemExit):
         cli.main(["library", "peek"])
     assert "Which note?" in capsys.readouterr().out
+
+
+def test_the_pre_fill_gets_note_shape_not_a_flattened_line(monkeypatch, state):
+    """What the first live screen showed: 219 notes and "0 homes". `glimpses`
+    collapses line breaks so a prompt reads cleanly, `suggest` judges a note by
+    its lines — so shape scored zero for every note and nothing ever cleared
+    HOME_SCORE. The pre-fill the whole screen rests on could not fire."""
+    from notron import index, notes
+    listy = "\n".join(f"item {i}" for i in range(8))
+    monkeypatch.setattr(index, "_load", lambda: {"n1": [{"text": listy}]})
+    assert "\n" in index.glimpses(1400, keep_lines=True)["n1"]
+    assert "\n" not in index.glimpses(1400)["n1"], "prompts still get the flat one"
+
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Groceries")])
+    assert library.scan()["counts"]["home"] == 1, "scan has to ask for the shape"

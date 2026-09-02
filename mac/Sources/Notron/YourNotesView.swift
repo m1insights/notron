@@ -157,35 +157,78 @@ struct YourNotesView: View {
         .frame(maxHeight: .infinity)
     }
 
+    /// One line of title, one of context, and a single word for the state.
+    ///
+    /// The three-way control used to sit in every row. Two hundred of them read
+    /// as noise, and the highlight behind one was only as wide as its own text —
+    /// a long title got a wider selection than a short one. Rows are now uniform
+    /// and full width, the state is one word, and the control itself lives once,
+    /// in the panel, for the note being looked at.
     private func row(_ note: LibraryNote) -> some View {
         let picked = model.selected == note.id
         return HStack(spacing: 0) {
-            Rectangle().fill(DS.Color.accent).frame(width: 2).opacity(picked ? 1 : 0)
-            VStack(alignment: .leading, spacing: DS.Space.s2) {
+            Rectangle().fill(DS.Color.accent).frame(width: 3).opacity(picked ? 1 : 0)
+            HStack(alignment: .top, spacing: DS.Space.s3) {
                 VStack(alignment: .leading, spacing: DS.Space.s1) {
                     Text(note.title).font(DS.Font.body).foregroundStyle(DS.Color.text).lineLimit(1)
-                    Text("\(note.folder) · \(note.modified)")
+                    Text("\(note.folder) · \(Self.shortDate(note.modified))")
                         .font(DS.Font.caption).foregroundStyle(DS.Color.textDim).lineLimit(1)
                     if !note.reason.isEmpty {
                         Text(note.reason).font(DS.Font.label).foregroundStyle(DS.Color.textFaint)
                     }
                 }
-                Picker("", selection: Binding(
-                    get: { note.state },
-                    set: { model.set(note.id, to: $0) }
-                )) {
-                    ForEach(LibraryNote.State.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                Spacer(minLength: DS.Space.s2)
+                stateWord(note.state)
             }
             .padding(.horizontal, DS.Space.s3).padding(.vertical, DS.Space.s3)
+            .frame(maxWidth: .infinity, alignment: .leading)    // every row the same width
         }
         .background(picked ? DS.Color.surfaceAlt : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture { model.select(note.id) }
         .opacity(note.state == .ignore ? 0.55 : 1)      // state by opacity, never by hue
         .animation(DS.Motion.standard, value: note.state)
+    }
+
+    /// Read only is the default on almost every row, so it stays quiet; the
+    /// handful of homes are the ones worth finding at a glance.
+    @ViewBuilder
+    private func stateWord(_ state: LibraryNote.State) -> some View {
+        switch state {
+        case .home:
+            Text(state.label)
+                .font(DS.Font.label)
+                .foregroundStyle(DS.Color.bg)
+                .padding(.horizontal, DS.Space.s2).padding(.vertical, DS.Space.s1)
+                .background(DS.Color.accent)
+                .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+        case .read:
+            Text(state.label).font(DS.Font.label).foregroundStyle(DS.Color.textDim)
+        case .ignore:
+            Text(state.label).font(DS.Font.label).foregroundStyle(DS.Color.textFaint)
+        }
+    }
+
+    /// Apple hands back "Tuesday, September 1, 2026 at 10:53:49 PM". At the
+    /// width of a list row that is the widest thing on screen and says least.
+    static func shortDate(_ modified: String) -> String {
+        // Apple writes a narrow no-break space (U+202F) before AM/PM. Python's
+        // strptime shrugs at it; DateFormatter with a fixed format does not, and
+        // silently fails to parse every date the app is given.
+        let clean = modified
+            .replacingOccurrences(of: "\u{202F}", with: " ")
+            .replacingOccurrences(of: "\u{00A0}", with: " ")
+        for pattern in ["EEEE, d MMMM yyyy 'at' HH:mm:ss", "EEEE, MMMM d, yyyy 'at' h:mm:ss a"] {
+            let reader = DateFormatter()
+            reader.locale = Locale(identifier: "en_US_POSIX")
+            reader.dateFormat = pattern
+            if let date = reader.date(from: clean) {
+                let writer = DateFormatter()
+                writer.dateFormat = "d MMM yyyy"
+                return writer.string(from: date)
+            }
+        }
+        return modified
     }
 
     // ------------------------------------------------------- preview panel
@@ -223,9 +266,14 @@ struct YourNotesView: View {
                     .font(DS.Font.caption)
                     .foregroundStyle(DS.Color.accent)
             }
-            Text("\(note.folder) · \(note.modified)")
+            Text("\(note.folder) · \(Self.shortDate(note.modified))")
                 .font(DS.Font.caption).foregroundStyle(DS.Color.textDim)
-            Text("\(note.state.label) — press 1, 2 or 3 to change it")
+            Segmented(values: LibraryNote.State.allCases,
+                      selection: note.state,
+                      label: { $0.label },
+                      choose: { model.set(note.id, to: $0) })
+                .padding(.top, DS.Space.s2)
+            Text("or press 1, 2 or 3")
                 .font(DS.Font.label).foregroundStyle(DS.Color.textFaint)
         }
         .padding(DS.Space.s4)

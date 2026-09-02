@@ -91,3 +91,36 @@ extension SwiftUI.Color {
         self.init(red: r, green: g, blue: b)
     }
 }
+
+/// The segmented control DESIGN.md actually specifies: one filled `accent`
+/// segment with `bg`-coloured text, the rest plain labels.
+///
+/// AppKit's `.segmented` picker style paints three grey pills instead. One is
+/// fine; a list of two hundred is a wall of identical grey in which you have to
+/// stop and read each row to find which of its three pills is the selected one.
+/// That is most of why this screen read as mush — so the list now shows one
+/// word per row and this control appears once, for the note being looked at.
+struct Segmented<Value: Hashable>: View {
+    let values: [Value]
+    let selection: Value
+    let label: (Value) -> String
+    let choose: (Value) -> Void
+
+    var body: some View {
+        HStack(spacing: DS.Space.s1) {
+            ForEach(values, id: \.self) { value in
+                let on = value == selection
+                Text(label(value))
+                    .font(DS.Font.body)
+                    .foregroundStyle(on ? DS.Color.bg : DS.Color.textDim)
+                    .padding(.horizontal, DS.Space.s4)
+                    .padding(.vertical, DS.Space.s2)
+                    .background(on ? DS.Color.accent : DS.Color.surfaceAlt)
+                    .clipShape(RoundedRectangle(cornerRadius: DS.Radius.sm))
+                    .contentShape(Rectangle())
+                    .onTapGesture { choose(value) }
+            }
+        }
+        .animation(DS.Motion.standard, value: selection)
+    }
+}

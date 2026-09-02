@@ -178,14 +178,25 @@ def exists() -> bool:
     return CACHE.exists()
 
 
-def glimpses(chars: int = 100) -> dict[str, str]:
+def glimpses(chars: int = 100, *, keep_lines: bool = False) -> dict[str, str]:
     """The opening of every indexed note, by note id — enough for a model to
-    tell what a note is about without reading it. No index, no glimpses."""
+    tell what a note is about without reading it. No index, no glimpses.
+
+    Line breaks are collapsed by default: a prompt wants the words, not the
+    layout. `keep_lines` is for the one caller that wants the opposite —
+    `library.suggest` judges a note by its *shape*, and a flattened note is one
+    long line, so with the default it scored every note in the user's library at
+    zero for shape and suggested no homes at all."""
     out: dict[str, str] = {}
     try:
         for note_id, chunks in _load().items():
             if chunks and chunks[0].get("text"):
-                out[note_id] = " ".join(chunks[0]["text"].split())[:chars]
+                text = chunks[0]["text"]
+                if keep_lines:
+                    text = "\n".join(" ".join(l.split()) for l in text.split("\n"))
+                else:
+                    text = " ".join(text.split())
+                out[note_id] = text[:chars]
     except (OSError, ValueError):
         pass
     return out

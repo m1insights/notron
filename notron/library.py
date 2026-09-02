@@ -210,7 +210,7 @@ def scan(lib: Library | None = None) -> dict:
 
     lib = lib or load()
     live = [n for n in notes.list_all_notes() if n.folder != workspace.FOLDER]
-    guesses = {s.note.id: s for s in suggest(live, index.glimpses(1400))}
+    guesses = {s.note.id: s for s in suggest(live, index.glimpses(1400, keep_lines=True))}
     rows = []
     for n in live:
         g = guesses[n.id]
