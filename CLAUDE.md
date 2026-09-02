@@ -21,7 +21,7 @@ in `docs/design/02-screens.md`.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 278 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 298 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing

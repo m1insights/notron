@@ -601,6 +601,90 @@ def test_no_leaves_the_lines_alone_and_stops_her_asking_again(store):
     assert brain.calls == 1 and out.proposed == {}, "declined lines are not re-proposed"
 
 
+def test_a_stale_judged_note_does_not_hide_an_unrelated_line_in_landed(store):
+    """A digest carrying a stale {kind: note, title: T} — from a note T that
+    no longer exists as a master — must not be swept into `landed` just
+    because a *different* proposal this pass happens to create a new note
+    also called T."""
+    store.add("Supplements", "-")
+    dump(store, "the serum from that brand\n")
+    brain = FilerBrain({"the serum from that brand": {"new": "Skincare Brand"}})
+    filer.run(brain)                       # proposes "Skincare Brand", still pending
+
+    stale_digest = filer.Item("vitamin C", "vitamin C", 0, "x", "x").digest()
+    state = filer._state()
+    state["judged"][stale_digest] = {"kind": "note", "title": "Skincare Brand"}
+    filer._save(state, dry_run=False)
+
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] += "<div>vitamin C</div><div>yes</div>"
+
+    calls_before = brain.calls
+    out = filer.run(brain)
+
+    assert out.created == ["Skincare Brand"]
+    assert "✓ vitamin C → Skincare Brand" in store.text(workspace.DUMP), \
+        "an unrelated line must not be silently dropped by a stale digest"
+    assert brain.calls == calls_before, "vitamin C resolves from memory, no model call"
+
+
+def test_a_shape_reply_keyed_differently_from_the_canonical_title_still_resolves(store, monkeypatch):
+    """`classify`'s shapes reply must be resolved through the same `_match`
+    used for note verdicts before caching — a case mismatch used to fall back
+    to layout.LOG and cache that wrong guess forever."""
+    store.add("Recipes", "-")
+    dump(store, "Pasta that worked:\ntomatoes\nbasil\n")
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain({"Pasta that worked:": {"note": "Recipes"},
+                        "tomatoes": {"part_of": "Pasta that worked:"},
+                        "basil": {"part_of": "Pasta that worked:"}},
+                       shapes={"recipes": "list"})   # model echoed lowercase
+
+    filer.run(brain)
+
+    assert filer._state()["shapes"] == {"Recipes": "list"}
+    assert store.text("Recipes") == "Recipes\n\n-\n\nPasta that worked:\n• tomatoes\n• basil"
+
+
+def test_two_leads_with_the_same_text_do_not_double_record_by_dict_equality(store, monkeypatch):
+    """`record["items"]` used to dedup by full dict equality, which includes
+    `parts` — so two leads that share a digest (identical wording, typed as
+    two separate runs in the dump) but carry different parts would both get
+    appended instead of the later one replacing the earlier. Same root cause
+    as an edited part between two passes: the lead's digest is unchanged but
+    its parts differ, and a `not in` dict check can't see they're the same
+    lead."""
+    store.add("Supplements", "-")
+    dump(store, "Weekly meal plan:\nchicken\n\nWeekly meal plan:\nsalmon\n")
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+
+    class TwiceBrain:
+        """Two runs, same lead text, different part each — hand-built rows
+        rather than FilerBrain's text-keyed table, which can't represent two
+        prompt lines sharing identical text."""
+
+        def ask_json(self, **kw):
+            return {"filed": [{"line": 1, "new": "Meals"}, {"line": 2, "part_of": 1},
+                              {"line": 3, "new": "Meals"}, {"line": 4, "part_of": 3}],
+                    "shapes": {}}
+
+        def ask(self, **kw):
+            raise AssertionError("the Filer must never pay for a text model call")
+
+    brain = TwiceBrain()
+    filer.run(brain)
+
+    assert len(filer.pending_proposals()["Meals"]) == 1, "same digest must replace, not add"
+    assert [p.text for p in filer.pending_proposals()["Meals"][0].parts] == ["salmon"]
+
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] += "<div>yes</div>"
+    out = filer.run(brain)
+
+    assert out.created == ["Meals"]
+    assert store.text("Meals").count("Weekly meal plan:") == 1, "must not be filed twice"
+
+
 def test_a_dry_run_judges_everything_and_writes_nothing(store):
     store.add("Supplements", "-")
     dump(store, "took vitamin D today\n")

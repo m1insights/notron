@@ -1,5 +1,10 @@
 # Journal Filing — parked follow-ups
 
+**Status:** items 1-3 (the three bugs) fixed 2026-09-02 on
+`feature/journal-filing-followups`. Item 4's CLAUDE.md one-liner fixed
+alongside them; its other two bullets and item 5 remain parked, as written
+below. Tests: 298.
+
 Found during the Fable review of `feature/journal-filing` (merged to `main` at
 `cc2a691`, 2026-09-02). All rated minor or cosmetic — none blocked the ship.
 Fixed at review time instead: the important finding (a two-level part chain
