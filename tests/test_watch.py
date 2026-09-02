@@ -215,3 +215,8 @@ def test_a_successful_answer_clears_the_failure_count():
     w._attempted(key, wrote=False)
     w._attempted(key, wrote=True)
     assert key not in w._failures
+
+
+def test_is_running_reads_the_launchctl_exit_code():
+    assert watch.is_running(runner=lambda: 0) is True
+    assert watch.is_running(runner=lambda: 113) is False  # launchd's "not found"
