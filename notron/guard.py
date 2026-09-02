@@ -8,6 +8,10 @@ to call `notes.write_body` directly. Three guarantees, in plain terms:
      rewrite a note you wrote.
   3. No write may carry a password, PIN or key, whatever the model intended.
   4. Every allowed write is logged before it happens.
+
+A fourth mode, `mark`, exists for the Filer: it may put a `✓ ` in front of a
+line and a receipt after it, and `notedoc.marks_between` proves that is all it
+did. It is an addition like any other — nothing of yours is ever removed.
 """
 
 from __future__ import annotations
@@ -48,7 +52,7 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str) -
     if title in workspace.READ_ONLY:
         return Verdict(False, f"{title} is read-only — it is the user's instruction note.")
 
-    if mode not in ("replace", "append", "insert"):
+    if mode not in ("replace", "append", "insert", "mark"):
         return Verdict(False, f"unknown write mode {mode!r}")
 
     if not new_body.strip():
@@ -70,7 +74,22 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str) -
     if mode == "insert" and old_body and not notedoc.preserves(old_body, new_body):
         return Verdict(False, "insert would have changed or removed existing text")
 
-    added = new_body[len(old_body):] if mode == "append" else new_body
+    marks: list[str] = []
+    if mode == "mark":
+        if not old_body:
+            return Verdict(False, "cannot mark a note that does not exist")
+        found = notedoc.marks_between(old_body, new_body)
+        if found is None:
+            return Verdict(False, "a mark may only add a ✓ and a receipt to a line — "
+                                  "anything else was refused")
+        marks = found
+
+    if mode == "append":
+        added = new_body[len(old_body):]
+    elif mode == "mark":
+        added = "".join(marks)
+    else:
+        added = new_body
     if privacy.contains_secret(added):
         return Verdict(False, "the text contains something that looks like a password or key")
 

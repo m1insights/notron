@@ -7,13 +7,20 @@ planning and writing are rare and quality-critical, so they run on Super.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 
 from . import conversation, markup, notes, privacy, workspace
 from .executor import Executor
 from .state import Action, State, Write
 
-INTENTS = ("question", "task", "capture", "plan", "remind", "schedule", "ignore")
+INTENTS = ("question", "task", "capture", "plan", "remind", "schedule", "file", "ignore")
+
+# "file this: …", "file my brain dump", "sort these" — said in plain words, so
+# the Filer is chosen in code and the model is never asked. A tag that says
+# "file" must file, every time, not nine times in ten.
+FILE_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?(?:file\b|sort\s+(?:this|these|that|it|them)\b)"
+                        r"|\bbrain\s*dump\b")
 
 
 # ---------------------------------------------------------------- Watcher
@@ -39,6 +46,7 @@ Classify the request into exactly one intent:
 - plan: they want a day or week planned
 - remind: they want a reminder set, or an existing one ticked off
 - schedule: they want something put in their calendar
+- file: they want a line, or their brain dump, sorted into the right one of their own notes
 - ignore: not addressed to the assistant
 
 Reply with JSON only:
@@ -58,6 +66,10 @@ def router(state: State, *, brain) -> State:
     if not state.request.strip():
         state.intent = "ignore"
         state.note("router", "nothing to do")
+        return state
+    if FILE_WORDS.search(state.request):
+        state.intent = "file"
+        state.note("router", "file — said so in plain words, no model asked")
         return state
     try:
         out = brain.ask_json(system=ROUTER_SYSTEM, user=state.request, tier="fast", max_tokens=400)
@@ -275,6 +287,44 @@ def _confirmation(action, result) -> str:
     return f"{word}: {action.title} — {when_mod.human(moment)}"
 
 
+# ------------------------------------------------------------------ Filer
+
+def filer(state: State, *, brain, dry_run: bool = False) -> State:
+    """Sort lines into the user's own notes. Nano chooses a title; the Executor
+    copies and ticks behind the Guard. Runs before the writer so the reply
+    says what landed, never what was meant to.
+
+    Two shapes: "file my brain dump" (or a bare "file") works the whole dump;
+    a tagged line — `@notron file this: …` — files that line where it sits.
+    """
+    if state.intent != "file":
+        return state
+    from . import filer as filing
+
+    items, bare = [], []
+    if state.reply_to is not None and state.source.strip() and not filing.mentions_dump(state.request):
+        title, folder, after = state.reply_to
+        items, bare = filing.items_from_turn(state.source, title=title, folder=folder, near=after)
+
+    if items:
+        out = filing.file_items(brain, items, bare=bare, dry_run=dry_run,
+                                on_step=lambda m: state.note("filer", m))
+        title, folder, _ = state.reply_to
+        # Every line ticked where it was typed reads as done — the receipt is the
+        # reply. Anything left over needs a word under it, or she reads it again.
+        if not out.filed or (folder, title) not in out.ticked or out.proposed or out.left:
+            state.answer = out.summary()
+            state.writes.append(_reply(state))
+    else:
+        out = filing.run(brain, dry_run=dry_run, on_step=lambda m: state.note("filer", m))
+        state.answer = out.summary()
+        state.writes.append(_reply(state))
+    state.results.extend(out.results)
+    state.note("filer", f"{len(out.filed)} filed, {len(out.proposed)} proposed, "
+                        f"{len(out.left)} left, {out.model_calls} model call(s)")
+    return state
+
+
 # ---------------------------------------------------------------- Planner
 
 PLANNER_SYSTEM = """You are Notron, a personal assistant living inside the user's Apple Notes.
@@ -360,8 +410,8 @@ Rules:
 
 
 def writer(state: State, *, brain) -> State:
-    if state.intent in ("ignore", "plan"):
-        return state
+    if state.intent in ("ignore", "plan", "file"):
+        return state       # the planner and the filer have already said their piece
     if state.intent in ("remind", "schedule"):
         # The doer already said exactly what happened. Paying a smart model to
         # rephrase a fact would only give it room to get the fact wrong.
@@ -441,14 +491,8 @@ def _verify_links(state: State) -> None:
 
 
 def _reply(state: State) -> Write:
-    """Her turn, set as a different voice.
-
-    A note has no chat bubbles, so typography does the job instead: a light
-    rule opens her turn, your words stay plain, hers are italic under a bold
-    signature, and a heavier rule closes the turn. The signature is also how
-    `conversation` knows a turn is hers — keep them in step.
-    """
-    body = f"{conversation.QA_RULE}\n\n**Notron:**\n{markup.voice(state.answer)}\n\n———\n"
+    """Her turn, set as a different voice — see `conversation.turn`."""
+    body = conversation.turn(state.answer)
     if state.reply_to is None:
         return Write(title=workspace.ASK, mode="append", markdown=f"\n{body}\n")
     title, folder, after = state.reply_to

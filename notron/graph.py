@@ -4,14 +4,15 @@ Not an agent in a while-loop. A declared network of specialised nodes with
 explicit edges, so it is obvious — to you and to a reviewer — exactly what runs,
 in what order, and on which model tier.
 
-    watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► writer ─► executor
-                  │          │             │           │         │           │           │       │          │
-                  └──────────┴─────────────┴───────────┘         └───────────┴───────────┴───────┴──────────┘
+    watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► writer ─► executor
+                  │          │             │           │         │           │           │        │       │          │
+                  └──────────┴─────────────┴───────────┘         └───────────┴───────────┴────────┴───────┴──────────┘
                   (each skipped unless the router asked for it)
 
 Every node may decline: `retriever` no-ops unless the router asked for context,
-`planner` only fires on plan intent, `writer` steps aside for plans. The Guard
-sits inside `executor` and is the single choke point for every write.
+`planner` only fires on plan intent, `filer` only on file intent, `writer` steps
+aside for plans and filings. The Guard sits inside `executor` and is the single
+choke point for every write.
 """
 
 from __future__ import annotations
@@ -40,6 +41,7 @@ NODES: dict[str, Node] = {
     "planner": nodes.planner,
     "scheduler": nodes.scheduler,
     "doer": nodes.doer,
+    "filer": nodes.filer,
     "writer": nodes.writer,
     "executor": nodes.executor,
 }
@@ -52,27 +54,31 @@ EDGES = (
     Edge("agenda", "planner"),
     Edge("planner", "scheduler"),
     Edge("scheduler", "doer"),
-    Edge("doer", "writer"),
+    Edge("doer", "filer"),
+    Edge("filer", "writer"),
     Edge("writer", "executor"),
 )
 
 ORDER = ("watcher", "router", "retriever", "researcher", "agenda",
-         "planner", "scheduler", "doer", "writer", "executor")
+         "planner", "scheduler", "doer", "filer", "writer", "executor")
 
 
 def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
-        reply_to: tuple | None = None, here: str = "",
+        reply_to: tuple | None = None, here: str = "", source: str = "",
         on_node: Callable[[str, State], None] | None = None) -> State:
     """Walk the graph once.
 
     `reply_to` is (note title, folder, block index) when the answer belongs
     underneath something specific rather than at the end of the Ask note.
     `here` is the note she was tagged in, which is context she gets for free.
+    `source` is the exact turn she was tagged in, tags intact — what the Filer
+    copies and ticks.
     """
-    state = State(request=request, trigger=trigger, reply_to=reply_to, here=here)
+    state = State(request=request, trigger=trigger, reply_to=reply_to, here=here,
+                  source=source)
     for name in ORDER:
         fn = NODES[name]
-        if name in ("executor", "doer"):
+        if name in ("executor", "doer", "filer"):
             state = fn(state, brain=brain, dry_run=dry_run)
         else:
             state = fn(state, brain=brain)

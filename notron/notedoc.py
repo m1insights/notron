@@ -6,15 +6,38 @@ they wrote*, rather than at the bottom of the note, we need to address those
 elements individually: find the block they typed, and put the reply after it.
 
 Everything here is text surgery on that flat run. Nothing is reordered, nothing
-is reformatted, and no existing block is ever modified — the only operation is
-inserting new blocks between existing ones.
+is reformatted, and nothing of yours is ever deleted or edited. Two operations
+exist, and each has a checker that proves it did only what it says:
+
+  * inserting new blocks between existing ones (`insert_after` / `preserves`);
+  * ticking a line as filed — a `✓ ` in front of its text and a receipt after
+    it, inside its own element (`mark` / `marks_between`).
 """
 
 from __future__ import annotations
 
+import html as _html
 import re
+from dataclasses import dataclass
 
 from .markup import to_text
+
+#: The text tick that marks a line as filed. Native Notes checkboxes cannot be
+#: written by script, so the tick is a character — and it is text the user can
+#: delete to "unfile" a line.
+FILED = "✓ "
+#: Separates a filed line from where it went: `✓ magnesium → Supplements`.
+RECEIPT = " → "
+
+# One <li> and what is inside it.
+_LI = re.compile(r"<li\b[^>]*>(.*?)</li>", re.I | re.S)
+# The elements whose text is "a line" someone wrote. A mark goes just inside.
+_OPENS_LINE = re.compile(r"<(?:div|li|h[1-6]|p)\b[^>]*>", re.I)
+_OPENS_LINE_AT_END = re.compile(r"<(?:div|li|h[1-6]|p)\b[^>]*>$", re.I)
+_CLOSES_LINE_AT_END = re.compile(r"</(?:div|li|h[1-6]|p)>\s*$", re.I)
+_CLOSES_LINE = re.compile(r"</(?:div|li|h[1-6]|p)>|<br\s*/?>", re.I)
+_TRAILING_BR = re.compile(r"(?:<br\s*/?>\s*)+$", re.I)
+_RECEIPT_TEXT = re.compile(re.escape(RECEIPT) + r"[^<>\n]+")
 
 # Top-level elements Apple Notes emits. <object> wraps tables.
 _BLOCK = re.compile(
@@ -75,6 +98,116 @@ def locate(html: str, anchor: str, *, near: int) -> int:
     if not hits:
         return near
     return min(hits, key=lambda i: abs(i - near))
+
+
+@dataclass(frozen=True)
+class Line:
+    """One line of a note: a block, or one item inside a list block."""
+    block: int      # index into `blocks`
+    item: int       # which <li> inside the block, or -1 for the block itself
+    text: str
+
+
+def lines(html: str) -> list[Line]:
+    """Every line someone could have typed, in order. A list block yields one
+    line per item, because a brain dump written as bullets is still one
+    thought per line."""
+    out: list[Line] = []
+    for i, block in enumerate(blocks(html)):
+        items = list(_LI.finditer(block))
+        if items:
+            for k, m in enumerate(items):
+                out.append(Line(i, k, to_text(m.group(1)).strip()))
+        else:
+            text = to_text(block).strip()
+            if text:
+                out.append(Line(i, -1, text))
+    return out
+
+
+def find_line(html: str, anchor: str, *, near: int) -> Line | None:
+    """The line whose text is `anchor`, preferring the one nearest block `near`.
+    Same idea as `locate`: the index is a hint, the words are the truth."""
+    want = anchor.strip()
+    if not want:
+        return None
+    hits = [ln for ln in lines(html) if ln.text.strip() == want]
+    if not hits:
+        return None
+    return min(hits, key=lambda ln: abs(ln.block - near))
+
+
+def mark(html: str, line: Line, *, suffix: str = "") -> str:
+    """Tick one line: `FILED` in front of its text and `suffix` after it, both
+    inside the line's own element. No block is added, moved or removed.
+
+    A trailing <br> stays after the receipt, or the receipt would render on a
+    line of its own. `suffix` is plain text and is escaped here."""
+    parts = blocks(html)
+    block = parts[line.block]
+    if line.item >= 0:
+        items = list(_LI.finditer(block))
+        if line.item >= len(items):
+            return html
+        start, end = items[line.item].start(1), items[line.item].end(1)
+    else:
+        opened = _OPENS_LINE.match(block)
+        closed = _CLOSES_LINE_AT_END.search(block)
+        if not opened or not closed:
+            return html                      # not a line she knows how to tick
+        start, end = opened.end(), closed.start()
+    inner = block[start:end]
+    tail = _TRAILING_BR.search(inner)
+    body_end = start + (tail.start() if tail else len(inner))
+    parts[line.block] = (block[:start] + FILED + block[start:body_end]
+                         + _html.escape(suffix, quote=False) + block[body_end:])
+    return "".join(parts)
+
+
+def mark_lines(html: str, marks: list[tuple[str, int, str]]) -> tuple[str, int]:
+    """Tick several lines, each given as (anchor text, block hint, receipt).
+    Returns the new body and how many lines were actually found and ticked —
+    a line the user has since edited or deleted is simply left alone."""
+    done = 0
+    for anchor, near, receipt in marks:
+        line = find_line(html, anchor, near=near)
+        if line is None or line.text.startswith(FILED):
+            continue
+        updated = mark(html, line, suffix=receipt)
+        if updated != html:
+            html, done = updated, done + 1
+    return html, done
+
+
+def marks_between(old: str, new: str) -> list[str] | None:
+    """Is `new` exactly `old` with lines ticked, and nothing else?
+
+    Walks both bodies together. Wherever they differ, the extra text in `new`
+    must be either a `✓ ` sitting right after a line's opening tag, or a
+    receipt (` → …`) sitting right before a line's closing tag or a <br>.
+    Every character of `old` must still be there, in order. Returns what was
+    added — so the Guard can check it for secrets — or None if anything else
+    changed. The Guard for `mark` writes is this function."""
+    added: list[str] = []
+    i = j = 0
+    while j < len(new):
+        if i < len(old) and old[i] == new[j]:
+            i += 1
+            j += 1
+            continue
+        if new.startswith(FILED, j) and _OPENS_LINE_AT_END.search(new, max(0, j - 300), j):
+            added.append(FILED)
+            j += len(FILED)
+            continue
+        m = _RECEIPT_TEXT.match(new, j)
+        if m and _CLOSES_LINE.match(new, m.end()):
+            added.append(m.group(0))
+            j = m.end()
+            continue
+        return None
+    if i != len(old) or not added:
+        return None
+    return added
 
 
 def preserves(old: str, new: str) -> bool:

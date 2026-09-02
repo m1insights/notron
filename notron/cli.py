@@ -187,6 +187,16 @@ def cmd_listen(args):
         print("\n  Stopped listening.\n")
 
 
+def cmd_file(args):
+    from . import filer
+
+    print()
+    out = filer.run(_brain(), dry_run=args.dry_run, on_step=lambda m: print(f"  · {m}"))
+    for r in out.results:
+        print(f"  {r}")
+    print(f"\n{out.summary()}\n")
+
+
 def cmd_models(args):
     for m in _brain().available_models():
         mark = " ←" if "nemotron" in m.lower() else ""
@@ -237,6 +247,10 @@ def main(argv=None):
     ca.add_argument("--offline", action="store_true", help="skip the model, use plain wording")
     ca.add_argument("--dry-run", action="store_true")
     ca.set_defaults(fn=cmd_care)
+
+    fi = sub.add_parser("file", help=f"sort {workspace.DUMP} into the right notes now")
+    fi.add_argument("--dry-run", action="store_true", help="judge every line, write nothing")
+    fi.set_defaults(fn=cmd_file)
 
     ix = sub.add_parser("index", help="teach Notron your notes (run after adding a lot)")
     ix.add_argument("--rebuild", action="store_true", help="re-embed everything from scratch")

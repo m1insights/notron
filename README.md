@@ -61,6 +61,25 @@ notron listen --install     # she listens from now on, through reboots
 notron listen --off         # she stops
 ```
 
+**Or just dump.** `🧠 Brain Dump` is a note in her folder that takes anything, one
+thought per line — "took vitamin D today", "act two needs a storm", "that serum
+from the pop-up". No deciding where it goes. Once you've left the dump alone for a
+quarter of an hour, she files each line into the right one of your own notes and
+ticks it where it sits:
+
+```
+✓ took vitamin D today → Supplements
+✓ act two needs a storm → Book idea — Lighthouse
+that serum from the pop-up
+```
+
+Nothing is ever deleted — the ticked line stays until you clear the note, and the
+receipt says where the copy went. When no note fits, she asks rather than guesses:
+*"Want a new note called Skincare Brand? Type yes under this."* Say yes and she
+makes it and files the lines; say no and she leaves them alone. `@notron file this:
+…` on a line in any other note does the same for that line, in place. And `notron
+file` runs it now.
+
 There is a terminal route too — `notron ask "..."` — but it exists for testing. The
 note is the product.
 
@@ -226,6 +245,7 @@ Then open Notes → `🤖 NOTRON` → `📌 About Me` and write a few lines abou
 .venv/bin/python -m notron index               # teach her your notes (once)
 .venv/bin/python -m notron ask "what did I decide about pricing?"
 .venv/bin/python -m notron plan --week
+.venv/bin/python -m notron file                # sort the Brain Dump into your notes now
 .venv/bin/python -m notron care                # what she needs from you today
 .venv/bin/python -m notron morning             # her full daily routine
 .venv/bin/python -m notron schedule --hour 6   # let macOS run it every morning

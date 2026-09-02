@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from . import notedoc
+from . import markup, notedoc
 
 SIGNATURE = "Notron:"
 RULE = "———"
@@ -113,11 +113,31 @@ def unanswered(
             peek += 1
         answered = peek < len(texts) and _is_notron(texts[peek])
 
+        # A turn the Filer has ticked is done too: the lines that spoke to her
+        # now read `✓ … → Somewhere`, and the receipt is the reply. Without this
+        # rule a filed `@notron file this` would be read as unanswered forever.
+        # Untagged lines typed alongside are context, not the question, so they
+        # do not have to be ticked — unless nothing was tagged (the Ask note),
+        # where every line is the question.
+        spoke = [p for p in parts if TAG.search(p)] or parts
+        filed = bool(parts) and all(p.startswith(notedoc.FILED) for p in spoke)
+
         turn = "\n".join(parts).strip()
-        if turn and not answered and (not require_tag or TAG.search(turn)):
+        if turn and not answered and not filed and (not require_tag or TAG.search(turn)):
             out.append(Question(text=turn, after=end))
 
     return out
+
+
+def turn(markdown: str) -> str:
+    """Her turn, set as a different voice, as Markdown ready for `markup.to_html`.
+
+    A note has no chat bubbles, so typography does the job instead: a light
+    rule opens her turn, your words stay plain, hers are italic under a bold
+    signature, and a heavier rule closes the turn. `SIGNATURE` and `RULE` are
+    how `unanswered` recognises the turn as hers — keep them in step.
+    """
+    return f"{QA_RULE}\n\n**{SIGNATURE}**\n{markup.voice(markdown)}\n\n{RULE}\n"
 
 
 def tagged_lines(text: str) -> str:
