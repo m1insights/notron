@@ -29,7 +29,7 @@ import json
 import os
 import pathlib
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from . import conversation, index, notedoc, notes, privacy, workspace
@@ -69,23 +69,34 @@ FURNITURE = (workspace.DUMP, "Throw anything in here", conversation.QA_RULE, con
 
 @dataclass(frozen=True)
 class Item:
-    """One line to file, and where it lives so it can be ticked afterwards."""
+    """One line to file, and where it lives so it can be ticked afterwards.
+
+    `run` groups adjacent lines: a blank line, a ticked line, furniture or one
+    of Notron's turns starts a new run, and the model may only ever fold lines
+    together inside one. `parts` are the lines folded under this one — the
+    list beneath "the stack I took today:"."""
     text: str          # what gets copied — tag and "file this" verb stripped
     anchor: str        # the line as it reads in the note, to find it again
     near: int          # block index hint
     note_title: str
     folder: str
+    run: int = 0
+    parts: tuple["Item", ...] = ()
 
     def digest(self) -> str:
         return hashlib.sha1(re.sub(r"\s+", " ", self.text.strip().lower()).encode()).hexdigest()
 
     def as_dict(self) -> dict:
-        return {"text": self.text, "anchor": self.anchor, "near": self.near,
-                "note_title": self.note_title, "folder": self.folder}
+        d = {"text": self.text, "anchor": self.anchor, "near": self.near,
+             "note_title": self.note_title, "folder": self.folder}
+        if self.parts:
+            d["parts"] = [p.as_dict() for p in self.parts]
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Item":
-        return cls(d["text"], d["anchor"], int(d.get("near", 0)), d["note_title"], d["folder"])
+        return cls(d["text"], d["anchor"], int(d.get("near", 0)), d["note_title"], d["folder"],
+                   parts=tuple(cls.from_dict(p) for p in d.get("parts", [])))
 
 
 @dataclass(frozen=True)
@@ -156,22 +167,27 @@ def unfiled(body_html: str, *, note_title: str = workspace.DUMP,
     """
     out: list[Item] = []
     in_turn = False
+    run = 0
     for ln in notedoc.lines(body_html):
         text = ln.text.strip()
+        if ln.after_gap:
+            run += 1
         if in_turn:
             if text == conversation.RULE:
                 in_turn = False
+            run += 1
             continue
         if text.startswith(conversation.SIGNATURE) or text.startswith(f"**{conversation.SIGNATURE}**"):
             in_turn = True
+            run += 1
             continue
-        if _is_furniture(text, furniture) or text.startswith(FILED):
-            continue
-        if privacy.contains_secret(text):
+        if _is_furniture(text, furniture) or text.startswith(FILED) or privacy.contains_secret(text):
+            run += 1
             continue
         clean = VERB.sub("", conversation.strip_tag(text)).strip()
-        out.append(Item(clean or text, text, ln.block, note_title, folder))
-    return out
+        out.append(Item(clean or text, text, ln.block, note_title, folder, run))
+    dense: dict[int, int] = {}
+    return [replace(it, run=dense.setdefault(it.run, len(dense))) for it in out]
 
 
 def items_from_turn(source: str, *, title: str, folder: str, near: int) -> tuple[list[Item], list[str]]:

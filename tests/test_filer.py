@@ -122,6 +122,27 @@ def test_a_line_knows_when_a_blank_line_sits_above_it():
                    ("third", True), ("a", False), ("b", False), ("last", True)]
 
 
+def test_adjacent_lines_share_a_run_and_a_blank_line_or_a_ticked_line_starts_the_next(store):
+    """A run is the most the model may ever group into one thought."""
+    dump(store, "the stack today:\nmagnesium\nzinc\n\nact two needs a storm\n✓ old one → Book idea\nthat serum\n")
+    items = filer.unfiled(store.body(workspace.DUMP))
+    assert [(it.text, it.run) for it in items] == [
+        ("the stack today:", 0), ("magnesium", 0), ("zinc", 0),
+        ("act two needs a storm", 1),
+        ("that serum", 2),                       # the ticked line between them broke the run
+    ]
+
+
+def test_an_item_carries_its_parts_through_json():
+    lead = filer.Item("the stack today:", "the stack today:", 3, workspace.DUMP, "Notron",
+                      parts=(filer.Item("magnesium", "magnesium", 4, workspace.DUMP, "Notron"),))
+    back = filer.Item.from_dict(lead.as_dict())
+    assert back == lead
+    assert back.parts[0].text == "magnesium"
+    assert lead.digest() == filer.Item("the stack today:", "x", 0, "y", "z").digest(), \
+        "a digest is the line's own words — parts and position do not change it"
+
+
 def test_a_mark_ticks_the_line_and_adds_the_receipt_inside_its_own_element():
     html = "<div><h1>x</h1></div>\n<div>magnesium at night</div>\n<div><br></div>"
     line = notedoc.find_line(html, "magnesium at night", near=1)
