@@ -218,6 +218,7 @@ def scan(lib: Library | None = None) -> dict:
             "id": n.id, "title": n.title, "folder": n.folder, "modified": n.modified,
             "state": lib.state_of(n) if lib.configured else g.state,
             "suggested": g.state, "reason": g.reason,
+            "sensitive": privacy.is_vault(n.title) or privacy.is_private(n.title),
         })
     rows.sort(key=lambda r: (_ORDER[r["state"]], -(_stamp(r["modified"]))))
     by_title: dict[str, list[str]] = {}
@@ -230,6 +231,40 @@ def scan(lib: Library | None = None) -> dict:
         "start_from": lib.start_from.strftime("%Y-%m-%d") if lib.start_from else None,
         "configured": lib.configured,
         "counts": counts,
+    }
+
+
+#: A note longer than this is cut for the preview panel; nobody triages by
+#: reading twenty thousand characters, and the whole thing crosses a pipe.
+PEEK_CHARS = 20_000
+
+
+def peek(note_id: str, *, reveal: bool = False) -> dict:
+    """One note's body as plain text, for the person deciding what to do with it.
+
+    Deliberately *not* filtered through `user_notes()`: an ignored note is
+    exactly the one they need to look at before agreeing it should stay ignored.
+    Nothing here goes near a model — the text is read from Notes and handed
+    straight to the Mac app's preview panel, on a click the user made.
+
+    But a title is not enough of a guard. The user's real library has a note
+    called "CRITICAL" whose body is nothing but Obsidian recovery codes;
+    `privacy.py` does not flag that title, and it sorted first in the list. So
+    the body is checked too, and a note holding anything credential-shaped comes
+    back empty with `held` set until the user asks for it by name. The point is
+    not the model here — it is the screen, and whoever else can see it.
+    """
+    from . import markup
+
+    text = markup.to_text(notes.read_body(note_id))
+    looks_secret = privacy.contains_secret(text) or privacy.is_key_dump(text)
+    held = "" if reveal else ("secret" if looks_secret else "")
+    return {
+        "id": note_id,
+        "text": "" if held else text[:PEEK_CHARS],
+        "chars": len(text),
+        "truncated": not held and len(text) > PEEK_CHARS,
+        "held": held,
     }
 
 

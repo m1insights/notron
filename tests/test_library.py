@@ -248,3 +248,89 @@ def test_the_file_the_mac_app_writes_is_the_file_the_core_reads(state):
     lib = library.load()
     assert lib.homes == {"n1"} and lib.ignore == {"n2"} and lib.decided == {"n1", "n2"}
     assert lib.start_from == datetime(2026, 1, 1)
+
+
+# ------------------------------------------------- the preview panel (peek)
+
+
+def test_peek_returns_a_note_as_plain_text(monkeypatch):
+    from notron import notes
+    monkeypatch.setattr(notes, "read_body",
+                        lambda nid: "<div><b>Supps</b></div><ul><li>magnesium</li></ul>")
+    out = library.peek("n1")
+    assert out["id"] == "n1"
+    assert out["text"] == "Supps\n• magnesium"
+    assert out["truncated"] is False and out["chars"] == len(out["text"])
+    assert out["held"] == ""
+
+
+def test_peek_shows_an_ignored_note_because_the_user_is_the_one_looking(monkeypatch, state):
+    """The whole point of the panel: deciding an old note stays ignored means
+    seeing it. Nothing here goes near a model."""
+    from notron import notes
+    library.save(library.Library(ignore={"n1"}, decided={"n1"}))
+    monkeypatch.setattr(notes, "read_body", lambda nid: "<div>2019 experiment</div>")
+    assert library.peek("n1")["text"] == "2019 experiment"
+
+
+def test_peek_cuts_a_very_long_note_and_says_so(monkeypatch):
+    from notron import notes
+    monkeypatch.setattr(notes, "read_body", lambda nid: "x" * (library.PEEK_CHARS + 500))
+    out = library.peek("n1")
+    assert len(out["text"]) == library.PEEK_CHARS
+    assert out["truncated"] is True and out["chars"] == library.PEEK_CHARS + 500
+
+
+def test_peek_holds_a_note_whose_body_looks_like_credentials(monkeypatch):
+    """The real one that caught this: a note called "CRITICAL", nothing in the
+    title to flag, a body of Obsidian recovery codes, first in the list."""
+    from notron import notes
+    codes = "CRITICAL\n\nObsidian recovery:\n\n" + "\n".join(["a1b2c3d4" * 4] * 6)
+    monkeypatch.setattr(notes, "read_body", lambda nid: codes)
+    out = library.peek("n1")
+    assert out["held"] == "secret" and out["text"] == ""
+    assert out["chars"] == len(codes), "she still says how big it is"
+    assert library.peek("n1", reveal=True)["text"].startswith("CRITICAL"), "shown when asked for"
+
+
+def test_scan_flags_a_private_note_too_not_only_a_password_one(monkeypatch, state):
+    from notron import notes, index
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Therapy journal")])
+    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    assert library.scan()["notes"][0]["sensitive"] is True
+
+
+def test_scan_flags_a_password_note_so_the_panel_can_hold_it_back(monkeypatch, state):
+    from notron import notes, index
+    monkeypatch.setattr(notes, "list_all_notes",
+                        lambda: [note("n1", "Passwords"), note("n2", "Groceries")])
+    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    rows = {r["id"]: r for r in library.scan()["notes"]}
+    assert rows["n1"]["sensitive"] is True
+    assert rows["n2"]["sensitive"] is False
+
+
+def test_the_cli_peeks_and_opens_one_note(monkeypatch, state, capsys):
+    import json
+    from notron import cli, notes
+    monkeypatch.setattr(notes, "read_body", lambda nid: "<div>hello</div>")
+    cli.main(["library", "peek", "n1"])
+    assert json.loads(capsys.readouterr().out)["text"] == "hello"
+
+    monkeypatch.setattr(notes, "read_body", lambda nid: "api key = sk-abcdefghijklmnop1234")
+    cli.main(["library", "peek", "n1"])
+    assert json.loads(capsys.readouterr().out)["held"] == "secret"
+    cli.main(["library", "peek", "n1", "--reveal"])
+    assert "sk-abcdefghijklmnop1234" in json.loads(capsys.readouterr().out)["text"]
+
+    shown = []
+    monkeypatch.setattr(notes, "show_note", shown.append)
+    cli.main(["library", "open", "n1"])
+    assert shown == ["n1"] and json.loads(capsys.readouterr().out) == {"ok": True}
+
+
+def test_peek_without_a_note_id_says_which_note(monkeypatch, state, capsys):
+    from notron import cli
+    with pytest.raises(SystemExit):
+        cli.main(["library", "peek"])
+    assert "Which note?" in capsys.readouterr().out

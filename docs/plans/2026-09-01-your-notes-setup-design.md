@@ -40,6 +40,17 @@ a smaller decision than negative ("which of 300 should be ignored").
 - "Start from [2026 ▾]" at the top.
 - Duplicate titles ("Supps" ×3): inline "3 notes share this name — which is the
   one?" picker; the others drop to Read only.
+- **Preview panel (added 2026-09-02).** The list is the left half; the right half
+  shows the selected note's text, read live from Notes on the click the user made.
+  Reason: the first live run had 219 notes, most of them years old with titles that
+  say nothing, and deciding meant the Notes app open alongside the window hunting
+  each one by hand. Arrow keys move the selection, 1/2/3 assign the three states,
+  "Open in Notes" opens the real note. An **ignored** note previews on purpose —
+  it is exactly the one that needs looking at. A preview is **held behind one
+  click** when the title trips `privacy.py` or the body looks like credentials:
+  the user's own library has a note titled "CRITICAL" holding six Obsidian
+  recovery codes, and it sorted first. Notron not reading a note is only half of
+  it; the other half is the screen.
 - One **Done** button. Skippable. New notes created later default to Read only;
   a note Notron creates after a `yes` in the Brain Dump becomes a Home automatically.
 - Menu-bar quick view gains one line: "12 homes · 9 ignored".

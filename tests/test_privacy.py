@@ -70,3 +70,26 @@ def test_private_notes_are_not_dredged_up_for_an_unrelated_question():
 def test_but_she_still_works_with_them_when_you_ask_directly():
     passages = [("Journal", "how I actually felt")]
     assert privacy.filter_passages("what did my journal say about last week?", passages)
+
+
+def test_a_block_of_bare_codes_is_a_key_dump_whatever_the_title_says():
+    """The user's real note called "CRITICAL": six Obsidian recovery codes and
+    not one word for a pattern to key off."""
+    assert privacy.is_key_dump("CRITICAL\n\nObsidian recovery:\n\n"
+                               "3gndvxcgadhpt5nx\n\nsttxr5kj92y7wen2\n\ngh5hgvd6wyh7xecj")
+
+
+def test_ordinary_prose_and_short_lists_are_not_key_dumps():
+    for text in ["milk\neggs\nbread", "Call the dentist\nBook the flights",
+                 "extraordinarily\nunbelievable\nconstitutional",   # long, but no digits
+                 "abc123\ndef456"]:                                  # too short, too few
+        assert not privacy.is_key_dump(text), text
+
+
+def test_a_key_dump_never_blocks_a_write():
+    """`is_key_dump` is for the preview panel only. A run of order numbers must
+    cost one click there, never a refused write, so the Guard's check is blind
+    to it on purpose."""
+    codes = "srv-d0f97eq4d50c73f7stjg\nsrv-d4s31224d50c73b7fva0\nsrv-cvepainnoe9s73eqp3lg"
+    assert privacy.is_key_dump(codes)
+    assert not privacy.contains_secret(codes)

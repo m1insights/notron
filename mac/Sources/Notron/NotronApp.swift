@@ -88,7 +88,7 @@ struct NotronApp: App {
         Window("Your notes", id: "library") {
             YourNotesView()
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
     }
 }
 

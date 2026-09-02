@@ -92,6 +92,31 @@ def redact(text: str) -> str:
     return HIGH_ENTROPY.sub(REDACTED, LABELLED.sub(_blank, text))
 
 
+# A block of bare codes with nothing labelling them: the user's real note called
+# "CRITICAL" is six lines of Obsidian recovery codes and not one word a pattern
+# could key off. Deliberately kept out of `contains_secret`, which the Guard uses
+# to block writes — a run of order numbers tripping this must cost one click in a
+# preview panel, never a refused write.
+_CODE_LINE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+/=_-]{11,63}$")
+KEY_DUMP_LINES = 3
+
+
+def is_key_dump(text: str) -> bool:
+    """Is this note mostly a list of unlabelled codes — recovery keys, seed
+    words, backup codes — whatever its title says?"""
+    codes = 0
+    for line in text.split("\n"):
+        line = line.strip()
+        if not _CODE_LINE.match(line):
+            continue
+        if not (any(c.isdigit() for c in line) and any(c.isalpha() for c in line)):
+            continue        # a long ordinary word is not a code
+        codes += 1
+        if codes >= KEY_DUMP_LINES:
+            return True
+    return False
+
+
 def contains_secret(text: str) -> bool:
     if HIGH_ENTROPY.search(text):
         return True

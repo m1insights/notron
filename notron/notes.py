@@ -77,6 +77,16 @@ on run argv
 end run
 """
 
+_SHOW = """
+on run argv
+  tell application "Notes"
+    activate
+    show note id (item 1 of argv)
+  end tell
+  return "ok"
+end run
+"""
+
 _CREATE = """
 on run argv
   set folderName to item 1 of argv
@@ -195,6 +205,12 @@ def read_body(note_id: str) -> str:
 
 def write_body(note_id: str, body: str) -> None:
     run(_SET_BODY, note_id, body)
+
+
+def show_note(note_id: str) -> None:
+    """Bring this note up in the Notes app. The escape hatch behind the Mac
+    app's preview panel, for when a glance is not enough."""
+    run(_SHOW, note_id)
 
 
 def create_note(folder: str, body: str) -> str:

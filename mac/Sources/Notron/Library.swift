@@ -21,6 +21,21 @@ struct LibraryNote: Identifiable, Codable, Equatable {
     var state: State
     let suggested: State
     let reason: String
+    /// A note `privacy.py` reads as a credentials store. The preview panel
+    /// holds these behind one click — a password should not be on screen
+    /// because an arrow key drifted onto its row.
+    let sensitive: Bool
+}
+
+/// One note's body, plain text, as `notron library peek` hands it over.
+struct NotePeek: Codable {
+    let id: String
+    let text: String
+    let chars: Int
+    let truncated: Bool
+    /// Non-empty when the core kept the text back because the body looks like
+    /// credentials — a title check alone misses a note called "CRITICAL".
+    let held: String
 }
 
 struct LibraryScan: Codable {
@@ -47,6 +62,22 @@ final class LibraryModel: ObservableObject {
     @Published var startFrom: Int? = nil        // a year; nil = everything
     @Published var loading = false
     @Published var problem: String?
+
+    // --- the preview panel: what's actually inside the selected note, so a
+    // decade-old note can be judged without opening Notes beside the window.
+    @Published var selected: String?
+    @Published var previewText = ""
+    @Published var previewLoading = false
+    @Published var previewProblem: String?
+    @Published var previewTruncated = false
+    /// The core held this note's text back: its body looks like credentials.
+    @Published var previewHeld = false
+    /// Password-ish notes the user has explicitly asked to see this session.
+    /// Never persisted — the next time the window opens they are held again.
+    @Published var revealed: Set<String> = []
+    /// Read once, kept for the window's lifetime: arrowing up and down a list
+    /// should not cost a fresh AppleScript round trip per row.
+    private var peeks: [String: NotePeek] = [:]
 
     static let file = Core.home.appendingPathComponent(".notron/library.json")
 
@@ -79,6 +110,7 @@ final class LibraryModel: ObservableObject {
                     self.notes = scan.notes
                     self.duplicates = scan.duplicates
                     self.startFrom = scan.startFrom.flatMap { Int($0.prefix(4)) }
+                    self.select(scan.notes.first?.id)
                 case .failure(let error):
                     self.problem = "\(error)"
                 }
@@ -107,6 +139,67 @@ final class LibraryModel: ObservableObject {
         for i in notes.indices where Self.year(of: notes[i].modified).map({ $0 < year }) ?? false {
             notes[i].state = .ignore
         }
+    }
+
+    var selectedNote: LibraryNote? { notes.first { $0.id == selected } }
+
+    /// Select a row and fill the panel. A sensitive note is selected but not
+    /// read — nothing is fetched until the user presses "Show it anyway".
+    func select(_ id: String?) {
+        guard selected != id else { return }
+        selected = id
+        previewProblem = nil
+        previewText = ""
+        previewTruncated = false
+        previewHeld = false
+        previewLoading = false
+        loadPreview()
+    }
+
+    /// "Show it anyway". The core held the text back, so this is a fresh read
+    /// with `--reveal` — the cached, empty answer would say nothing.
+    func reveal(_ id: String) {
+        revealed.insert(id)
+        peeks[id] = nil
+        previewHeld = false
+        loadPreview()
+    }
+
+    private func loadPreview() {
+        guard let id = selected, let note = selectedNote else { return }
+        guard !note.sensitive || revealed.contains(id) else { return }
+        if let cached = peeks[id] {
+            previewText = cached.text
+            previewTruncated = cached.truncated
+            previewHeld = !cached.held.isEmpty
+            return
+        }
+        let asked = revealed.contains(id)
+        previewLoading = true
+        Task.detached { [weak self] in
+            let result: Result<NotePeek, Error> = Result {
+                let json = try Core.run(["library", "peek", id] + (asked ? ["--reveal"] : []))
+                return try JSONDecoder().decode(NotePeek.self, from: Data(json.utf8))
+            }
+            await MainActor.run {
+                guard let self, self.selected == id else { return }   // the user moved on
+                self.previewLoading = false
+                switch result {
+                case .success(let peek):
+                    self.peeks[id] = peek
+                    self.previewText = peek.text
+                    self.previewTruncated = peek.truncated
+                    self.previewHeld = !peek.held.isEmpty
+                case .failure(let error):
+                    self.previewProblem = "Couldn't read this note: \(error)"
+                }
+            }
+        }
+    }
+
+    /// The escape hatch: the real note, in the real Notes app.
+    func openInNotes(_ id: String) {
+        Task.detached { _ = try? Core.run(["library", "open", id]) }
     }
 
     func save() throws {

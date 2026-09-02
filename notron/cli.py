@@ -208,6 +208,20 @@ def cmd_library(args):
         print(json.dumps(library.scan()))
         return
 
+    if args.action in ("peek", "open"):
+        # Both serve the Mac app's preview panel: peek fills it, open is the
+        # escape hatch to the real note. Ignored notes included on purpose —
+        # the user is looking, not the model.
+        if not args.note:
+            print(f"\n  Which note? notron library {args.action} <note id>\n")
+            raise SystemExit(1)
+        if args.action == "peek":
+            print(json.dumps(library.peek(args.note, reveal=args.reveal)))
+        else:
+            notes.show_note(args.note)
+            print(json.dumps({"ok": True}))
+        return
+
     if args.reset:
         library.save(library.Library())
         print("\n  Forgotten — every note is read only again, and the Filer may use any of them.\n")
@@ -324,8 +338,9 @@ def main(argv=None):
     ix.set_defaults(fn=cmd_index)
 
     lb = sub.add_parser("library", help="which notes she may file into, and which she never reads")
-    lb.add_argument("action", nargs="?", choices=["show", "scan"], default="show",
-                    help="scan = JSON for the Mac app")
+    lb.add_argument("action", nargs="?", choices=["show", "scan", "peek", "open"], default="show",
+                    help="scan = JSON for the Mac app; peek = one note's text; open = show it in Notes")
+    lb.add_argument("note", nargs="?", metavar="NOTE_ID", help="the note peek/open acts on")
     lb.add_argument("--home", action="append", default=[], metavar="TITLE_OR_ID",
                     help="a note she may file lines into (repeatable)")
     lb.add_argument("--ignore", action="append", default=[], metavar="TITLE_OR_ID",
@@ -333,6 +348,8 @@ def main(argv=None):
     lb.add_argument("--read", action="append", default=[], metavar="TITLE_OR_ID",
                     help="back to the default: readable, never filed into")
     lb.add_argument("--start-from", metavar="YEAR", help="ignore notes last edited before this, e.g. 2026")
+    lb.add_argument("--reveal", action="store_true",
+                    help="with peek: show a note even if its body looks like credentials")
     lb.add_argument("--reset", action="store_true", help="forget every choice")
     lb.set_defaults(fn=cmd_library)
 

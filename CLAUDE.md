@@ -21,7 +21,7 @@ in `docs/design/02-screens.md`.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 266 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 278 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing
@@ -218,6 +218,20 @@ Filer keeps every readable note as a candidate; a note Notron creates after a `y
 joins the homes only when homes exist. The pre-fill (`library.suggest`) is plain
 code: recency + list-shaped body + short title, `privacy.py` seeds the ignores,
 duplicate titles keep only the newest as a home.
+
+The window is a split: the list on the left, and on the right **what is actually
+inside the selected note** (`notron library peek <id>`), because a decade-old note
+titled "CRITICAL" tells you nothing and nobody triages 219 of those with the Notes
+app open alongside. Arrow keys move, 1/2/3 set home/read only/ignore, "Open in
+Notes" (`notron library open <id>`) is the escape hatch. Ignored notes preview on
+purpose — the user is looking, not the model, and that is the note they most need
+to see before agreeing it stays ignored. **A preview is held back** when the title
+trips `privacy.py` or the body holds anything credential-shaped, until the user
+presses "Show it anyway" (`--reveal`); the risk being managed there is the room the
+user is sitting in, not the model. `privacy.is_key_dump` catches the unlabelled
+case (that "CRITICAL" note is six bare Obsidian recovery codes) and is deliberately
+**not** wired into `contains_secret` — a run of order numbers must cost one click in
+a panel, never a write the Guard refuses.
 
 ## The self-improvement loop (`reflect.py`)
 
