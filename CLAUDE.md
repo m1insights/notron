@@ -16,12 +16,14 @@ colour, font size, radius, or spacing value that is not in that file — extend 
 token set there first. The Notes-native (light) skin is the default everywhere;
 the Operator (dark) skin is reserved for the Skills & Plugins screen only, since
 that screen is Advanced-tier only. Key screens and the magic moment are specced
-in `docs/design/02-screens.md`.
+in `docs/design/02-screens.md`; the first-run onboarding sequence (welcome →
+permissions → how to talk to her → start listening → handoff to "Your notes")
+is specced in `docs/design/04-onboarding-flow.md`.
 
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 298 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 300 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing

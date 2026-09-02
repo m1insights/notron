@@ -252,6 +252,16 @@ class Watcher:
 WATCH_LABEL = "io.m1labs.notron.listen"
 
 
+def is_running(runner=None) -> bool:
+    """True if the listener's launchd job is loaded — not whether it's healthy,
+    just whether `notron listen --install` (or a reboot) has it running."""
+    import os, subprocess
+    runner = runner or (lambda: subprocess.run(
+        ["launchctl", "print", f"gui/{os.getuid()}/{WATCH_LABEL}"],
+        capture_output=True).returncode)
+    return runner() == 0
+
+
 def plist(python: str, project: str) -> str:
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

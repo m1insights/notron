@@ -94,9 +94,6 @@ than comparing the full dict.
 - **Parts never show up in `out.left` or the "Left N lines" summary** —
   a declined lead or a refused append reports the lead but the trace never
   says anything about the parts riding along with it.
-- **`CLAUDE.md`'s Commands section still says "278 tests"** in the
-  `pytest tests -q` comment — stale since before this feature (was already
-  wrong at 279); now 295. One-line fix whenever someone's in that file.
 
 ---
 

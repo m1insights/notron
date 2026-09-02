@@ -30,10 +30,16 @@ def cmd_setup(args):
 
 
 def cmd_permissions(args):
+    import dataclasses, json
     from . import permissions
 
+    checks = permissions.check()
+    if getattr(args, "json", False):
+        print(json.dumps([dataclasses.asdict(c) for c in checks]))
+        return
+
     print()
-    for c in permissions.check():
+    for c in checks:
         print(f"  {'✓' if c.ok else '✗'} {c.app:10} {c.detail}")
         if c.fix:
             print(f"    → {c.fix}")
@@ -159,6 +165,11 @@ def cmd_listen(args):
 
     label, project = watch.WATCH_LABEL, pathlib.Path(__file__).resolve().parents[1]
     target = pathlib.Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
+
+    if getattr(args, "status", False):
+        import json
+        print(json.dumps({"running": watch.is_running()}))
+        return
 
     if args.off:
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True)
@@ -308,6 +319,7 @@ def main(argv=None):
     li = sub.add_parser("listen", help="watch the Ask note and answer what you type")
     li.add_argument("--install", action="store_true", help="keep listening in the background, always")
     li.add_argument("--off", action="store_true", help="stop listening")
+    li.add_argument("--status", action="store_true", help="is the background listener actually running? (machine-readable)")
     li.set_defaults(fn=cmd_listen)
 
     mo = sub.add_parser("morning", help="Notron's daily routine: catch up, plan, self-check")
@@ -355,8 +367,9 @@ def main(argv=None):
 
     sub.add_parser("models", help="list models this Nebius key can run").set_defaults(fn=cmd_models)
     sub.add_parser("graph", help="show the node graph").set_defaults(fn=cmd_graph)
-    sub.add_parser("permissions", help="check Notron can talk to Notes, Reminders and Calendar"
-                   ).set_defaults(fn=cmd_permissions)
+    pe = sub.add_parser("permissions", help="check Notron can talk to Notes, Reminders and Calendar")
+    pe.add_argument("--json", action="store_true", help="machine-readable output for the Mac app")
+    pe.set_defaults(fn=cmd_permissions)
     sub.add_parser("agenda", help="what's in your calendar and what's still open"
                    ).set_defaults(fn=cmd_agenda)
 

@@ -89,11 +89,20 @@ struct NotronApp: App {
             YourNotesView()
         }
         .windowResizability(.contentMinSize)
+
+        Window("Welcome", id: "onboarding") {
+            OnboardingView()
+        }
+        .windowResizability(.contentMinSize)
     }
 }
 
 /// The menu bar glyph — and, because it is the one view that exists from
-/// launch, the place a first run opens "Your notes" on its own.
+/// launch, the place a first run opens the right window on its own:
+/// onboarding for a Mac that has never finished it, else today's "Your
+/// notes" first-run check (covers a user with an old `.notron/onboarding.json`
+/// from a previous build who never finished "Your notes" — don't force them
+/// back through Welcome), else nothing — menu bar only, as today.
 private struct MenuBarLabel: View {
     let emoji: String
     @Environment(\.openWindow) private var openWindow
@@ -101,7 +110,10 @@ private struct MenuBarLabel: View {
     var body: some View {
         Text(emoji)
             .onAppear {
-                if !LibraryModel.exists {
+                if !OnboardingModel.done {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: "onboarding")
+                } else if !LibraryModel.exists {
                     NSApp.activate(ignoringOtherApps: true)
                     openWindow(id: "library")
                 }
