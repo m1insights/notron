@@ -336,8 +336,9 @@ def test_a_part_points_at_an_earlier_line_in_the_same_run_or_it_is_ignored():
     assert shapes == {"Supps": "log", "Nonsense": "list"}
 
 
-def test_secret_looking_lines_never_reach_the_model_and_glimpses_are_redacted(monkeypatch):
-    from notron import notes, index
+def test_secret_looking_lines_never_reach_the_model_and_glimpses_are_redacted(monkeypatch, tmp_path):
+    from notron import notes, index, library
+    monkeypatch.setattr(library, "STATE", tmp_path / "library.json")   # never the developer's own choices
     monkeypatch.setattr(notes, "list_all_notes", lambda: [
         Note("n1", "Supplements", "Notes", "x"), Note("n2", "Passwords", "Notes", "x"),
         Note("n3", "Journal", "Notes", "x"), Note("n4", workspace.ASK, workspace.FOLDER, "x")])
