@@ -21,7 +21,7 @@ in `docs/design/02-screens.md`.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 164 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 266 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing
@@ -33,6 +33,7 @@ in `docs/design/02-screens.md`.
 .venv/bin/python -m notron agenda          # today, this week, and what's outstanding
 .venv/bin/python -m notron reflect         # learn from her own answers that missed
 .venv/bin/python -m notron file            # sort 🧠 Brain Dump into the right notes now
+.venv/bin/python -m notron library         # which notes she may file into / never reads
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -77,6 +78,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `conversation.py` | Reads a note as turns; finds what she has not answered |
 | `mentions.py` | Sweeps every note for `#notron` / `@notron` |
 | `filer.py` | The Brain Dump: sorts lines into the user's own notes, ticks them, proposes new notes |
+| `library.py` | Per-note home / read only / ignore choices; the one place "never reads it" lives |
 | `guard.py` | The single choke point for every write |
 | `executor.py` | Applies writes. No model runs here, ever. |
 | `graph.py` / `nodes.py` / `state.py` | The graph and what flows along it |
@@ -106,6 +108,10 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
    a proposal in the dump and a wait for `yes`; it never guesses a bucket, never
    creates a note unasked. Lines that look like credentials are never filed and
    never shown to the model.
+9. **An ignored note is never read.** `library.user_notes()` is the only way the core
+   lists the user's notes; `index`, `retrieval`, `mentions`, `care` and `filer` all
+   go through it, and `index.search` re-checks at query time because the index may
+   be older than the choice.
 
 ## Performance — measured on 358 notes, 1,263 reminders and 1,757 events
 
@@ -199,6 +205,19 @@ a dump that is only waiting on the user costs zero model calls per poll
 (`filer.worth_a_pass`). `@notron file this: …` on a line in any note goes through
 the same path and ticks that line where it sits; `conversation.unanswered` treats
 a ticked turn as answered, or the listener would re-ask it forever.
+
+## Your notes (`library.py`)
+
+Once per note the user says **home** (the Filer may file into it), **read only**
+(default) or **ignore** (never read — not for filing, not for questions, not even a
+tag). Choices live in `.notron/library.json` keyed by note id; the Mac app's "Your
+notes" window writes it (it lists notes via `notron library scan`), `notron library`
+edits it from the terminal. A "start from [year]" cutoff applies only to notes the
+user never looked at (`decided`); a row they flipped wins. With no homes chosen the
+Filer keeps every readable note as a candidate; a note Notron creates after a `yes`
+joins the homes only when homes exist. The pre-fill (`library.suggest`) is plain
+code: recency + list-shaped body + short title, `privacy.py` seeds the ignores,
+duplicate titles keep only the newest as a home.
 
 ## The self-improvement loop (`reflect.py`)
 

@@ -80,6 +80,12 @@ makes it and files the lines; say no and she leaves them alone. `@notron file th
 …` on a line in any other note does the same for that line, in place. And `notron
 file` runs it now.
 
+**Tell her where things go — once.** Years of notes means three notes called "Supps"
+and a password note in the main list. In the app, "Your notes" shows every note
+with a three-way switch — *Home* (she may file into it), *Read only* (the
+default), *Ignore* (she never reads it, not even a tag inside it) — pre-filled
+with her guesses and a "start from [year]" for the old stuff. Change it any time.
+
 There is a terminal route too — `notron ask "..."` — but it exists for testing. The
 note is the product.
 
@@ -246,6 +252,7 @@ Then open Notes → `🤖 NOTRON` → `📌 About Me` and write a few lines abou
 .venv/bin/python -m notron ask "what did I decide about pricing?"
 .venv/bin/python -m notron plan --week
 .venv/bin/python -m notron file                # sort the Brain Dump into your notes now
+.venv/bin/python -m notron library             # which notes she may file into, which she never reads
 .venv/bin/python -m notron care                # what she needs from you today
 .venv/bin/python -m notron morning             # her full daily routine
 .venv/bin/python -m notron schedule --hour 6   # let macOS run it every morning
