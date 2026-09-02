@@ -1,6 +1,6 @@
 # Journal Filing — Implementation Plan
 
-**Status:** BUILT 2026-09-02 on `feature/journal-filing` — 2e04705. Tests: 294.
+**Status:** BUILT 2026-09-02 on `feature/journal-filing` — da77e64 (Fable-reviewed, one important finding fixed). Tests: 295.
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
