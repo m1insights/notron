@@ -239,3 +239,12 @@ def test_the_cli_scan_prints_json_for_the_app(monkeypatch, state, capsys):
     cli.main(["library", "scan"])
     out = json.loads(capsys.readouterr().out)
     assert out["notes"][0]["title"] == "Groceries" and "counts" in out
+
+
+def test_the_file_the_mac_app_writes_is_the_file_the_core_reads(state):
+    """Keep in step with mac/Sources/Notron/Library.swift `LibraryFile`."""
+    state.write_text('{"chosen_at":"2026-09-01T21:40:00Z","decided":["n1","n2"],'
+                     '"homes":["n1"],"ignore":["n2"],"start_from":"2026-01-01"}')
+    lib = library.load()
+    assert lib.homes == {"n1"} and lib.ignore == {"n2"} and lib.decided == {"n1", "n2"}
+    assert lib.start_from == datetime(2026, 1, 1)
