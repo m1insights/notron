@@ -23,7 +23,7 @@ is specced in `docs/design/04-onboarding-flow.md`.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 297 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 300 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing

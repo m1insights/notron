@@ -379,7 +379,10 @@ def classify(brain, items: list[Item], candidates: list[Master]
         if isinstance(said_shapes_raw, dict):
             for title, said in said_shapes_raw.items():
                 if isinstance(title, str) and title.strip():
-                    shapes[title.strip()] = str(said)
+                    named = title.strip()
+                    # keyed by the master's real title, resolved the same way a
+                    # verdict is — the model echoes titles in its own case
+                    shapes[_match(named, by_key) or named] = str(said)
     return verdicts, shapes
 
 
@@ -612,7 +615,14 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         record = proposals.setdefault(canonical, {"asked": None, "items": []})
         if canonical not in state["shapes"] and canonical in said_shapes:
             state["shapes"][canonical] = layout.shape(said_shapes[canonical])
-        if it.as_dict() not in record["items"]:
+        # Matched on digest, not on the whole dict: the same lead read again
+        # next pass keeps its digest but may carry different parts, and a dict
+        # comparison would miss that and record the thought twice.
+        digest = it.digest()
+        stored = [Item.from_dict(d).digest() for d in record["items"]]
+        if digest in stored:
+            record["items"][stored.index(digest)] = it.as_dict()
+        else:
             record["items"].append(it.as_dict())
         if record["asked"] is None:
             new_here.setdefault(canonical, []).append(it)
@@ -649,6 +659,7 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
     proposals: dict = state["proposals"]
     judged: dict = state["judged"]
     rest: list[Item] = []
+    landed: set[str] = set()
     for it in items:
         said = _said(it.text)
         if said in YES:
@@ -696,13 +707,11 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 out.filed.append((w, title))
                 judged[w.digest()] = {"kind": "note", "title": title}
                 marks.setdefault((w.folder, w.note_title), []).extend(_marks_for(w, f"{RECEIPT}{title}"))
+                landed.add(w.digest())
+                landed.update(p.digest() for p in w.parts)   # its parts landed with it
             _tick(ex, marks, out)
             receipts.append(f"made “{title}”, {len(waiting)} filed")
         _tick(ex, {(it.folder, it.note_title): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out)
-    landed = {digest for digest, v in judged.items()
-              if v.get("kind") == "note" and v.get("title") in out.created}
-    landed |= {digest for digest, v in judged.items()          # its parts landed with it
-               if v.get("kind") == "part" and v.get("of") in landed}
     return [it for it in rest if it.digest() not in landed]
 
 
