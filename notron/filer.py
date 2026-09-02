@@ -574,6 +574,8 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         it = items[i]
         judged[it.digest()] = {"kind": "new", "title": canonical}
         record = proposals.setdefault(canonical, {"asked": None, "items": []})
+        if canonical not in state["shapes"] and canonical in said_shapes:
+            state["shapes"][canonical] = layout.shape(said_shapes[canonical])
         if it.as_dict() not in record["items"]:
             record["items"].append(it.as_dict())
         if record["asked"] is None:
@@ -641,7 +643,9 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 receipts.append(f"left “{title}” alone")
                 continue
             say(f"making “{title}” with {len(waiting)} line(s)")
-            r = ex.append(title, _bullets(waiting), folder=FILING_FOLDER)
+            shape = _shape_for(title, {}, state)
+            r = ex.append(title, _entry_markdown(waiting, shape=shape, folder=FILING_FOLDER, title=title),
+                          folder=FILING_FOLDER)
             out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
             if not r.ok:
                 proposals[title] = record            # keep the question open
@@ -655,11 +659,14 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
             for w in waiting:
                 out.filed.append((w, title))
                 judged[w.digest()] = {"kind": "note", "title": title}
-                marks.setdefault((w.folder, w.note_title), []).append((w.anchor, w.near, f"{RECEIPT}{title}"))
+                marks.setdefault((w.folder, w.note_title), []).extend(_marks_for(w, f"{RECEIPT}{title}"))
             _tick(ex, marks, out)
             receipts.append(f"made “{title}”, {len(waiting)} filed")
         _tick(ex, {(it.folder, it.note_title): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out)
-    return rest
+    landed = {digest for digest, v in judged.items() if v.get("kind") == "note" and v.get("title") in out.created}
+    landed |= {digest for digest, v in judged.items()          # its parts landed with it
+              if v.get("kind") == "part" and v.get("of") in landed}
+    return [it for it in rest if it.digest() not in landed]
 
 
 def run(brain, *, dry_run: bool = False, on_step=None) -> Outcome:

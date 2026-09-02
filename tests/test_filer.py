@@ -514,11 +514,41 @@ def test_yes_creates_the_note_files_the_lines_and_ticks_the_yes(store):
     assert out.created == ["Skincare Brand"]
     assert "the serum from that brand" in store.text("Skincare Brand")
     assert store.find_note(filer.FILING_FOLDER, "Skincare Brand") is not None
+    assert store.text("Skincare Brand").count("the serum from that brand") == 1, "filed once — see Task 6"
+    assert [t for _, t in out.filed] == ["Skincare Brand"]
     d = store.text(workspace.DUMP)
     assert "✓ the serum from that brand → Skincare Brand" in d
     assert "✓ yes → made “Skincare Brand”, 1 filed" in d
     assert filer.pending_proposals() == {}
     assert brain.calls == 1, "a yes needs no model"
+
+
+def test_a_note_she_makes_starts_in_shape_with_the_whole_thought(store, monkeypatch):
+    """Becky never pre-builds a note. When Notron makes one it must already
+    read like a journal: title, today's date, the sentence, the list under it."""
+    store.add("Supplements", "-")
+    dump(store, "Pasta that worked:\ntomatoes\nbasil\n")
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain({"Pasta that worked:": {"new": "Recipes"},
+                        "tomatoes": {"part_of": "Pasta that worked:"},
+                        "basil": {"part_of": "Pasta that worked:"}},
+                       shapes={"Recipes": "list"})
+    filer.run(brain)
+    assert list(filer.pending_proposals()) == ["Recipes"]
+    assert [p.text for p in filer.pending_proposals()["Recipes"][0].parts] == ["tomatoes", "basil"]
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] += "<div>yes</div>"
+
+    out = filer.run(brain)
+
+    assert out.created == ["Recipes"]
+    assert store.text("Recipes") == "Recipes\n\nPasta that worked:\n• tomatoes\n• basil"
+    d = store.text(workspace.DUMP)
+    assert "✓ Pasta that worked: → Recipes\n✓ tomatoes\n✓ basil" in d
+    assert "✓ yes → made “Recipes”, 1 filed" in d
+    assert filer._state()["shapes"] == {"Recipes": "list"}
+    assert brain.calls == 1
+    assert store.text("Recipes").count("Pasta that worked:") == 1, "a yes files the thought once, not twice"
 
 
 def test_no_leaves_the_lines_alone_and_stops_her_asking_again(store):
