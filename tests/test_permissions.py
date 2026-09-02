@@ -24,3 +24,14 @@ def test_never_asked_and_denied_are_told_apart():
     checks = {c.app: c for c in permissions.check(reader=lambda: {"events": 0, "reminders": 2})}
     assert "not been asked" in checks["Calendar"].detail
     assert "denied" in checks["Reminders"].detail
+
+
+def test_json_flag_prints_the_same_checks_as_a_flat_list(capsys):
+    import argparse, json
+    from notron import cli
+
+    args = argparse.Namespace(json=True)
+    cli.cmd_permissions(args)
+    out = json.loads(capsys.readouterr().out)
+    assert isinstance(out, list)
+    assert {"app", "ok", "detail", "fix"} <= out[0].keys()

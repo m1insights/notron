@@ -78,6 +78,12 @@ No red/yellow/green/amber anywhere else. Good/bad, on/off, core/added = opacity 
 
 **Empty/first-run state** — icon in an `accent`-tinted 14–16px-radius tile, `headline`, one `body`-size explanatory line, single primary button. No secondary/skip action on a permission screen — CLAUDE.md's hang-not-fail behavior means skipping isn't actually safe to offer here.
 
+**Step dots** (added 2026-09-02, onboarding flow) — row of 4–6 circles, 6px diameter, `space-2` gaps, centered above the card. Current step = `accent` fill, done = `text-faint` fill, upcoming = `hairline`-bordered/empty (transparent fill). Light skin only. Never a numbered "Step 2 of 4" label — the dot row is the whole affordance.
+
+**Example row** (added 2026-09-02, "how to talk to her") — `surface` background, `hairline` border, radius `lg`, `space-4` padding, laid out as a flex row: the real glyph (`📥`/`🧠`/`#`) at ~24px on the left in a 32px-wide column, a name in `body` weight + one line of real example `caption` text stacked to its right. No icon tile beyond the glyph itself — the emoji already reads as the icon.
+
+**Listening status card** (added 2026-09-02) — full-width `surface` card, `hairline` border, radius `lg`, `space-6` padding, centered content. Off state: an `accent`-tinted icon tile (waveform glyph), `body` headline, `caption` explanatory line, primary button. On state: swaps the icon tile for the same success-teal checkmark the **API key field** uses, headline becomes "Notron is listening," caption names the exact trigger phrase (`#notron`, "Hey Siri, ask Notron…"). Transitions on `DS.Motion.standard` (200ms ease) — light skin only.
+
 ## Motion
 Light skin: 200ms ease on toggle/validate/segment changes. Dark skin: 100ms, no easing curve — reads as instant, matching the technical audience's expectation of responsiveness over polish. Respect `prefers-reduced-motion` — both collapse to an instant state change.
 

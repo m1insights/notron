@@ -16,7 +16,9 @@ colour, font size, radius, or spacing value that is not in that file — extend 
 token set there first. The Notes-native (light) skin is the default everywhere;
 the Operator (dark) skin is reserved for the Skills & Plugins screen only, since
 that screen is Advanced-tier only. Key screens and the magic moment are specced
-in `docs/design/02-screens.md`.
+in `docs/design/02-screens.md`; the first-run onboarding sequence (welcome →
+permissions → how to talk to her → start listening → handoff to "Your notes")
+is specced in `docs/design/04-onboarding-flow.md`.
 
 ## Commands
 
