@@ -50,7 +50,7 @@ Where I live:
 
 ———
 """,
-    DUMP: """Throw anything in here, one thought per line. When you've stopped for a while, Notron files each line into the right note and ticks it — nothing is ever deleted.
+    DUMP: """Throw anything in here, one thought per line — a list under a thought stays with it. When you've stopped for a while, Notron files each thought into the right note and ticks it — nothing is ever deleted.
 
 ———
 """,

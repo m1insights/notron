@@ -80,6 +80,20 @@ makes it and files the lines; say no and she leaves them alone. `@notron file th
 …` on a line in any other note does the same for that line, in place. And `notron
 file` runs it now.
 
+A sentence with lines under it is one thought — "the stack today:" and the list
+beneath it arrive together. In a note that logs things over time she writes the
+way you would in a journal: today's date once, in bold, then what you said:
+
+    Wed 2 Sep 2026
+    The stack did really well today once the trazodone wore off.
+    • Concerta 36mg
+    • Avmacol
+    • PQQ
+
+A note that collects things — recipes, ideas, names — gets plain bullets and no
+dates. She decides which a note is the first time she files into it, and sticks
+to it. A note she makes for you starts that way from its first line.
+
 **Tell her where things go — once.** Years of notes means three notes called "Supps"
 and a password note in the main list. In the app, "Your notes" shows every note
 with a three-way switch — *Home* (she may file into it), *Read only* (the
