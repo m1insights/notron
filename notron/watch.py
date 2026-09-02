@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import conversation, filer, graph, mentions, notes, workspace
+from .applescript import AppleScriptError, NotesBusy
 
 ASK_POLL = 5           # seconds between checks of the Ask note
 SWEEP_EVERY = 20       # seconds between sweeps for #notron mentions (a survey is ~1s)
@@ -125,7 +126,18 @@ class Watcher:
             if not note:
                 return
             self._ask_id = note.id
-        body = notes.read_body(self._ask_id)
+        try:
+            body = notes.read_body(self._ask_id)
+        except NotesBusy:
+            raise
+        except AppleScriptError:
+            # The id we cached no longer resolves — almost always because the
+            # note was deleted. Forget it so the next poll looks it up by
+            # title again; that's what lets a recreated note be found instead
+            # of failing forever on the same dead id.
+            self._ask_id = None
+            self._say(f"  {workspace.ASK} not found — will look again")
+            return
         for q in conversation.unanswered(body, ignore=ASK_FURNITURE):
             if len(q.text) < MIN_CHARS:
                 continue
@@ -175,7 +187,16 @@ class Watcher:
             if not note:
                 return
             self._dump_id = note.id
-        body = notes.read_body(self._dump_id)
+        try:
+            body = notes.read_body(self._dump_id)
+        except NotesBusy:
+            raise
+        except AppleScriptError:
+            # Same stale-id story as check_ask: the cached id died, most
+            # likely a deletion. Drop it and re-resolve by title next time.
+            self._dump_id = None
+            self._say(f"  {workspace.DUMP} not found — will look again")
+            return
         if not filer.worth_a_pass(body):
             self._pending.pop("dump", None)
             return

@@ -73,9 +73,20 @@ def check() -> list[Signal]:
     out: list[Signal] = []
 
     # 1. The instruction note. She re-reads it on every run, so its size is a tax.
-    about = _note_text(workspace.ABOUT)
+    about_note = notes.find_note(workspace.FOLDER, workspace.ABOUT)
+    about = markup.to_text(notes.read_body(about_note.id)) if about_note else ""
     n = len(about)
-    if n > ABOUT_HEAVY:
+    if about_note is None:
+        # Distinct from "nearly empty" below: the note itself is gone, not
+        # just unfilled-in. Say so plainly — nothing recreates this note for
+        # you (it's the one Notron can never write), so it stays silently
+        # unenforced until you notice unless this line says it out loud.
+        out.append(Signal(
+            "about_size", "needs you",
+            f"{workspace.ABOUT} is missing — I have none of your standing instructions right now.",
+            "Restore it from Notes' Recently Deleted, or run `notron setup` to recreate a blank one.",
+        ))
+    elif n > ABOUT_HEAVY:
         out.append(Signal(
             "about_size", "needs you",
             f"{workspace.ABOUT} is {n:,} characters — I read all of it before every single thing I do.",

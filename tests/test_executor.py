@@ -75,3 +75,21 @@ def test_replace_mode_is_not_slowed_by_the_extra_read(monkeypatch):
 
     assert result.ok
     assert len(reads) == 1
+
+
+def test_the_log_recreates_itself_if_it_was_deleted(monkeypatch):
+    """Every write is supposed to land in 📊 Log (invariant #4). If the note
+    itself got deleted, the old code just returned — every future write still
+    reported success while the audit trail was silently gone for good."""
+    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: None)
+    created = []
+    monkeypatch.setattr(ex_mod.notes, "create_note",
+                         lambda folder, body: created.append((folder, body)) or "new-id")
+
+    ex_mod.Executor()._log("did a thing")
+
+    assert len(created) == 1
+    folder, body = created[0]
+    assert folder == ex_mod.workspace.FOLDER
+    assert "did a thing" in body
+    assert ex_mod.workspace.LOG in body  # the seed's title heading survives

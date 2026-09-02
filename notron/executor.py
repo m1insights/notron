@@ -166,7 +166,14 @@ class Executor:
             return
         entry = f"{datetime.now():%Y-%m-%d %H:%M} — {line}"
         log = notes.find_note(workspace.FOLDER, workspace.LOG)
-        if not log:
-            return
-        body = notes.read_body(log.id)
-        notes.write_body(log.id, body + markup.to_html(entry))
+        if log:
+            body = notes.read_body(log.id)
+            notes.write_body(log.id, body + markup.to_html(entry))
+        else:
+            # Every write is supposed to land here (invariant #4). If the note
+            # itself got deleted, recreate it from its seed instead of
+            # silently losing the audit trail from here on — the same
+            # self-heal 📖 Lessons already gets from `replace` recreating it
+            # the next time there's something to write.
+            seed = markup.render(workspace.LOG, workspace.SEEDS[workspace.LOG])
+            notes.create_note(workspace.FOLDER, seed + markup.to_html(entry))

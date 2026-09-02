@@ -3,6 +3,8 @@
 import sys, pathlib, time
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import pytest
+
 from notron import conversation, markup, watch, workspace
 
 
@@ -68,6 +70,41 @@ def test_the_listener_survives_notes_going_away(monkeypatch):
     t.start()
     time.sleep(0.3)
     assert len(calls) > 1, "loop stopped after the first failure"
+
+
+def test_check_ask_forgets_a_deleted_note_and_looks_again(monkeypatch):
+    """A cached note id that has been deleted out from under the listener must
+    not be retried forever. The old code never reset it, so a deleted-then-
+    recreated Ask note was never found again without a restart."""
+    w = watch.Watcher(brain=None)
+    w._ask_id = "stale-id"
+    monkeypatch.setattr(watch.notes, "read_body",
+                         lambda note_id: (_ for _ in ()).throw(
+                             watch.AppleScriptError("Can't get note id \"stale-id\".")))
+    w.check_ask()
+    assert w._ask_id is None
+
+
+def test_check_ask_keeps_the_id_when_notes_is_only_busy(monkeypatch):
+    """A timeout isn't a deletion — don't pay for a fresh lookup over a hiccup,
+    and let the caller's normal retry-the-whole-loop handling deal with it."""
+    w = watch.Watcher(brain=None)
+    w._ask_id = "n1"
+    monkeypatch.setattr(watch.notes, "read_body",
+                         lambda note_id: (_ for _ in ()).throw(watch.NotesBusy("timed out")))
+    with pytest.raises(watch.NotesBusy):
+        w.check_ask()
+    assert w._ask_id == "n1"
+
+
+def test_check_dump_forgets_a_deleted_note_and_looks_again(monkeypatch):
+    w = watch.Watcher(brain=None)
+    w._dump_id = "stale-id"
+    monkeypatch.setattr(watch.notes, "read_body",
+                         lambda note_id: (_ for _ in ()).throw(
+                             watch.AppleScriptError("Can't get note id \"stale-id\".")))
+    w.check_dump()
+    assert w._dump_id is None
 
 
 def test_a_restart_does_not_lose_a_tag(tmp_path, monkeypatch):

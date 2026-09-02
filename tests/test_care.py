@@ -49,6 +49,20 @@ def test_the_care_note_leads_with_the_mood_emoji():
     assert body.startswith(f"{emoji} {label}")
 
 
+def test_she_says_about_me_is_missing_not_nearly_empty(monkeypatch):
+    """A note that's gone (deleted, maybe by accident) reads very differently
+    from a note that exists but is unfilled-in — she has zero of the user's
+    standing instructions either way, but only one of those is a note nobody
+    can restore for you, so it needs its own, louder message."""
+    monkeypatch.setattr(care.notes, "find_note", lambda folder, title: None)
+    signals = care.check()
+    about = [s for s in signals if s.key == "about_size"]
+    assert about and about[0].severity == "needs you"
+    assert "missing" in about[0].fact
+    assert "nearly empty" not in about[0].fact
+    assert "setup" in about[0].ask
+
+
 def test_she_asks_for_help_when_an_app_stops_answering(monkeypatch):
     """Automation approval can be revoked in System Settings at any time, and the
     only symptom is silence. The care note is where silence becomes a sentence."""
