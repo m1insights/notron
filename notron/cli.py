@@ -197,6 +197,73 @@ def cmd_file(args):
     print(f"\n{out.summary()}\n")
 
 
+def cmd_library(args):
+    """Which notes she may file into, and which she never reads."""
+    import json
+    from datetime import datetime
+
+    from . import library, notes
+
+    if args.action == "scan":
+        print(json.dumps(library.scan()))
+        return
+
+    if args.reset:
+        library.save(library.Library())
+        print("\n  Forgotten — every note is read only again, and the Filer may use any of them.\n")
+        return
+
+    lib = library.load()
+    live: list | None = None
+
+    def resolve(ref: str) -> str:
+        nonlocal live
+        if live is None:
+            live = [n for n in notes.list_all_notes() if n.folder != workspace.FOLDER]
+        if any(n.id == ref for n in live):
+            return ref
+        hits = [n for n in live if n.title == ref]
+        if len(hits) == 1:
+            return hits[0].id
+        if not hits:
+            print(f"\n  No note called {ref!r}.\n")
+            raise SystemExit(1)
+        print(f"\n  {len(hits)} notes are called {ref!r} — say which by id:")
+        for n in hits:
+            print(f"    {n.id}   ({n.folder}, edited {n.modified})")
+        print()
+        raise SystemExit(1)
+
+    changed = False
+    for ref in args.home:
+        nid = resolve(ref); lib.homes.add(nid); lib.ignore.discard(nid); changed = True
+    for ref in args.ignore:
+        nid = resolve(ref); lib.ignore.add(nid); lib.homes.discard(nid); changed = True
+    for ref in args.read:
+        nid = resolve(ref); lib.homes.discard(nid); lib.ignore.discard(nid); changed = True
+    if args.start_from:
+        try:
+            lib.start_from = library.parse_start(args.start_from)
+        except ValueError as e:
+            print(f"\n  {e}\n"); raise SystemExit(1)
+        changed = True
+    if changed:
+        lib.chosen_at = datetime.now().isoformat(timespec="minutes")
+        library.save(lib)
+
+    out = library.scan(lib)
+    c = out["counts"]
+    since = f" · start from {out['start_from']}" if out["start_from"] else ""
+    print(f"\n  {c['home']} homes · {c['read']} read only · {c['ignore']} ignored{since}")
+    if not out["configured"]:
+        print("  (nothing chosen yet — these are her guesses; open the app or pass --home/--ignore)")
+    print()
+    for row in out["notes"]:
+        if row["state"] == "home":
+            print(f"  \u2302 {row['title']}")
+    print()
+
+
 def cmd_models(args):
     for m in _brain().available_models():
         mark = " ←" if "nemotron" in m.lower() else ""
@@ -255,6 +322,19 @@ def main(argv=None):
     ix = sub.add_parser("index", help="teach Notron your notes (run after adding a lot)")
     ix.add_argument("--rebuild", action="store_true", help="re-embed everything from scratch")
     ix.set_defaults(fn=cmd_index)
+
+    lb = sub.add_parser("library", help="which notes she may file into, and which she never reads")
+    lb.add_argument("action", nargs="?", choices=["show", "scan"], default="show",
+                    help="scan = JSON for the Mac app")
+    lb.add_argument("--home", action="append", default=[], metavar="TITLE_OR_ID",
+                    help="a note she may file lines into (repeatable)")
+    lb.add_argument("--ignore", action="append", default=[], metavar="TITLE_OR_ID",
+                    help="a note she must never read (repeatable)")
+    lb.add_argument("--read", action="append", default=[], metavar="TITLE_OR_ID",
+                    help="back to the default: readable, never filed into")
+    lb.add_argument("--start-from", metavar="YEAR", help="ignore notes last edited before this, e.g. 2026")
+    lb.add_argument("--reset", action="store_true", help="forget every choice")
+    lb.set_defaults(fn=cmd_library)
 
     sub.add_parser("models", help="list models this Nebius key can run").set_defaults(fn=cmd_models)
     sub.add_parser("graph", help="show the node graph").set_defaults(fn=cmd_graph)

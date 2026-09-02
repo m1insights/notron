@@ -214,3 +214,28 @@ def test_care_counts_only_notes_she_is_allowed_to_read(monkeypatch, state):
     _ignoring(monkeypatch, state, "n2")
     hit = [s for s in care.check() if s.key == "index"]
     assert hit and "your 1 notes" in hit[0].fact
+
+
+def test_the_cli_sets_a_home_by_title_and_refuses_an_ambiguous_one(monkeypatch, state, capsys):
+    from notron import cli, notes, index
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [
+        note("n1", "Supps", days_ago=1), note("n2", "Supps", days_ago=300), note("n3", "Groceries")])
+    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    cli.main(["library", "--home", "Groceries", "--start-from", "2026"])
+    lib = library.load()
+    assert lib.homes == {"n3"} and lib.start_from == datetime(2026, 1, 1)
+    with pytest.raises(SystemExit):
+        cli.main(["library", "--home", "Supps"])
+    assert "2 notes are called" in capsys.readouterr().out
+    cli.main(["library", "--home", "n1"])          # an id always works
+    assert library.load().homes == {"n3", "n1"}
+
+
+def test_the_cli_scan_prints_json_for_the_app(monkeypatch, state, capsys):
+    import json
+    from notron import cli, notes, index
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Groceries")])
+    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    cli.main(["library", "scan"])
+    out = json.loads(capsys.readouterr().out)
+    assert out["notes"][0]["title"] == "Groceries" and "counts" in out
