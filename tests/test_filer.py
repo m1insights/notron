@@ -64,10 +64,15 @@ class Store:
 
 
 class FilerBrain:
-    """Answers the Filer's question from a table keyed by line text."""
+    """Answers the Filer's question from a table keyed by line text.
 
-    def __init__(self, verdicts: dict[str, dict]):
+    A verdict is {"note": title}, {"new": title}, or {"part_of": "<the lead
+    line's text>"} — the fake turns the lead's text into its number in the
+    prompt, the way the model would. `shapes` is returned as-is."""
+
+    def __init__(self, verdicts: dict[str, dict], shapes: dict[str, str] | None = None):
         self.verdicts = verdicts
+        self.shapes = shapes or {}
         self.calls = 0
         self.prompts = []
 
@@ -75,12 +80,17 @@ class FilerBrain:
         self.calls += 1
         self.prompts.append(user)
         assert kw.get("tier") == filer.TIER
+        numbered = {m.group(2): int(m.group(1)) for m in re.finditer(r"^(\d+)\. (.*)$", user, re.M)}
         rows = []
-        for m in re.finditer(r"^(\d+)\. (.*)$", user, re.M):
-            v = self.verdicts.get(m.group(2))
-            if v:
-                rows.append({"line": int(m.group(1)), **v})
-        return {"filed": rows}
+        for text, n in numbered.items():
+            v = self.verdicts.get(text)
+            if not v:
+                continue
+            if "part_of" in v:
+                rows.append({"line": n, "part_of": numbered.get(v["part_of"], 0)})
+            else:
+                rows.append({"line": n, **v})
+        return {"filed": rows, "shapes": dict(self.shapes)}
 
     def ask(self, **kw):
         raise AssertionError("the Filer must never pay for a text model call")
@@ -295,10 +305,33 @@ def test_a_title_the_model_invented_becomes_a_proposal_never_a_write():
                         "serum": {"new": "Skincare Brand."},
                         "oats": {"note": "Supplements: magnesium 400mg"},        # Nano pads with the glimpse
                         "act two": {"note": '"Book idea" — a lighthouse'}})      # longest title wins
-    v = filer.classify(brain, items, masters)
+    v, shapes = filer.classify(brain, items, masters)
     assert v == [("note", "Supplements"), ("new", "Book Ideas"), ("new", "Skincare Brand"),
                  ("note", "Supplements"), ("note", "Book idea")]
     assert ("json", filer.TIER) not in [] and brain.calls == 1
+
+
+def test_the_model_sees_a_blank_line_between_runs():
+    items = [filer.Item("a", "a", 0, "d", "f", run=0), filer.Item("b", "b", 1, "d", "f", run=0),
+             filer.Item("c", "c", 3, "d", "f", run=1)]
+    assert filer._prompt(items, []).endswith("# Lines to file\n1. a\n2. b\n\n3. c")
+
+
+def test_a_part_points_at_an_earlier_line_in_the_same_run_or_it_is_ignored():
+    items = [filer.Item("the stack today:", "x", 0, "d", "f", run=0),
+             filer.Item("magnesium", "x", 1, "d", "f", run=0),
+             filer.Item("zinc", "x", 2, "d", "f", run=0),
+             filer.Item("act two needs a storm", "x", 4, "d", "f", run=1),
+             filer.Item("a lighthouse", "x", 5, "d", "f", run=1)]
+    brain = FilerBrain({"the stack today:": {"note": "Supps"},
+                        "magnesium": {"part_of": "the stack today:"},
+                        "zinc": {"part_of": "magnesium"},                 # a part of a part → the lead
+                        "act two needs a storm": {"part_of": "zinc"},      # crosses a run → ignored
+                        "a lighthouse": {"part_of": "a lighthouse"}},     # points at itself → ignored
+                       shapes={"Supps": "log", "Nonsense": "list"})
+    verdicts, shapes = filer.classify(brain, items, [filer.Master("Supps", "Notes")])
+    assert verdicts == [("note", "Supps"), ("part", "0"), ("part", "0"), None, None]
+    assert shapes == {"Supps": "log", "Nonsense": "list"}
 
 
 def test_secret_looking_lines_never_reach_the_model_and_glimpses_are_redacted(monkeypatch):

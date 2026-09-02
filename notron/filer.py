@@ -271,7 +271,9 @@ note it belongs in.
 
 Reply with JSON only:
 {"filed": [{"line": 1, "note": "<the title between the quotes, copied exactly>"},
-           {"line": 2, "new": "<a short Title Case name for a note that does not exist yet>"}]}
+           {"line": 2, "new": "<a short Title Case name for a note that does not exist yet>"},
+           {"line": 3, "part_of": 2}],
+ "shapes": {"<title>": "log" or "list", ...}}
 
 Rules:
 - "note" is only ever the title between the quotes — never the glimpse, never a
@@ -282,6 +284,15 @@ Rules:
 - Use "new" only when none of their notes is about that subject. A wrong note is
   worse than a question — never force a line into the nearest bucket.
 - Lines that belong together get the same "new" title, so one note can hold them.
+- Some lines are not thoughts of their own but belong under the line above them:
+  the list under "the stack I took today:", the steps under a recipe, the items
+  under "to pack:". Give each of those {"line": N, "part_of": M} where M is the
+  line they hang from, and nothing else — they go wherever line M goes. Only a
+  line directly below, in the same group; a blank line always separates thoughts.
+- For every title you used, say in "shapes" what kind of note it is: "log" if it
+  collects things that happen over time — what they took, ate, did, trained,
+  felt, spent — or "list" if it collects things that simply exist — recipes,
+  ideas, names, places, things to buy.
 - Every line appears exactly once. Output nothing but the JSON object."""
 
 
@@ -289,8 +300,12 @@ def _prompt(items: list[Item], candidates: list[Master]) -> str:
     listing = "\n".join(
         f'- "{m.title}"' + (f" — {m.glimpse}" if m.glimpse else "") for m in candidates
     ) or "(they have no notes yet)"
-    numbered = "\n".join(f"{i}. {privacy.redact(it.text)}" for i, it in enumerate(items, start=1))
-    return f"# Their notes\n{listing}\n\n# Lines to file\n{numbered}"
+    numbered: list[str] = []
+    for i, it in enumerate(items, start=1):
+        if numbered and it.run != items[i - 2].run:
+            numbered.append("")                      # the blank line they left, so the model sees it
+        numbered.append(f"{i}. {privacy.redact(it.text)}")
+    return f"# Their notes\n{listing}\n\n# Lines to file\n" + "\n".join(numbered)
 
 
 def _match(said: str, by_key: dict[str, str]) -> str | None:
@@ -312,18 +327,23 @@ def _match(said: str, by_key: dict[str, str]) -> str | None:
     return best[1] if best else None
 
 
-def classify(brain, items: list[Item], candidates: list[Master]) -> list[tuple[str, str] | None]:
-    """One verdict per item: ("note", existing title), ("new", proposed title),
-    or None when the model said nothing usable about that line.
+def classify(brain, items: list[Item], candidates: list[Master]
+             ) -> tuple[list[tuple[str, str] | None], dict[str, str]]:
+    """One verdict per item — ("note", existing title), ("new", proposed title),
+    ("part", index of its lead as a string) or None when the model said nothing
+    usable — and the shape the model named for each title it used.
 
     The model proposes; this validates. A title that is not on the list is
-    treated as a proposal, never as a place to write."""
+    treated as a proposal, never as a place to write. A part may only hang from
+    an earlier line in the same run; a part of a part hangs from the lead."""
     by_key = {m.title.casefold(): m.title for m in candidates}
     verdicts: list[tuple[str, str] | None] = [None] * len(items)
+    shapes: dict[str, str] = {}
     for start in range(0, len(items), MAX_LINES):
         batch = items[start:start + MAX_LINES]
         out = brain.ask_json(system=FILER_SYSTEM, user=_prompt(batch, candidates),
-                             tier=TIER, max_tokens=min(200 + 40 * len(batch), 1600))
+                             tier=TIER, max_tokens=min(240 + 40 * len(batch), 1600))
+        parts: dict[int, int] = {}                   # batch index -> batch index it hangs from
         for row in out.get("filed") or []:
             if not isinstance(row, dict):
                 continue
@@ -333,6 +353,14 @@ def classify(brain, items: list[Item], candidates: list[Master]) -> list[tuple[s
                 continue
             if not 1 <= n <= len(batch):
                 continue
+            if row.get("part_of") is not None:
+                try:
+                    m = int(row["part_of"])
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= m < n and batch[m - 1].run == batch[n - 1].run:
+                    parts[n - 1] = m - 1
+                continue
             note = str(row.get("note") or "").strip()
             new = str(row.get("new") or "").strip()
             hit = _match(note, by_key) if note else None
@@ -340,7 +368,16 @@ def classify(brain, items: list[Item], candidates: list[Master]) -> list[tuple[s
                 verdicts[start + n - 1] = ("note", hit)
             elif note or new:
                 verdicts[start + n - 1] = ("new", _title(new or note))
-    return verdicts
+        for k, lead in parts.items():
+            hops = 0
+            while lead in parts and hops < len(batch):     # a part of a part → its lead
+                lead, hops = parts[lead], hops + 1
+            if lead not in parts and verdicts[start + lead] is not None:
+                verdicts[start + k] = ("part", str(start + lead))
+        for title, said in (out.get("shapes") or {}).items():
+            if isinstance(title, str) and title.strip():
+                shapes[title.strip()] = str(said)
+    return verdicts, shapes
 
 
 def _title(text: str) -> str:
