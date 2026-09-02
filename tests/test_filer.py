@@ -92,11 +92,12 @@ SEED = workspace.SEEDS[workspace.DUMP]
 @pytest.fixture
 def store(monkeypatch, tmp_path):
     s = Store()
-    from notron import notes, index
+    from notron import notes, index, library
     for name in ("find_note", "read_body", "write_body", "create_note", "list_all_notes"):
         monkeypatch.setattr(notes, name, getattr(s, name))
     monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     monkeypatch.setattr(filer, "STATE", tmp_path / "filer.json")
+    monkeypatch.setattr(library, "STATE", tmp_path / "library.json")   # never the developer's own choices
     s.add(workspace.LOG, "Everything Notron did.\n\n———\n", folder=workspace.FOLDER)
     return s
 
