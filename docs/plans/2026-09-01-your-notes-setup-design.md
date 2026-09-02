@@ -1,4 +1,4 @@
-# "Your notes" — onboarding step 2 + Settings screen (design, approved 2026-09-01)
+# "Your notes" — onboarding step 2 + Settings screen (approved; BUILT 2026-09-02)
 
 **Goal:** a messy, years-old notes library must not make Notron file things into
 the wrong place or read what it should not. Setup lets the user say, in one

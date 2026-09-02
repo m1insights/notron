@@ -84,9 +84,15 @@ class Scanner:
         enough: Notron waits for your typing to settle before she replies, and
         settling takes at least two looks.
         """
+        from . import library
+
+        lib = library.load()
         out = []
         for n in notes.list_all_notes():
-            if n.folder == workspace.FOLDER:
+            if n.folder == workspace.FOLDER or lib.is_ignored(n):
+                # Hers, or the user's business: remembered as seen, never read.
+                # Un-ignoring later then means "read it from now", not "answer
+                # every tag it ever held".
                 self.seen[n.id] = n.modified
                 continue
             if self.seen.get(n.id) != n.modified or n.id in self.pending:

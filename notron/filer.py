@@ -212,14 +212,21 @@ def _said(text: str) -> str:
 # ----------------------------------------------------------------- masters
 
 def masters(*, exclude: set[str] = frozenset()) -> list[Master]:
-    """The user's own notes, newest first, with a glimpse of each from the
-    index when there is one. Notron's own notes are never candidates, and
-    neither is anything that holds credentials or reads as private."""
+    """The notes lines may be filed into: the user's chosen homes, or — before
+    any are chosen — every note of theirs she may read, newest first, with a
+    glimpse of each from the index when there is one. Notron's own notes are
+    never candidates, and neither is anything that holds credentials or reads
+    as private."""
     glimpses = index.glimpses(GLIMPSE_CHARS)
     seen: set[str] = set()
     live = []
-    for n in notes.list_all_notes():
-        if n.folder == workspace.FOLDER or not n.title.strip() or n.title in exclude:
+    from . import library
+
+    lib = library.load()
+    for n in library.user_notes(lib):
+        if lib.homes and n.id not in lib.homes:
+            continue                       # the user said where things go
+        if not n.title.strip() or n.title in exclude:
             continue
         if privacy.is_vault(n.title) or privacy.is_private(n.title):
             continue
@@ -538,6 +545,9 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 receipts.append(f"couldn't make “{title}”: {r.reason}")
                 continue
             out.created.append(title)
+            if r.note_id:
+                from . import library
+                library.add_home(r.note_id)
             marks: dict[tuple[str, str], list[tuple[str, int, str]]] = {}
             for w in waiting:
                 out.filed.append((w, title))

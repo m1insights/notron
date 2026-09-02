@@ -108,7 +108,9 @@ def check() -> list[Signal]:
         out.append(Signal("about_size", "ok", f"{workspace.ABOUT} is {n:,} characters.", ""))
 
     # 2. Notes she has never read.
-    live = [x for x in notes.list_all_notes() if x.folder != workspace.FOLDER]
+    from . import library
+
+    live = library.user_notes()
     known = set(json.loads(index.CACHE.read_text()).keys()) if index.exists() else set()
     unlearned = [x for x in live if x.id not in known]
     if not index.exists():

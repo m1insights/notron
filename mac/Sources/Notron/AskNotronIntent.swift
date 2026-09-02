@@ -25,34 +25,13 @@ struct AskNotronIntent: AppIntent {
     /// DMG to other users requires bundling a portable Python runtime inside the .app
     /// (see mac/README.md) — this is the placeholder that makes local Siri testing work today.
     private static func runNotron(_ request: String) throws -> String {
-        let pythonPath = ProcessInfo.processInfo.environment["NOTRON_PYTHON"]
-            ?? "/Users/m1labs/Dev/apps/juno/.venv/bin/python"
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: pythonPath)
-        process.arguments = ["-m", "notron", "ask", "--quiet", request]
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-
-        try process.run()
-        process.waitUntilExit()
-
-        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let text = String(data: outData, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-        if text.isEmpty {
-            let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-            let errText = String(data: errData, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return errText.isEmpty
+        do {
+            return try Core.run(["ask", "--quiet", request])
+        } catch let failure as Core.Failure {
+            return failure.description == "Notron said nothing."
                 ? "I don't have anything to say to that."
-                : "Notron hit a problem: \(errText)"
+                : "Notron hit a problem: \(failure.description)"
         }
-        return text
     }
 }
 

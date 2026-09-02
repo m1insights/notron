@@ -94,7 +94,9 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
     from . import markup, notes, workspace
 
     cached = {} if force else _load()
-    live = [n for n in notes.list_all_notes() if n.folder != workspace.FOLDER]
+    from . import library
+
+    live = library.user_notes()
 
     fresh: dict[str, list[dict]] = {}
     pending: list[tuple[str, Chunk]] = []
@@ -136,7 +138,7 @@ def search(query: str, brain, *, limit: int = 8) -> list[Chunk]:
     import numpy as np
 
     data = _load()
-    rows = [r for chunks in data.values() for r in chunks if r.get("row") is not None]
+    rows = _readable([r for chunks in data.values() for r in chunks if r.get("row") is not None])
     if not rows or not VECTORS.exists():
         return []
 
@@ -161,6 +163,15 @@ def search(query: str, brain, *, limit: int = 8) -> list[Chunk]:
         if len(out) >= limit:
             break
     return out
+
+
+def _readable(rows: list[dict]) -> list[dict]:
+    """The index can be a week older than the user's choices. A note they have
+    since ignored must not surface just because it was embedded earlier."""
+    from . import library
+
+    lib = library.load()
+    return [r for r in rows if not lib.hides(r["note_id"], r.get("modified", ""))]
 
 
 def exists() -> bool:

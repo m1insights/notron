@@ -559,3 +559,36 @@ def test_the_cli_has_a_file_command():
     finally:
         pass
     assert captured.get("dry_run") is True
+
+
+def test_with_homes_chosen_only_homes_are_destinations(store, monkeypatch):
+    from notron import library
+    monkeypatch.setattr(library, "STATE", filer.STATE.parent / "library.json")
+    sup = store.add("Supps", "-")
+    store.add("Track which supplements actually improve your sleep…", "App Store listing")
+    library.save(library.Library(homes={sup}))
+    titles = [m.title for m in filer.masters()]
+    assert titles == ["Supps"], "the listing note is readable, but never a place to file"
+
+
+def test_with_no_homes_chosen_every_readable_note_is_still_a_candidate(store, monkeypatch):
+    from notron import library
+    monkeypatch.setattr(library, "STATE", filer.STATE.parent / "library.json")
+    store.add("Supps", "-")
+    store.add("Groceries", "-")
+    assert sorted(m.title for m in filer.masters()) == ["Groceries", "Supps"]
+
+
+def test_a_note_made_after_a_yes_joins_the_homes(store, monkeypatch):
+    from notron import library
+    monkeypatch.setattr(library, "STATE", filer.STATE.parent / "library.json")
+    sup = store.add("Supps", "-")
+    library.save(library.Library(homes={sup}))
+    dump(store, "the serum from that brand\n")
+    brain = FilerBrain({"the serum from that brand": {"new": "Skincare Brand"}})
+    filer.run(brain)
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] += "<div>yes</div>"
+    filer.run(brain)
+    made = store.find_note(filer.FILING_FOLDER, "Skincare Brand").id
+    assert made in library.load().homes
