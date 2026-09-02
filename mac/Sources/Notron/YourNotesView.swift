@@ -102,7 +102,7 @@ struct YourNotesView: View {
                 .focused($searching)
                 .padding(.horizontal, DS.Space.s3).padding(.vertical, DS.Space.s2)
                 .background(DS.Color.surface)
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(DS.Color.hairlineLight))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.md).stroke(DS.Color.hairline))
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.md))
             Spacer()
             Text("Start from").font(DS.Font.caption).foregroundStyle(DS.Color.textDim)
@@ -138,7 +138,7 @@ struct YourNotesView: View {
                         LazyVStack(spacing: 0) {
                             ForEach(shown) { note in
                                 row(note).id(note.id)
-                                Rectangle().fill(DS.Color.hairlineLight).frame(height: 1)
+                                Rectangle().fill(DS.Color.hairline).frame(height: 1)
                             }
                         }
                     }
@@ -151,7 +151,7 @@ struct YourNotesView: View {
                 }
                 .background(DS.Color.surface)
                 .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg))
-                .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(DS.Color.hairlineLight))
+                .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(DS.Color.hairline))
             }
         }
         .frame(maxHeight: .infinity)
@@ -194,7 +194,7 @@ struct YourNotesView: View {
         VStack(alignment: .leading, spacing: 0) {
             if let note = model.selectedNote {
                 previewHeader(note)
-                Rectangle().fill(DS.Color.hairlineLight).frame(height: 1)
+                Rectangle().fill(DS.Color.hairline).frame(height: 1)
                 previewBody(note)
             } else {
                 VStack(spacing: DS.Space.s2) {
@@ -210,7 +210,7 @@ struct YourNotesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DS.Color.surface)
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg))
-        .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(DS.Color.hairlineLight))
+        .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(DS.Color.hairline))
     }
 
     private func previewHeader(_ note: LibraryNote) -> some View {

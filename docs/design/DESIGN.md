@@ -13,13 +13,13 @@ Derived from: https://claude.ai/code/artifact/3e182338-2fa2-459e-94bc-b91f276f66
 | Token | Light (default) | Dark (Skills & Plugins only) | Use |
 |---|---|---|---|
 | `bg` | `#FAFAFA` | `#0B0B0D` | Window background |
-| `surface` | `#FFFFFF` | `#131316` | Cards, rows, fields |
-| `surface-alt` | `#EFEFF1` | `#151519` | Title bar, segmented control track |
+| `surface` | `#FFFFFF` | `#1C1C21` | Cards, rows, fields. Dark value lifted from `#131316` on 2026-09-02 — a 2% step over `bg` is invisible on a real screen; elevation has to be seen. |
+| `surface-alt` | `#EFEFF1` | `#2A2A31` | Title bar, segmented control track, selected row. Dark value lifted from `#151519` on 2026-09-02 for the same reason. |
 | `text` | `#1A1A1E` | `#F2F2F4` | Primary text |
 | `text-dim` | `#6B6B70` | `#9A9AA2` | Secondary, captions |
 | `text-faint` | `#8A8A90` | `#6B6B72` | Section labels, timestamps |
 | `accent` | `#0FA3B1` | `#0FA3B1` (links render `#3FD4E0` on dark for contrast) | The ONE accent — CTAs, active toggles, active model tier |
-| `hairline` | `#E4E4E8` | `rgba(255,255,255,.08–.12)` | Borders, dividers |
+| `hairline` | `#E4E4E8` | `#3A3A42` | Borders, dividers. It flips with the skin — a black hairline on the dark skin is no hairline, which is most of why the first "Your notes" build read as one flat sheet. |
 | `success` | text/icon at full opacity + accent-adjacent teal `#28A745` used ONLY for the literal "Connected" checkmark (system-level confirmation, not a product status color) | same | Key-validated state |
 | `text-faint-dark` | n/a | `#9C9CA6` | **Section eyebrows on the dark skin only** ("Core", "Added by you", "Monthly budget"). Fixed 2026-08-31 — the original `#6B6B72` failed contrast on `#0B0B0D`; this is the corrected value, don't regress it. |
 
@@ -45,7 +45,7 @@ No red/yellow/green/amber anywhere else. Good/bad, on/off, core/added = opacity 
 
 ## Elevation
 - Light skin: one level only — `0 20px 60px rgba(0,0,0,.15)` on the window itself; cards get no shadow, a 1px `hairline` border instead.
-- Dark skin: no shadows; elevation is a lighter `surface` (`#131316`) against `bg` (`#0B0B0D`) plus a 1px hairline. Window shadow `0 20px 60px rgba(0,0,0,.5)`.
+- Dark skin: no shadows; elevation is a lighter `surface` (`#1C1C21`) against `bg` (`#0B0B0D`) plus a 1px hairline. Both halves are load-bearing: drop the hairline and the cards vanish however light the surface is. Window shadow `0 20px 60px rgba(0,0,0,.5)`.
 - Menu-bar dropdown: `0 20px 50px rgba(0,0,0,.18)` light / `.5` dark, always with a 1px border — it floats over arbitrary desktop content.
 
 ## Components
