@@ -375,9 +375,11 @@ def classify(brain, items: list[Item], candidates: list[Master]
                 lead = parts[lead]          # goes strictly backwards, so the walk always lands
             if verdicts[start + lead] is not None:
                 verdicts[start + k] = ("part", str(start + lead))
-        for title, said in (out.get("shapes") or {}).items():
-            if isinstance(title, str) and title.strip():
-                shapes[title.strip()] = str(said)
+        said_shapes_raw = out.get("shapes")
+        if isinstance(said_shapes_raw, dict):
+            for title, said in said_shapes_raw.items():
+                if isinstance(title, str) and title.strip():
+                    shapes[title.strip()] = str(said)
     return verdicts, shapes
 
 
@@ -441,6 +443,36 @@ def _turn(markdown: str) -> str:
 
 def _today() -> date:
     return date.today()
+
+
+def _flatten_parts(items: list[Item], parts_of: dict[int, list[int]], judged: dict) -> dict[int, list[int]]:
+    """Collapse a two-level chain onto its root.
+
+    A remembered part (B under C, from a pass that judged them together) and a
+    freshly judged one (C under A, because a new line landed above C this
+    pass) can chain: `parts_of` then has C as both a lead and someone else's
+    part, and C is never anyone's verdict — `_fold` would carry B nowhere,
+    filed silently short one line. Every part walks to its ultimate root
+    instead, in the order it was found, and `judged` is corrected to point
+    a re-chained part straight at that root."""
+    lead_of = {p: lead for lead, parts in parts_of.items() for p in parts}
+    roots = [i for i in parts_of if i not in lead_of]
+
+    def collect(i: int, into: list[int]) -> None:
+        for p in parts_of.get(i, []):
+            into.append(p)
+            collect(p, into)
+
+    flat: dict[int, list[int]] = {}
+    for root in roots:
+        collected: list[int] = []
+        collect(root, collected)
+        flat[root] = collected
+        for p in collected:
+            digest = items[p].digest()
+            if judged.get(digest, {}).get("kind") == "part":
+                judged[digest] = {"kind": "part", "of": items[root].digest()}
+    return flat
 
 
 def _fold(items: list[Item], parts_of: dict[int, list[int]]) -> list[Item]:
@@ -542,6 +574,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
                 judged[items[i].digest()] = {"kind": "part", "of": items[lead].digest()}
             else:
                 verdicts[i] = v
+    parts_of = _flatten_parts(items, parts_of, judged)
     items = _fold(items, parts_of)
 
     # 2. Copy into existing notes, then tick — only what actually landed.

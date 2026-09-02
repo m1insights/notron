@@ -450,6 +450,38 @@ def test_a_part_is_remembered_so_a_replay_regroups_without_the_model(store, monk
     assert "• Concerta 36mg\n• Avmacol\n• PQQ" in store.text("Supps")
 
 
+def test_a_two_level_chain_across_passes_does_not_drop_the_bottom_line(store, monkeypatch):
+    """A part remembered from one pass (Concerta under "the stack today:")
+    and a part judged fresh this pass ("the stack today:" under a new lead
+    typed above it) used to chain two deep and lose the bottom line: the new
+    lead folded only its direct part, and the middle line's own fold — the
+    one line carrying Concerta — sat at an index nothing downstream reads,
+    because its verdict this pass is "part", not "note". Concerta ended up
+    neither filed nor ticked nor reported, and `judged` still called it done."""
+    store.add("Supps", "-")
+    dump(store, "the stack today:\nConcerta 36mg\n")
+    refuse = {"on": True}
+    monkeypatch.setattr(guard, "check", lambda **kw: guard.Verdict(False, "moved")
+                        if (refuse["on"] and kw["mode"] == "append") else guard.ALLOW)
+    filer.run(FilerBrain({"the stack today:": {"note": "Supps"},
+                         "Concerta 36mg": {"part_of": "the stack today:"}}))
+    assert "✓" not in store.text(workspace.DUMP), "the refusal left everything unticked"
+
+    refuse["on"] = False
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] = markup.render(
+        workspace.DUMP, SEED + "\nact two needs a storm\nthe stack today:\nConcerta 36mg\n")
+
+    out = filer.run(FilerBrain({"act two needs a storm": {"note": "Supps"},
+                                "the stack today:": {"part_of": "act two needs a storm"}}))
+
+    assert [(it.text, [p.text for p in it.parts]) for it, _ in out.filed] == [
+        ("act two needs a storm", ["the stack today:", "Concerta 36mg"])]
+    assert "act two needs a storm\n• the stack today:\n• Concerta 36mg" in store.text("Supps")
+    d = store.text(workspace.DUMP)
+    assert "✓ act two needs a storm → Supps\n✓ the stack today:\n✓ Concerta 36mg" in d
+
+
 def test_nothing_is_ever_deleted_from_the_dump(store):
     store.add("Supplements", "-")
     dump(store, "took vitamin D today\nsomething the model ignores\n")
