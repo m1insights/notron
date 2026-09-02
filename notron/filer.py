@@ -301,10 +301,12 @@ def _prompt(items: list[Item], candidates: list[Master]) -> str:
         f'- "{m.title}"' + (f" — {m.glimpse}" if m.glimpse else "") for m in candidates
     ) or "(they have no notes yet)"
     numbered: list[str] = []
+    previous_run = None
     for i, it in enumerate(items, start=1):
-        if numbered and it.run != items[i - 2].run:
+        if previous_run is not None and it.run != previous_run:
             numbered.append("")                      # the blank line they left, so the model sees it
         numbered.append(f"{i}. {privacy.redact(it.text)}")
+        previous_run = it.run
     return f"# Their notes\n{listing}\n\n# Lines to file\n" + "\n".join(numbered)
 
 
@@ -369,10 +371,9 @@ def classify(brain, items: list[Item], candidates: list[Master]
             elif note or new:
                 verdicts[start + n - 1] = ("new", _title(new or note))
         for k, lead in parts.items():
-            hops = 0
-            while lead in parts and hops < len(batch):     # a part of a part → its lead
-                lead, hops = parts[lead], hops + 1
-            if lead not in parts and verdicts[start + lead] is not None:
+            while lead in parts:            # a part of a part hangs from the lead; every hop
+                lead = parts[lead]          # goes strictly backwards, so the walk always lands
+            if verdicts[start + lead] is not None:
                 verdicts[start + k] = ("part", str(start + lead))
         for title, said in (out.get("shapes") or {}).items():
             if isinstance(title, str) and title.strip():
@@ -470,8 +471,10 @@ def _existing_text(folder: str, title: str) -> str:
 
 def _entry_markdown(group: list[Item], *, shape: str, folder: str, title: str) -> str:
     entries = [(it.text, [p.text for p in it.parts]) for it in group]
-    return layout.markdown(entries, shape=shape, existing_text=_existing_text(folder, title),
-                           day=_today())
+    # Only a log cares what is already in the note — whether today's heading is
+    # the last one. A list never asks, so it never pays for the Notes read.
+    existing = _existing_text(folder, title) if shape == layout.LOG else ""
+    return layout.markdown(entries, shape=shape, existing_text=existing, day=_today())
 
 
 def _tick(ex, by_note: dict[tuple[str, str], list[tuple[str, int, str]]], out: Outcome) -> None:
@@ -663,9 +666,10 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
             _tick(ex, marks, out)
             receipts.append(f"made “{title}”, {len(waiting)} filed")
         _tick(ex, {(it.folder, it.note_title): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out)
-    landed = {digest for digest, v in judged.items() if v.get("kind") == "note" and v.get("title") in out.created}
+    landed = {digest for digest, v in judged.items()
+              if v.get("kind") == "note" and v.get("title") in out.created}
     landed |= {digest for digest, v in judged.items()          # its parts landed with it
-              if v.get("kind") == "part" and v.get("of") in landed}
+               if v.get("kind") == "part" and v.get("of") in landed}
     return [it for it in rest if it.digest() not in landed]
 
 
