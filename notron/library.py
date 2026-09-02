@@ -194,3 +194,57 @@ def suggest(all_notes: list[notes.Note], texts: dict[str, str], *,
         else:
             out[n.id] = Suggestion(n, READ, "")
     return [out[n.id] for n in all_notes]
+
+
+# ------------------------------------------------------------- for the GUI
+
+_ORDER = {HOME: 0, READ: 1, IGNORE: 2}
+
+
+def scan(lib: Library | None = None) -> dict:
+    """Every note with its state, for the "Your notes" screen and `notron library`.
+
+    Before the user has chosen, `state` is the guess; after, it is their choice,
+    with the guess still alongside so the screen can say why."""
+    from . import index
+
+    lib = lib or load()
+    live = [n for n in notes.list_all_notes() if n.folder != workspace.FOLDER]
+    guesses = {s.note.id: s for s in suggest(live, index.glimpses(1400))}
+    rows = []
+    for n in live:
+        g = guesses[n.id]
+        rows.append({
+            "id": n.id, "title": n.title, "folder": n.folder, "modified": n.modified,
+            "state": lib.state_of(n) if lib.configured else g.state,
+            "suggested": g.state, "reason": g.reason,
+        })
+    rows.sort(key=lambda r: (_ORDER[r["state"]], -(_stamp(r["modified"]))))
+    by_title: dict[str, list[str]] = {}
+    for r in rows:
+        by_title.setdefault(r["title"], []).append(r["id"])
+    counts = {s: sum(r["state"] == s for r in rows) for s in (HOME, READ, IGNORE)}
+    return {
+        "notes": rows,
+        "duplicates": {t: ids for t, ids in by_title.items() if len(ids) > 1},
+        "start_from": lib.start_from.strftime("%Y-%m-%d") if lib.start_from else None,
+        "configured": lib.configured,
+        "counts": counts,
+    }
+
+
+def _stamp(modified: str) -> float:
+    at = notes.Note("", "", "", modified).modified_at
+    return at.timestamp() if at else 0.0
+
+
+def add_home(note_id: str) -> None:
+    """A note Notron created after a `yes` in the Brain Dump is a home from
+    then on — but only once the user has chosen homes at all. With none
+    chosen, every readable note is a destination, and adding one would
+    silently shut the rest out."""
+    lib = load()
+    if not lib.homes or note_id in lib.homes:
+        return
+    lib.homes.add(note_id)
+    save(lib)

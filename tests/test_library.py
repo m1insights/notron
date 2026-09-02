@@ -117,3 +117,38 @@ def test_homes_are_capped_so_the_screen_opens_with_a_short_list():
     many = [note(f"n{i}", f"List {i}", days_ago=1) for i in range(30)]
     out = library.suggest(many, {n.id: body for n in many})
     assert sum(x.state == library.HOME for x in out) == library.MAX_HOMES
+
+
+def test_scan_reports_suggestions_until_the_user_has_chosen(monkeypatch, state):
+    from notron import notes, index
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [
+        note("n1", "Passwords"), note("n2", "Groceries", days_ago=2), note("n3", "Groceries", days_ago=500),
+        note("n4", "x", folder=workspace.FOLDER)])
+    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    out = library.scan()
+    assert out["configured"] is False
+    rows = {r["id"]: r for r in out["notes"]}
+    assert set(rows) == {"n1", "n2", "n3"}, "her own folder is never listed"
+    assert rows["n1"]["state"] == "ignore" and rows["n1"]["suggested"] == "ignore"
+    assert out["duplicates"] == {"Groceries": ["n2", "n3"]}
+    assert out["counts"] == {"home": 0, "read": 2, "ignore": 1}
+    assert [r["state"] for r in out["notes"]] == sorted(
+        [r["state"] for r in out["notes"]], key=["home", "read", "ignore"].index), "guess order: homes first"
+
+
+def test_scan_reports_the_users_choices_once_made(monkeypatch, state):
+    from notron import notes, index
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Passwords"), note("n2", "Groceries")])
+    monkeypatch.setattr(index, "glimpses", lambda chars=100: {})
+    library.save(library.Library(homes={"n1"}, decided={"n1", "n2"}))
+    rows = {r["id"]: r for r in library.scan()["notes"]}
+    assert rows["n1"]["state"] == "home", "the user's choice, even against the guess"
+    assert rows["n1"]["suggested"] == "ignore", "the guess is still shown"
+
+
+def test_a_note_she_made_after_a_yes_becomes_a_home_only_if_homes_exist(state):
+    library.add_home("new")
+    assert not library.load().homes, "no setup yet — adding one home would shut every other note out"
+    library.save(library.Library(homes={"n1"}))
+    library.add_home("new")
+    assert library.load().homes == {"n1", "new"}
