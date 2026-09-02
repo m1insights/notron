@@ -78,6 +78,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `conversation.py` | Reads a note as turns; finds what she has not answered |
 | `mentions.py` | Sweeps every note for `#notron` / `@notron` |
 | `filer.py` | The Brain Dump: sorts lines into the user's own notes, ticks them, proposes new notes |
+| `layout.py` | How a filed thought is laid out — journal (one bold date a day) or list; pure Markdown |
 | `library.py` | Per-note home / read only / ignore choices; the one place "never reads it" lives |
 | `guard.py` | The single choke point for every write |
 | `executor.py` | Applies writes. No model runs here, ever. |
@@ -204,7 +205,10 @@ default "Notes"). `.notron/filer.json` remembers verdicts and pending proposals 
 a dump that is only waiting on the user costs zero model calls per poll
 (`filer.worth_a_pass`). `@notron file this: …` on a line in any note goes through
 the same path and ticks that line where it sits; `conversation.unanswered` treats
-a ticked turn as answered, or the listener would re-ask it forever.
+a ticked turn as answered, or the listener would re-ask it forever. A blank line
+is a run boundary set in code; within a run the model may hang lines under a lead
+(`part_of`), and `classify` validates it. Shape per note is cached in
+`filer.json["shapes"]`, first decision wins.
 
 ## Your notes (`library.py`)
 

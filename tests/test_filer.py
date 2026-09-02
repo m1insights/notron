@@ -9,6 +9,8 @@ import re
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from datetime import date
+
 import pytest
 
 from notron import conversation, filer, guard, markup, nodes, notedoc, workspace
@@ -64,10 +66,15 @@ class Store:
 
 
 class FilerBrain:
-    """Answers the Filer's question from a table keyed by line text."""
+    """Answers the Filer's question from a table keyed by line text.
 
-    def __init__(self, verdicts: dict[str, dict]):
+    A verdict is {"note": title}, {"new": title}, or {"part_of": "<the lead
+    line's text>"} — the fake turns the lead's text into its number in the
+    prompt, the way the model would. `shapes` is returned as-is."""
+
+    def __init__(self, verdicts: dict[str, dict], shapes: dict[str, str] | None = None):
         self.verdicts = verdicts
+        self.shapes = shapes or {}
         self.calls = 0
         self.prompts = []
 
@@ -75,12 +82,17 @@ class FilerBrain:
         self.calls += 1
         self.prompts.append(user)
         assert kw.get("tier") == filer.TIER
+        numbered = {m.group(2): int(m.group(1)) for m in re.finditer(r"^(\d+)\. (.*)$", user, re.M)}
         rows = []
-        for m in re.finditer(r"^(\d+)\. (.*)$", user, re.M):
-            v = self.verdicts.get(m.group(2))
-            if v:
-                rows.append({"line": int(m.group(1)), **v})
-        return {"filed": rows}
+        for text, n in numbered.items():
+            v = self.verdicts.get(text)
+            if not v:
+                continue
+            if "part_of" in v:
+                rows.append({"line": n, "part_of": numbered.get(v["part_of"], 0)})
+            else:
+                rows.append({"line": n, **v})
+        return {"filed": rows, "shapes": dict(self.shapes)}
 
     def ask(self, **kw):
         raise AssertionError("the Filer must never pay for a text model call")
@@ -92,11 +104,12 @@ SEED = workspace.SEEDS[workspace.DUMP]
 @pytest.fixture
 def store(monkeypatch, tmp_path):
     s = Store()
-    from notron import notes, index
+    from notron import notes, index, library
     for name in ("find_note", "read_body", "write_body", "create_note", "list_all_notes"):
         monkeypatch.setattr(notes, name, getattr(s, name))
     monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     monkeypatch.setattr(filer, "STATE", tmp_path / "filer.json")
+    monkeypatch.setattr(library, "STATE", tmp_path / "library.json")   # never the developer's own choices
     s.add(workspace.LOG, "Everything Notron did.\n\n———\n", folder=workspace.FOLDER)
     return s
 
@@ -110,6 +123,36 @@ def dump(store, md):
 def test_a_bulleted_dump_is_still_one_thought_per_line():
     html = markup.render("x", "first\n- a\n- b\nlast")
     assert [ln.text for ln in notedoc.lines(html)] == ["x", "first", "a", "b", "last"]
+
+
+def test_a_line_knows_when_a_blank_line_sits_above_it():
+    """A blank line is how someone separates thoughts. Whitespace Apple Notes
+    puts between elements is not a blank line; an empty <div><br></div> is."""
+    html = markup.render("x", "first\nsecond\n\nthird\n- a\n- b\n\n\nlast")
+    got = [(ln.text, ln.after_gap) for ln in notedoc.lines(html)]
+    assert got == [("x", False), ("first", False), ("second", False),
+                   ("third", True), ("a", False), ("b", False), ("last", True)]
+
+
+def test_adjacent_lines_share_a_run_and_a_blank_line_or_a_ticked_line_starts_the_next(store):
+    """A run is the most the model may ever group into one thought."""
+    dump(store, "the stack today:\nmagnesium\nzinc\n\nact two needs a storm\n✓ old one → Book idea\nthat serum\n")
+    items = filer.unfiled(store.body(workspace.DUMP))
+    assert [(it.text, it.run) for it in items] == [
+        ("the stack today:", 0), ("magnesium", 0), ("zinc", 0),
+        ("act two needs a storm", 1),
+        ("that serum", 2),                       # the ticked line between them broke the run
+    ]
+
+
+def test_an_item_carries_its_parts_through_json():
+    lead = filer.Item("the stack today:", "the stack today:", 3, workspace.DUMP, "Notron",
+                      parts=(filer.Item("magnesium", "magnesium", 4, workspace.DUMP, "Notron"),))
+    back = filer.Item.from_dict(lead.as_dict())
+    assert back == lead
+    assert back.parts[0].text == "magnesium"
+    assert lead.digest() == filer.Item("the stack today:", "x", 0, "y", "z").digest(), \
+        "a digest is the line's own words — parts and position do not change it"
 
 
 def test_a_mark_ticks_the_line_and_adds_the_receipt_inside_its_own_element():
@@ -264,10 +307,33 @@ def test_a_title_the_model_invented_becomes_a_proposal_never_a_write():
                         "serum": {"new": "Skincare Brand."},
                         "oats": {"note": "Supplements: magnesium 400mg"},        # Nano pads with the glimpse
                         "act two": {"note": '"Book idea" — a lighthouse'}})      # longest title wins
-    v = filer.classify(brain, items, masters)
+    v, shapes = filer.classify(brain, items, masters)
     assert v == [("note", "Supplements"), ("new", "Book Ideas"), ("new", "Skincare Brand"),
                  ("note", "Supplements"), ("note", "Book idea")]
     assert ("json", filer.TIER) not in [] and brain.calls == 1
+
+
+def test_the_model_sees_a_blank_line_between_runs():
+    items = [filer.Item("a", "a", 0, "d", "f", run=0), filer.Item("b", "b", 1, "d", "f", run=0),
+             filer.Item("c", "c", 3, "d", "f", run=1)]
+    assert filer._prompt(items, []).endswith("# Lines to file\n1. a\n2. b\n\n3. c")
+
+
+def test_a_part_points_at_an_earlier_line_in_the_same_run_or_it_is_ignored():
+    items = [filer.Item("the stack today:", "x", 0, "d", "f", run=0),
+             filer.Item("magnesium", "x", 1, "d", "f", run=0),
+             filer.Item("zinc", "x", 2, "d", "f", run=0),
+             filer.Item("act two needs a storm", "x", 4, "d", "f", run=1),
+             filer.Item("a lighthouse", "x", 5, "d", "f", run=1)]
+    brain = FilerBrain({"the stack today:": {"note": "Supps"},
+                        "magnesium": {"part_of": "the stack today:"},
+                        "zinc": {"part_of": "magnesium"},                 # a part of a part → the lead
+                        "act two needs a storm": {"part_of": "zinc"},      # crosses a run → ignored
+                        "a lighthouse": {"part_of": "a lighthouse"}},     # points at itself → ignored
+                       shapes={"Supps": "log", "Nonsense": "list"})
+    verdicts, shapes = filer.classify(brain, items, [filer.Master("Supps", "Notes")])
+    assert verdicts == [("note", "Supps"), ("part", "0"), ("part", "0"), None, None]
+    assert shapes == {"Supps": "log", "Nonsense": "list"}
 
 
 def test_secret_looking_lines_never_reach_the_model_and_glimpses_are_redacted(monkeypatch):
@@ -299,7 +365,121 @@ def test_a_dump_pass_copies_each_line_into_its_note_and_ticks_it_with_a_receipt(
     d = store.text(workspace.DUMP)
     assert "✓ took vitamin D today → Supplements" in d
     assert "✓ act two needs a storm → Book idea" in d
-    assert "Filed 2 lines" in out.summary()
+    assert "Filed 2 thoughts" in out.summary()
+
+
+STACK_DUMP = ("The stack did really well today once the trazodone wore off.\n"
+              "Concerta 36mg\nAvmacol\nPQQ\n\ntook vitamin D today\n")
+STACK_BRAIN = {"The stack did really well today once the trazodone wore off.": {"note": "Supps"},
+               "Concerta 36mg": {"part_of": "The stack did really well today once the trazodone wore off."},
+               "Avmacol": {"part_of": "The stack did really well today once the trazodone wore off."},
+               "PQQ": {"part_of": "The stack did really well today once the trazodone wore off."},
+               "took vitamin D today": {"note": "Supps"}}
+
+
+def test_a_sentence_and_the_list_under_it_file_as_one_thought_in_journal_shape(store, monkeypatch):
+    """The live failure of 2026-09-02: ten dated bullets where one entry belonged."""
+    store.add("Supps", "Magnesium\nSeriphos\n")
+    dump(store, STACK_DUMP)
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain(STACK_BRAIN, shapes={"Supps": "log"})
+
+    out = filer.run(brain)
+
+    assert [(it.text[:9], [p.text for p in it.parts], t) for it, t in out.filed] == [
+        ("The stack", ["Concerta 36mg", "Avmacol", "PQQ"], "Supps"),
+        ("took vita", [], "Supps")]
+    assert "Filed 2 thoughts → Supps (2)." in out.summary()
+    supps = store.text("Supps")
+    assert supps == ("Supps\n\nMagnesium\nSeriphos\n\nWed 2 Sep 2026\n"
+                     "The stack did really well today once the trazodone wore off.\n"
+                     "• Concerta 36mg\n• Avmacol\n• PQQ\n\ntook vitamin D today")
+    d = store.text(workspace.DUMP)
+    assert "✓ The stack did really well today once the trazodone wore off. → Supps" in d
+    assert "✓ Concerta 36mg\n✓ Avmacol\n✓ PQQ" in d, "the lines under it get a tick and no receipt"
+    assert "✓ took vitamin D today → Supps" in d
+    assert brain.calls == 1
+
+
+def test_a_second_pass_the_same_day_joins_the_entry_already_there(store, monkeypatch):
+    store.add("Supps", "-")
+    dump(store, "took vitamin D today\n")
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    filer.run(FilerBrain({"took vitamin D today": {"note": "Supps"}}, shapes={"Supps": "log"}))
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] += "<div>zinc at lunch</div>"
+
+    filer.run(FilerBrain({"zinc at lunch": {"note": "Supps"}}, shapes={"Supps": "list"}))
+
+    assert store.text("Supps").count("Wed 2 Sep 2026") == 1
+    assert store.text("Supps").endswith("Wed 2 Sep 2026\ntook vitamin D today\n\nzinc at lunch")
+    assert filer._state()["shapes"] == {"Supps": "log"}, "the first shape sticks; a later 'list' is ignored"
+
+
+def test_a_list_shaped_note_gets_bullets_and_no_date(store, monkeypatch):
+    store.add("Recipes", "-")
+    dump(store, "Pasta that worked:\ntomatoes\nbasil\n\nthat serum from the pop-up\n")
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain({"Pasta that worked:": {"note": "Recipes"},
+                        "tomatoes": {"part_of": "Pasta that worked:"},
+                        "basil": {"part_of": "Pasta that worked:"},
+                        "that serum from the pop-up": {"note": "Recipes"}},
+                       shapes={"Recipes": "list"})
+    filer.run(brain)
+    assert store.text("Recipes") == "Recipes\n\n-\n\nPasta that worked:\n• tomatoes\n• basil\n\n• that serum from the pop-up"
+
+
+def test_a_part_is_remembered_so_a_replay_regroups_without_the_model(store, monkeypatch):
+    """The append is refused once (the note moved); next pass the group is
+    still one thought, and the model is not asked about the parts again."""
+    store.add("Supps", "-")
+    dump(store, STACK_DUMP)
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain(STACK_BRAIN, shapes={"Supps": "log"})
+    refuse = {"on": True}
+    monkeypatch.setattr(guard, "check", lambda **kw: guard.Verdict(False, "moved")
+                        if (refuse["on"] and kw["mode"] == "append") else guard.ALLOW)
+    out = filer.run(brain)
+    assert out.filed == [] and "✓" not in store.text(workspace.DUMP)
+
+    refuse["on"] = False
+    out = filer.run(brain)
+    assert brain.calls == 2, "the leads are judged again (a refused copy is never remembered) …"
+    assert "Concerta" not in brain.prompts[1], "… but the lines under them are not: the group came from memory"
+    assert [[p.text for p in it.parts] for it, _ in out.filed] == [["Concerta 36mg", "Avmacol", "PQQ"], []]
+    assert "• Concerta 36mg\n• Avmacol\n• PQQ" in store.text("Supps")
+
+
+def test_a_two_level_chain_across_passes_does_not_drop_the_bottom_line(store, monkeypatch):
+    """A part remembered from one pass (Concerta under "the stack today:")
+    and a part judged fresh this pass ("the stack today:" under a new lead
+    typed above it) used to chain two deep and lose the bottom line: the new
+    lead folded only its direct part, and the middle line's own fold — the
+    one line carrying Concerta — sat at an index nothing downstream reads,
+    because its verdict this pass is "part", not "note". Concerta ended up
+    neither filed nor ticked nor reported, and `judged` still called it done."""
+    store.add("Supps", "-")
+    dump(store, "the stack today:\nConcerta 36mg\n")
+    refuse = {"on": True}
+    monkeypatch.setattr(guard, "check", lambda **kw: guard.Verdict(False, "moved")
+                        if (refuse["on"] and kw["mode"] == "append") else guard.ALLOW)
+    filer.run(FilerBrain({"the stack today:": {"note": "Supps"},
+                         "Concerta 36mg": {"part_of": "the stack today:"}}))
+    assert "✓" not in store.text(workspace.DUMP), "the refusal left everything unticked"
+
+    refuse["on"] = False
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] = markup.render(
+        workspace.DUMP, SEED + "\nact two needs a storm\nthe stack today:\nConcerta 36mg\n")
+
+    out = filer.run(FilerBrain({"act two needs a storm": {"note": "Supps"},
+                                "the stack today:": {"part_of": "act two needs a storm"}}))
+
+    assert [(it.text, [p.text for p in it.parts]) for it, _ in out.filed] == [
+        ("act two needs a storm", ["the stack today:", "Concerta 36mg"])]
+    assert "act two needs a storm\n• the stack today:\n• Concerta 36mg" in store.text("Supps")
+    d = store.text(workspace.DUMP)
+    assert "✓ act two needs a storm → Supps\n✓ the stack today:\n✓ Concerta 36mg" in d
 
 
 def test_nothing_is_ever_deleted_from_the_dump(store):
@@ -366,11 +546,41 @@ def test_yes_creates_the_note_files_the_lines_and_ticks_the_yes(store):
     assert out.created == ["Skincare Brand"]
     assert "the serum from that brand" in store.text("Skincare Brand")
     assert store.find_note(filer.FILING_FOLDER, "Skincare Brand") is not None
+    assert store.text("Skincare Brand").count("the serum from that brand") == 1, "filed once — see Task 6"
+    assert [t for _, t in out.filed] == ["Skincare Brand"]
     d = store.text(workspace.DUMP)
     assert "✓ the serum from that brand → Skincare Brand" in d
     assert "✓ yes → made “Skincare Brand”, 1 filed" in d
     assert filer.pending_proposals() == {}
     assert brain.calls == 1, "a yes needs no model"
+
+
+def test_a_note_she_makes_starts_in_shape_with_the_whole_thought(store, monkeypatch):
+    """Becky never pre-builds a note. When Notron makes one it must already
+    read like a journal: title, today's date, the sentence, the list under it."""
+    store.add("Supplements", "-")
+    dump(store, "Pasta that worked:\ntomatoes\nbasil\n")
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain({"Pasta that worked:": {"new": "Recipes"},
+                        "tomatoes": {"part_of": "Pasta that worked:"},
+                        "basil": {"part_of": "Pasta that worked:"}},
+                       shapes={"Recipes": "list"})
+    filer.run(brain)
+    assert list(filer.pending_proposals()) == ["Recipes"]
+    assert [p.text for p in filer.pending_proposals()["Recipes"][0].parts] == ["tomatoes", "basil"]
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] += "<div>yes</div>"
+
+    out = filer.run(brain)
+
+    assert out.created == ["Recipes"]
+    assert store.text("Recipes") == "Recipes\n\nPasta that worked:\n• tomatoes\n• basil"
+    d = store.text(workspace.DUMP)
+    assert "✓ Pasta that worked: → Recipes\n✓ tomatoes\n✓ basil" in d
+    assert "✓ yes → made “Recipes”, 1 filed" in d
+    assert filer._state()["shapes"] == {"Recipes": "list"}
+    assert brain.calls == 1
+    assert store.text("Recipes").count("Pasta that worked:") == 1, "a yes files the thought once, not twice"
 
 
 def test_no_leaves_the_lines_alone_and_stops_her_asking_again(store):
@@ -396,7 +606,7 @@ def test_a_dry_run_judges_everything_and_writes_nothing(store):
     out = filer.run(FilerBrain({"took vitamin D today": {"note": "Supplements"}}), dry_run=True)
     assert store.writes == []
     assert not filer.STATE.exists()
-    assert "Filed 1 line" in out.summary()
+    assert "Filed 1 thought" in out.summary()
 
 
 def test_a_tagged_line_is_filed_where_it_sits(store):

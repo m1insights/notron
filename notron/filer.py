@@ -29,10 +29,10 @@ import json
 import os
 import pathlib
 import re
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import date, datetime
 
-from . import conversation, index, notedoc, notes, privacy, workspace
+from . import conversation, index, layout, markup, notedoc, notes, privacy, workspace
 from .notedoc import FILED, RECEIPT
 
 STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "filer.json"
@@ -69,23 +69,34 @@ FURNITURE = (workspace.DUMP, "Throw anything in here", conversation.QA_RULE, con
 
 @dataclass(frozen=True)
 class Item:
-    """One line to file, and where it lives so it can be ticked afterwards."""
+    """One line to file, and where it lives so it can be ticked afterwards.
+
+    `run` groups adjacent lines: a blank line, a ticked line, furniture or one
+    of Notron's turns starts a new run, and the model may only ever fold lines
+    together inside one. `parts` are the lines folded under this one — the
+    list beneath "the stack I took today:"."""
     text: str          # what gets copied — tag and "file this" verb stripped
     anchor: str        # the line as it reads in the note, to find it again
     near: int          # block index hint
     note_title: str
     folder: str
+    run: int = 0
+    parts: tuple["Item", ...] = ()
 
     def digest(self) -> str:
         return hashlib.sha1(re.sub(r"\s+", " ", self.text.strip().lower()).encode()).hexdigest()
 
     def as_dict(self) -> dict:
-        return {"text": self.text, "anchor": self.anchor, "near": self.near,
-                "note_title": self.note_title, "folder": self.folder}
+        d = {"text": self.text, "anchor": self.anchor, "near": self.near,
+             "note_title": self.note_title, "folder": self.folder}
+        if self.parts:
+            d["parts"] = [p.as_dict() for p in self.parts]
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Item":
-        return cls(d["text"], d["anchor"], int(d.get("near", 0)), d["note_title"], d["folder"])
+        return cls(d["text"], d["anchor"], int(d.get("near", 0)), d["note_title"], d["folder"],
+                   parts=tuple(cls.from_dict(p) for p in d.get("parts", [])))
 
 
 @dataclass(frozen=True)
@@ -122,7 +133,7 @@ class Outcome:
                 counts[title] = counts.get(title, 0) + 1
             where = ", ".join(f"{t} ({n})" if n > 1 else t for t, n in counts.items())
             n = len(self.filed)
-            lines.append(f"Filed {n} line{'s' if n != 1 else ''} → {where}.")
+            lines.append(f"Filed {n} thought{'s' if n != 1 else ''} → {where}.")
         for title, items in self.proposed.items():
             n = len(items)
             lines.append(f"Nothing you have fits {n} line{'s' if n != 1 else ''} — want a “{title}” note? "
@@ -156,22 +167,27 @@ def unfiled(body_html: str, *, note_title: str = workspace.DUMP,
     """
     out: list[Item] = []
     in_turn = False
+    run = 0
     for ln in notedoc.lines(body_html):
         text = ln.text.strip()
+        if ln.after_gap:
+            run += 1
         if in_turn:
             if text == conversation.RULE:
                 in_turn = False
+            run += 1
             continue
         if text.startswith(conversation.SIGNATURE) or text.startswith(f"**{conversation.SIGNATURE}**"):
             in_turn = True
+            run += 1
             continue
-        if _is_furniture(text, furniture) or text.startswith(FILED):
-            continue
-        if privacy.contains_secret(text):
+        if _is_furniture(text, furniture) or text.startswith(FILED) or privacy.contains_secret(text):
+            run += 1
             continue
         clean = VERB.sub("", conversation.strip_tag(text)).strip()
-        out.append(Item(clean or text, text, ln.block, note_title, folder))
-    return out
+        out.append(Item(clean or text, text, ln.block, note_title, folder, run))
+    dense: dict[int, int] = {}
+    return [replace(it, run=dense.setdefault(it.run, len(dense))) for it in out]
 
 
 def items_from_turn(source: str, *, title: str, folder: str, near: int) -> tuple[list[Item], list[str]]:
@@ -255,7 +271,9 @@ note it belongs in.
 
 Reply with JSON only:
 {"filed": [{"line": 1, "note": "<the title between the quotes, copied exactly>"},
-           {"line": 2, "new": "<a short Title Case name for a note that does not exist yet>"}]}
+           {"line": 2, "new": "<a short Title Case name for a note that does not exist yet>"},
+           {"line": 3, "part_of": 2}],
+ "shapes": {"<title>": "log" or "list", ...}}
 
 Rules:
 - "note" is only ever the title between the quotes — never the glimpse, never a
@@ -266,6 +284,15 @@ Rules:
 - Use "new" only when none of their notes is about that subject. A wrong note is
   worse than a question — never force a line into the nearest bucket.
 - Lines that belong together get the same "new" title, so one note can hold them.
+- Some lines are not thoughts of their own but belong under the line above them:
+  the list under "the stack I took today:", the steps under a recipe, the items
+  under "to pack:". Give each of those {"line": N, "part_of": M} where M is the
+  line they hang from, and nothing else — they go wherever line M goes. Only a
+  line directly below, in the same group; a blank line always separates thoughts.
+- For every title you used, say in "shapes" what kind of note it is: "log" if it
+  collects things that happen over time — what they took, ate, did, trained,
+  felt, spent — or "list" if it collects things that simply exist — recipes,
+  ideas, names, places, things to buy.
 - Every line appears exactly once. Output nothing but the JSON object."""
 
 
@@ -273,8 +300,14 @@ def _prompt(items: list[Item], candidates: list[Master]) -> str:
     listing = "\n".join(
         f'- "{m.title}"' + (f" — {m.glimpse}" if m.glimpse else "") for m in candidates
     ) or "(they have no notes yet)"
-    numbered = "\n".join(f"{i}. {privacy.redact(it.text)}" for i, it in enumerate(items, start=1))
-    return f"# Their notes\n{listing}\n\n# Lines to file\n{numbered}"
+    numbered: list[str] = []
+    previous_run = None
+    for i, it in enumerate(items, start=1):
+        if previous_run is not None and it.run != previous_run:
+            numbered.append("")                      # the blank line they left, so the model sees it
+        numbered.append(f"{i}. {privacy.redact(it.text)}")
+        previous_run = it.run
+    return f"# Their notes\n{listing}\n\n# Lines to file\n" + "\n".join(numbered)
 
 
 def _match(said: str, by_key: dict[str, str]) -> str | None:
@@ -296,18 +329,23 @@ def _match(said: str, by_key: dict[str, str]) -> str | None:
     return best[1] if best else None
 
 
-def classify(brain, items: list[Item], candidates: list[Master]) -> list[tuple[str, str] | None]:
-    """One verdict per item: ("note", existing title), ("new", proposed title),
-    or None when the model said nothing usable about that line.
+def classify(brain, items: list[Item], candidates: list[Master]
+             ) -> tuple[list[tuple[str, str] | None], dict[str, str]]:
+    """One verdict per item — ("note", existing title), ("new", proposed title),
+    ("part", index of its lead as a string) or None when the model said nothing
+    usable — and the shape the model named for each title it used.
 
     The model proposes; this validates. A title that is not on the list is
-    treated as a proposal, never as a place to write."""
+    treated as a proposal, never as a place to write. A part may only hang from
+    an earlier line in the same run; a part of a part hangs from the lead."""
     by_key = {m.title.casefold(): m.title for m in candidates}
     verdicts: list[tuple[str, str] | None] = [None] * len(items)
+    shapes: dict[str, str] = {}
     for start in range(0, len(items), MAX_LINES):
         batch = items[start:start + MAX_LINES]
         out = brain.ask_json(system=FILER_SYSTEM, user=_prompt(batch, candidates),
-                             tier=TIER, max_tokens=min(200 + 40 * len(batch), 1600))
+                             tier=TIER, max_tokens=min(240 + 40 * len(batch), 1600))
+        parts: dict[int, int] = {}                   # batch index -> batch index it hangs from
         for row in out.get("filed") or []:
             if not isinstance(row, dict):
                 continue
@@ -317,6 +355,14 @@ def classify(brain, items: list[Item], candidates: list[Master]) -> list[tuple[s
                 continue
             if not 1 <= n <= len(batch):
                 continue
+            if row.get("part_of") is not None:
+                try:
+                    m = int(row["part_of"])
+                except (TypeError, ValueError):
+                    continue
+                if 1 <= m < n and batch[m - 1].run == batch[n - 1].run:
+                    parts[n - 1] = m - 1
+                continue
             note = str(row.get("note") or "").strip()
             new = str(row.get("new") or "").strip()
             hit = _match(note, by_key) if note else None
@@ -324,7 +370,17 @@ def classify(brain, items: list[Item], candidates: list[Master]) -> list[tuple[s
                 verdicts[start + n - 1] = ("note", hit)
             elif note or new:
                 verdicts[start + n - 1] = ("new", _title(new or note))
-    return verdicts
+        for k, lead in parts.items():
+            while lead in parts:            # a part of a part hangs from the lead; every hop
+                lead = parts[lead]          # goes strictly backwards, so the walk always lands
+            if verdicts[start + lead] is not None:
+                verdicts[start + k] = ("part", str(start + lead))
+        said_shapes_raw = out.get("shapes")
+        if isinstance(said_shapes_raw, dict):
+            for title, said in said_shapes_raw.items():
+                if isinstance(title, str) and title.strip():
+                    shapes[title.strip()] = str(said)
+    return verdicts, shapes
 
 
 def _title(text: str) -> str:
@@ -342,6 +398,7 @@ def _state() -> dict:
         data = {}
     data.setdefault("judged", {})
     data.setdefault("proposals", {})
+    data.setdefault("shapes", {})
     return data
 
 
@@ -384,9 +441,72 @@ def _turn(markdown: str) -> str:
     return f"\n{conversation.turn(markdown)}\n"
 
 
-def _bullets(items: list[Item]) -> str:
-    stamp = f"{datetime.now():%-d %b}"
-    return "\n" + "\n".join(f"- {stamp} — {it.text}" for it in items) + "\n"
+def _today() -> date:
+    return date.today()
+
+
+def _flatten_parts(items: list[Item], parts_of: dict[int, list[int]], judged: dict) -> dict[int, list[int]]:
+    """Collapse a two-level chain onto its root.
+
+    A remembered part (B under C, from a pass that judged them together) and a
+    freshly judged one (C under A, because a new line landed above C this
+    pass) can chain: `parts_of` then has C as both a lead and someone else's
+    part, and C is never anyone's verdict — `_fold` would carry B nowhere,
+    filed silently short one line. Every part walks to its ultimate root
+    instead, in the order it was found, and `judged` is corrected to point
+    a re-chained part straight at that root."""
+    lead_of = {p: lead for lead, parts in parts_of.items() for p in parts}
+    roots = [i for i in parts_of if i not in lead_of]
+
+    def collect(i: int, into: list[int]) -> None:
+        for p in parts_of.get(i, []):
+            into.append(p)
+            collect(p, into)
+
+    flat: dict[int, list[int]] = {}
+    for root in roots:
+        collected: list[int] = []
+        collect(root, collected)
+        flat[root] = collected
+        for p in collected:
+            digest = items[p].digest()
+            if judged.get(digest, {}).get("kind") == "part":
+                judged[digest] = {"kind": "part", "of": items[root].digest()}
+    return flat
+
+
+def _fold(items: list[Item], parts_of: dict[int, list[int]]) -> list[Item]:
+    """The same list, with each lead carrying its parts. Indices do not move —
+    a part stays in the list, verdict-less, so nothing downstream reindexes."""
+    return [replace(it, parts=tuple(items[j] for j in parts_of[i])) if i in parts_of else it
+            for i, it in enumerate(items)]
+
+
+def _marks_for(it: Item, receipt: str) -> list[tuple[str, int, str]]:
+    """The lead gets the receipt; the lines under it get a bare tick."""
+    return [(it.anchor, it.near, receipt)] + [(p.anchor, p.near, "") for p in it.parts]
+
+
+def _shape_for(title: str, said: dict[str, str], state: dict) -> str:
+    """The note's shape: what was decided the first time, else what the model
+    just said (and that becomes the decision), else a log."""
+    shapes: dict = state["shapes"]
+    if title not in shapes:
+        shapes[title] = layout.shape(said.get(title))
+    return shapes[title]
+
+
+def _existing_text(folder: str, title: str) -> str:
+    note = notes.find_note(folder, title)
+    return markup.to_text(notes.read_body(note.id)) if note else ""
+
+
+def _entry_markdown(group: list[Item], *, shape: str, folder: str, title: str) -> str:
+    entries = [(it.text, [p.text for p in it.parts]) for it in group]
+    # Only a log cares what is already in the note — whether today's heading is
+    # the last one. A list never asks, so it never pays for the Notes read.
+    existing = _existing_text(folder, title) if shape == layout.LOG else ""
+    return layout.markdown(entries, shape=shape, existing_text=existing, day=_today())
 
 
 def _tick(ex, by_note: dict[tuple[str, str], list[tuple[str, int, str]]], out: Outcome) -> None:
@@ -413,11 +533,21 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     known = {m.title: m for m in candidates}
 
     # 1. Verdicts — from memory where she already judged this exact line.
+    #    A remembered part rejoins its lead if the lead is still here, in the
+    #    same run; otherwise it is a line of its own again.
+    by_digest = {it.digest(): i for i, it in enumerate(items)}
+    parts_of: dict[int, list[int]] = {}
     verdicts: dict[int, tuple[str, str]] = {}
     ask: list[int] = []
     for i, it in enumerate(items):
         prior = judged.get(it.digest())
-        if prior and prior.get("kind") == "declined":
+        if prior and prior.get("kind") == "part":
+            lead = by_digest.get(prior.get("of", ""))
+            if lead is not None and lead < i and items[lead].run == it.run:
+                parts_of.setdefault(lead, []).append(i)
+            else:
+                ask.append(i)
+        elif prior and prior.get("kind") == "declined":
             out.left.append((it, "you said no to a note for it"))
         elif prior and prior.get("kind") == "note" and prior.get("title") in known:
             verdicts[i] = ("note", prior["title"])
@@ -426,10 +556,11 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         else:
             ask.append(i)
 
+    said_shapes: dict[str, str] = {}
     if ask:
         say(f"judging {len(ask)} line(s) against {len(candidates)} notes")
         try:
-            fresh = classify(brain, [items[i] for i in ask], candidates)
+            fresh, said_shapes = classify(brain, [items[i] for i in ask], candidates)
             out.model_calls += 1
         except Exception as e:
             say(f"could not judge them ({type(e).__name__}) — leaving them for next time")
@@ -437,8 +568,14 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         for i, v in zip(ask, fresh):
             if v is None:
                 out.left.append((items[i], "I couldn't decide where it goes"))
+            elif v[0] == "part":
+                lead = ask[int(v[1])]
+                parts_of.setdefault(lead, []).append(i)
+                judged[items[i].digest()] = {"kind": "part", "of": items[lead].digest()}
             else:
                 verdicts[i] = v
+    parts_of = _flatten_parts(items, parts_of, judged)
+    items = _fold(items, parts_of)
 
     # 2. Copy into existing notes, then tick — only what actually landed.
     by_master: dict[str, list[int]] = {}
@@ -450,7 +587,9 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     for title, idxs in by_master.items():
         master = known[title]
         group = [items[i] for i in idxs]
-        r = ex.append(title, _bullets(group), folder=master.folder)
+        shape = _shape_for(title, said_shapes, state)
+        r = ex.append(title, _entry_markdown(group, shape=shape, folder=master.folder, title=title),
+                      folder=master.folder)
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
         if not r.ok:
             for it in group:
@@ -459,7 +598,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         for it in group:
             out.filed.append((it, title))
             judged[it.digest()] = {"kind": "note", "title": title}
-            marks.setdefault((it.folder, it.note_title), []).append((it.anchor, it.near, f"{RECEIPT}{title}"))
+            marks.setdefault((it.folder, it.note_title), []).extend(_marks_for(it, f"{RECEIPT}{title}"))
 
     # 3. Propose new notes — once per title. Later lines for the same title
     #    join the pending proposal quietly rather than asking again.
@@ -471,6 +610,8 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         it = items[i]
         judged[it.digest()] = {"kind": "new", "title": canonical}
         record = proposals.setdefault(canonical, {"asked": None, "items": []})
+        if canonical not in state["shapes"] and canonical in said_shapes:
+            state["shapes"][canonical] = layout.shape(said_shapes[canonical])
         if it.as_dict() not in record["items"]:
             record["items"].append(it.as_dict())
         if record["asked"] is None:
@@ -538,7 +679,9 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 receipts.append(f"left “{title}” alone")
                 continue
             say(f"making “{title}” with {len(waiting)} line(s)")
-            r = ex.append(title, _bullets(waiting), folder=FILING_FOLDER)
+            shape = _shape_for(title, {}, state)
+            r = ex.append(title, _entry_markdown(waiting, shape=shape, folder=FILING_FOLDER, title=title),
+                          folder=FILING_FOLDER)
             out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
             if not r.ok:
                 proposals[title] = record            # keep the question open
@@ -552,11 +695,15 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
             for w in waiting:
                 out.filed.append((w, title))
                 judged[w.digest()] = {"kind": "note", "title": title}
-                marks.setdefault((w.folder, w.note_title), []).append((w.anchor, w.near, f"{RECEIPT}{title}"))
+                marks.setdefault((w.folder, w.note_title), []).extend(_marks_for(w, f"{RECEIPT}{title}"))
             _tick(ex, marks, out)
             receipts.append(f"made “{title}”, {len(waiting)} filed")
         _tick(ex, {(it.folder, it.note_title): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out)
-    return rest
+    landed = {digest for digest, v in judged.items()
+              if v.get("kind") == "note" and v.get("title") in out.created}
+    landed |= {digest for digest, v in judged.items()          # its parts landed with it
+               if v.get("kind") == "part" and v.get("of") in landed}
+    return [it for it in rest if it.digest() not in landed]
 
 
 def run(brain, *, dry_run: bool = False, on_step=None) -> Outcome:

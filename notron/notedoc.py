@@ -106,22 +106,32 @@ class Line:
     block: int      # index into `blocks`
     item: int       # which <li> inside the block, or -1 for the block itself
     text: str
+    after_gap: bool = False   # an empty line sits between this and the one above
 
 
 def lines(html: str) -> list[Line]:
     """Every line someone could have typed, in order. A list block yields one
     line per item, because a brain dump written as bullets is still one
-    thought per line."""
+    thought per line.
+
+    An empty element — the <div><br></div> a blank line leaves behind — is not
+    a line, but the next line remembers it (`after_gap`): a blank line is how
+    people separate one thought from the next."""
     out: list[Line] = []
+    gap = False
     for i, block in enumerate(blocks(html)):
         items = list(_LI.finditer(block))
         if items:
             for k, m in enumerate(items):
-                out.append(Line(i, k, to_text(m.group(1)).strip()))
-        else:
-            text = to_text(block).strip()
-            if text:
-                out.append(Line(i, -1, text))
+                out.append(Line(i, k, to_text(m.group(1)).strip(), gap))
+                gap = False
+            continue
+        text = to_text(block).strip()
+        if text:
+            out.append(Line(i, -1, text, gap))
+            gap = False
+        elif block.strip():
+            gap = True          # an element with nothing in it; bare "\n" between elements is not
     return out
 
 

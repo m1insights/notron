@@ -1,5 +1,7 @@
 # Journal Filing — Implementation Plan
 
+**Status:** BUILT 2026-09-02 on `feature/journal-filing` — da77e64 (Fable-reviewed, one important finding fixed). Tests: 295.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** A thought with a list under it files as ONE entry, and a filed entry lands in its note laid out like a journal (one bold date per day, prose then bullets) or like a list (plain bullets, no dates) — decided per note, remembered per note, and used from line one when Notron creates a note for someone who has none.
