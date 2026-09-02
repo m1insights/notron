@@ -30,9 +30,9 @@ import os
 import pathlib
 import re
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import date, datetime
 
-from . import conversation, index, notedoc, notes, privacy, workspace
+from . import conversation, index, layout, markup, notedoc, notes, privacy, workspace
 from .notedoc import FILED, RECEIPT
 
 STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "filer.json"
@@ -133,7 +133,7 @@ class Outcome:
                 counts[title] = counts.get(title, 0) + 1
             where = ", ".join(f"{t} ({n})" if n > 1 else t for t, n in counts.items())
             n = len(self.filed)
-            lines.append(f"Filed {n} line{'s' if n != 1 else ''} → {where}.")
+            lines.append(f"Filed {n} thought{'s' if n != 1 else ''} → {where}.")
         for title, items in self.proposed.items():
             n = len(items)
             lines.append(f"Nothing you have fits {n} line{'s' if n != 1 else ''} — want a “{title}” note? "
@@ -395,6 +395,7 @@ def _state() -> dict:
         data = {}
     data.setdefault("judged", {})
     data.setdefault("proposals", {})
+    data.setdefault("shapes", {})
     return data
 
 
@@ -437,9 +438,40 @@ def _turn(markdown: str) -> str:
     return f"\n{conversation.turn(markdown)}\n"
 
 
-def _bullets(items: list[Item]) -> str:
-    stamp = f"{datetime.now():%-d %b}"
-    return "\n" + "\n".join(f"- {stamp} — {it.text}" for it in items) + "\n"
+def _today() -> date:
+    return date.today()
+
+
+def _fold(items: list[Item], parts_of: dict[int, list[int]]) -> list[Item]:
+    """The same list, with each lead carrying its parts. Indices do not move —
+    a part stays in the list, verdict-less, so nothing downstream reindexes."""
+    return [replace(it, parts=tuple(items[j] for j in parts_of[i])) if i in parts_of else it
+            for i, it in enumerate(items)]
+
+
+def _marks_for(it: Item, receipt: str) -> list[tuple[str, int, str]]:
+    """The lead gets the receipt; the lines under it get a bare tick."""
+    return [(it.anchor, it.near, receipt)] + [(p.anchor, p.near, "") for p in it.parts]
+
+
+def _shape_for(title: str, said: dict[str, str], state: dict) -> str:
+    """The note's shape: what was decided the first time, else what the model
+    just said (and that becomes the decision), else a log."""
+    shapes: dict = state["shapes"]
+    if title not in shapes:
+        shapes[title] = layout.shape(said.get(title))
+    return shapes[title]
+
+
+def _existing_text(folder: str, title: str) -> str:
+    note = notes.find_note(folder, title)
+    return markup.to_text(notes.read_body(note.id)) if note else ""
+
+
+def _entry_markdown(group: list[Item], *, shape: str, folder: str, title: str) -> str:
+    entries = [(it.text, [p.text for p in it.parts]) for it in group]
+    return layout.markdown(entries, shape=shape, existing_text=_existing_text(folder, title),
+                           day=_today())
 
 
 def _tick(ex, by_note: dict[tuple[str, str], list[tuple[str, int, str]]], out: Outcome) -> None:
@@ -466,11 +498,21 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     known = {m.title: m for m in candidates}
 
     # 1. Verdicts — from memory where she already judged this exact line.
+    #    A remembered part rejoins its lead if the lead is still here, in the
+    #    same run; otherwise it is a line of its own again.
+    by_digest = {it.digest(): i for i, it in enumerate(items)}
+    parts_of: dict[int, list[int]] = {}
     verdicts: dict[int, tuple[str, str]] = {}
     ask: list[int] = []
     for i, it in enumerate(items):
         prior = judged.get(it.digest())
-        if prior and prior.get("kind") == "declined":
+        if prior and prior.get("kind") == "part":
+            lead = by_digest.get(prior.get("of", ""))
+            if lead is not None and lead < i and items[lead].run == it.run:
+                parts_of.setdefault(lead, []).append(i)
+            else:
+                ask.append(i)
+        elif prior and prior.get("kind") == "declined":
             out.left.append((it, "you said no to a note for it"))
         elif prior and prior.get("kind") == "note" and prior.get("title") in known:
             verdicts[i] = ("note", prior["title"])
@@ -479,10 +521,11 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         else:
             ask.append(i)
 
+    said_shapes: dict[str, str] = {}
     if ask:
         say(f"judging {len(ask)} line(s) against {len(candidates)} notes")
         try:
-            fresh = classify(brain, [items[i] for i in ask], candidates)
+            fresh, said_shapes = classify(brain, [items[i] for i in ask], candidates)
             out.model_calls += 1
         except Exception as e:
             say(f"could not judge them ({type(e).__name__}) — leaving them for next time")
@@ -490,8 +533,13 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         for i, v in zip(ask, fresh):
             if v is None:
                 out.left.append((items[i], "I couldn't decide where it goes"))
+            elif v[0] == "part":
+                lead = ask[int(v[1])]
+                parts_of.setdefault(lead, []).append(i)
+                judged[items[i].digest()] = {"kind": "part", "of": items[lead].digest()}
             else:
                 verdicts[i] = v
+    items = _fold(items, parts_of)
 
     # 2. Copy into existing notes, then tick — only what actually landed.
     by_master: dict[str, list[int]] = {}
@@ -503,7 +551,9 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     for title, idxs in by_master.items():
         master = known[title]
         group = [items[i] for i in idxs]
-        r = ex.append(title, _bullets(group), folder=master.folder)
+        shape = _shape_for(title, said_shapes, state)
+        r = ex.append(title, _entry_markdown(group, shape=shape, folder=master.folder, title=title),
+                      folder=master.folder)
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
         if not r.ok:
             for it in group:
@@ -512,7 +562,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         for it in group:
             out.filed.append((it, title))
             judged[it.digest()] = {"kind": "note", "title": title}
-            marks.setdefault((it.folder, it.note_title), []).append((it.anchor, it.near, f"{RECEIPT}{title}"))
+            marks.setdefault((it.folder, it.note_title), []).extend(_marks_for(it, f"{RECEIPT}{title}"))
 
     # 3. Propose new notes — once per title. Later lines for the same title
     #    join the pending proposal quietly rather than asking again.

@@ -9,6 +9,8 @@ import re
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+from datetime import date
+
 import pytest
 
 from notron import conversation, filer, guard, markup, nodes, notedoc, workspace
@@ -363,7 +365,89 @@ def test_a_dump_pass_copies_each_line_into_its_note_and_ticks_it_with_a_receipt(
     d = store.text(workspace.DUMP)
     assert "✓ took vitamin D today → Supplements" in d
     assert "✓ act two needs a storm → Book idea" in d
-    assert "Filed 2 lines" in out.summary()
+    assert "Filed 2 thoughts" in out.summary()
+
+
+STACK_DUMP = ("The stack did really well today once the trazodone wore off.\n"
+              "Concerta 36mg\nAvmacol\nPQQ\n\ntook vitamin D today\n")
+STACK_BRAIN = {"The stack did really well today once the trazodone wore off.": {"note": "Supps"},
+               "Concerta 36mg": {"part_of": "The stack did really well today once the trazodone wore off."},
+               "Avmacol": {"part_of": "The stack did really well today once the trazodone wore off."},
+               "PQQ": {"part_of": "The stack did really well today once the trazodone wore off."},
+               "took vitamin D today": {"note": "Supps"}}
+
+
+def test_a_sentence_and_the_list_under_it_file_as_one_thought_in_journal_shape(store, monkeypatch):
+    """The live failure of 2026-09-02: ten dated bullets where one entry belonged."""
+    store.add("Supps", "Magnesium\nSeriphos\n")
+    dump(store, STACK_DUMP)
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain(STACK_BRAIN, shapes={"Supps": "log"})
+
+    out = filer.run(brain)
+
+    assert [(it.text[:9], [p.text for p in it.parts], t) for it, t in out.filed] == [
+        ("The stack", ["Concerta 36mg", "Avmacol", "PQQ"], "Supps"),
+        ("took vita", [], "Supps")]
+    assert "Filed 2 thoughts → Supps (2)." in out.summary()
+    supps = store.text("Supps")
+    assert supps == ("Supps\n\nMagnesium\nSeriphos\n\nWed 2 Sep 2026\n"
+                     "The stack did really well today once the trazodone wore off.\n"
+                     "• Concerta 36mg\n• Avmacol\n• PQQ\n\ntook vitamin D today")
+    d = store.text(workspace.DUMP)
+    assert "✓ The stack did really well today once the trazodone wore off. → Supps" in d
+    assert "✓ Concerta 36mg\n✓ Avmacol\n✓ PQQ" in d, "the lines under it get a tick and no receipt"
+    assert "✓ took vitamin D today → Supps" in d
+    assert brain.calls == 1
+
+
+def test_a_second_pass_the_same_day_joins_the_entry_already_there(store, monkeypatch):
+    store.add("Supps", "-")
+    dump(store, "took vitamin D today\n")
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    filer.run(FilerBrain({"took vitamin D today": {"note": "Supps"}}, shapes={"Supps": "log"}))
+    nid = store.find_note(workspace.FOLDER, workspace.DUMP).id
+    store.rows[nid]["body"] += "<div>zinc at lunch</div>"
+
+    filer.run(FilerBrain({"zinc at lunch": {"note": "Supps"}}, shapes={"Supps": "list"}))
+
+    assert store.text("Supps").count("Wed 2 Sep 2026") == 1
+    assert store.text("Supps").endswith("Wed 2 Sep 2026\ntook vitamin D today\n\nzinc at lunch")
+    assert filer._state()["shapes"] == {"Supps": "log"}, "the first shape sticks; a later 'list' is ignored"
+
+
+def test_a_list_shaped_note_gets_bullets_and_no_date(store, monkeypatch):
+    store.add("Recipes", "-")
+    dump(store, "Pasta that worked:\ntomatoes\nbasil\n\nthat serum from the pop-up\n")
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain({"Pasta that worked:": {"note": "Recipes"},
+                        "tomatoes": {"part_of": "Pasta that worked:"},
+                        "basil": {"part_of": "Pasta that worked:"},
+                        "that serum from the pop-up": {"note": "Recipes"}},
+                       shapes={"Recipes": "list"})
+    filer.run(brain)
+    assert store.text("Recipes") == "Recipes\n\n-\n\nPasta that worked:\n• tomatoes\n• basil\n\n• that serum from the pop-up"
+
+
+def test_a_part_is_remembered_so_a_replay_regroups_without_the_model(store, monkeypatch):
+    """The append is refused once (the note moved); next pass the group is
+    still one thought, and the model is not asked about the parts again."""
+    store.add("Supps", "-")
+    dump(store, STACK_DUMP)
+    monkeypatch.setattr(filer, "_today", lambda: date(2026, 9, 2))
+    brain = FilerBrain(STACK_BRAIN, shapes={"Supps": "log"})
+    refuse = {"on": True}
+    monkeypatch.setattr(guard, "check", lambda **kw: guard.Verdict(False, "moved")
+                        if (refuse["on"] and kw["mode"] == "append") else guard.ALLOW)
+    out = filer.run(brain)
+    assert out.filed == [] and "✓" not in store.text(workspace.DUMP)
+
+    refuse["on"] = False
+    out = filer.run(brain)
+    assert brain.calls == 2, "the leads are judged again (a refused copy is never remembered) …"
+    assert "Concerta" not in brain.prompts[1], "… but the lines under them are not: the group came from memory"
+    assert [[p.text for p in it.parts] for it, _ in out.filed] == [["Concerta 36mg", "Avmacol", "PQQ"], []]
+    assert "• Concerta 36mg\n• Avmacol\n• PQQ" in store.text("Supps")
 
 
 def test_nothing_is_ever_deleted_from_the_dump(store):
@@ -460,7 +544,7 @@ def test_a_dry_run_judges_everything_and_writes_nothing(store):
     out = filer.run(FilerBrain({"took vitamin D today": {"note": "Supplements"}}), dry_run=True)
     assert store.writes == []
     assert not filer.STATE.exists()
-    assert "Filed 1 line" in out.summary()
+    assert "Filed 1 thought" in out.summary()
 
 
 def test_a_tagged_line_is_filed_where_it_sits(store):
