@@ -111,3 +111,86 @@ def user_notes(lib: Library | None = None) -> list[notes.Note]:
     lib = lib or load()
     return [n for n in notes.list_all_notes()
             if n.folder != workspace.FOLDER and not lib.is_ignored(n)]
+
+
+# ------------------------------------------------------------- the pre-fill
+
+import re as _re
+
+from . import privacy
+
+#: How many homes the screen opens with. A short list gets unticked; a long
+#: one gets ignored.
+MAX_HOMES = 10
+HOME_SCORE = 4  # recency(2) + title(1) alone must never clear this — a note
+                # only becomes a suggested home when its body is list-shaped too
+
+
+@dataclass(frozen=True)
+class Suggestion:
+    note: notes.Note
+    state: str
+    reason: str          # shown under the row — why she guessed this
+
+
+def _recency(note: notes.Note, now: datetime) -> int:
+    at = note.modified_at
+    if at is None:
+        return 0
+    days = (now - at).days
+    return 2 if days <= 60 else 1 if days <= 365 else 0
+
+
+def _list_shaped(text: str) -> int:
+    """A note people keep things in is many short lines, not paragraphs."""
+    lines = [l for l in text.split("\n") if l.strip()]
+    if len(lines) < 6:
+        return 0
+    short = sum(len(l) <= 60 for l in lines) / len(lines)
+    return 2 if short >= 0.6 else 0
+
+
+def _title_like_a_place(title: str) -> int:
+    return 1 if len(title) <= 40 and not _re.search(r"[.!?]", title) else 0
+
+
+def suggest(all_notes: list[notes.Note], texts: dict[str, str], *,
+            now: datetime | None = None) -> list[Suggestion]:
+    """Notron's guess for every note. Plain code — no model reads anything here.
+
+    `texts` is the opening of each note by id (from the index; empty when the
+    user has not run `notron index` yet, in which case shape is unknown and
+    only recency and the title count)."""
+    now = now or datetime.now()
+    by_title: dict[str, list[notes.Note]] = {}
+    for n in all_notes:
+        by_title.setdefault(n.title, []).append(n)
+
+    scored: list[tuple[int, notes.Note, str]] = []
+    out: dict[str, Suggestion] = {}
+    for n in all_notes:
+        if privacy.is_vault(n.title):
+            out[n.id] = Suggestion(n, IGNORE, "looks like passwords")
+            continue
+        if privacy.is_private(n.title):
+            out[n.id] = Suggestion(n, IGNORE, "looks private")
+            continue
+        twins = by_title[n.title]
+        newest = max(twins, key=lambda t: t.modified_at or datetime.min)
+        if len(twins) > 1 and n is not newest:
+            out[n.id] = Suggestion(n, READ, f"{len(twins)} notes share this name")
+            continue
+        score = _recency(n, now) + _list_shaped(texts.get(n.id, "")) + _title_like_a_place(n.title)
+        why = ", ".join(w for w, on in (("edited recently", _recency(n, now) == 2),
+                                        ("list-shaped", _list_shaped(texts.get(n.id, "")) > 0)) if on)
+        scored.append((score, n, why))
+
+    scored.sort(key=lambda s: (-s[0], -(s[1].modified_at or datetime.min).timestamp()))
+    homes = 0
+    for score, n, why in scored:
+        if score >= HOME_SCORE and homes < MAX_HOMES:
+            out[n.id] = Suggestion(n, HOME, why)
+            homes += 1
+        else:
+            out[n.id] = Suggestion(n, READ, "")
+    return [out[n.id] for n in all_notes]

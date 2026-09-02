@@ -83,3 +83,37 @@ def test_parse_start_accepts_a_year_or_a_date():
     assert library.parse_start("2025-06-15") == datetime(2025, 6, 15)
     with pytest.raises(ValueError):
         library.parse_start("last year")
+
+
+def test_password_and_private_notes_are_suggested_as_ignore():
+    s = {x.note.id: x for x in library.suggest([note("n1", "Passwords"), note("n2", "Journal 2024"),
+                                                note("n3", "Groceries")], {})}
+    assert s["n1"].state == library.IGNORE and "passwords" in s["n1"].reason
+    assert s["n2"].state == library.IGNORE and "private" in s["n2"].reason
+    assert s["n3"].state == library.READ
+
+
+def test_a_recent_list_shaped_note_is_suggested_as_a_home():
+    body = "Supps\n" + "\n".join(f"- thing {i}" for i in range(12))
+    prose = "Essay\n" + "A long paragraph about something that goes on and on for quite a while. " * 8
+    s = {x.note.id: x for x in library.suggest(
+        [note("n1", "Supps", days_ago=3), note("n2", "Essay", days_ago=3)],
+        {"n1": body, "n2": prose})}
+    assert s["n1"].state == library.HOME and s["n1"].reason
+    assert s["n2"].state == library.READ
+
+
+def test_only_the_newest_of_duplicate_titles_can_be_a_home():
+    body = "Supps\n" + "\n".join(f"- thing {i}" for i in range(12))
+    s = {x.note.id: x for x in library.suggest(
+        [note("old", "Supps", days_ago=400), note("new", "Supps", days_ago=2)],
+        {"old": body, "new": body})}
+    assert s["new"].state == library.HOME
+    assert s["old"].state == library.READ and "share this name" in s["old"].reason
+
+
+def test_homes_are_capped_so_the_screen_opens_with_a_short_list():
+    body = "x\n" + "\n".join(f"- thing {i}" for i in range(12))
+    many = [note(f"n{i}", f"List {i}", days_ago=1) for i in range(30)]
+    out = library.suggest(many, {n.id: body for n in many})
+    assert sum(x.state == library.HOME for x in out) == library.MAX_HOMES
