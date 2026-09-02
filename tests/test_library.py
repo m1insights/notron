@@ -152,3 +152,65 @@ def test_a_note_she_made_after_a_yes_becomes_a_home_only_if_homes_exist(state):
     library.save(library.Library(homes={"n1"}))
     library.add_home("new")
     assert library.load().homes == {"n1", "new"}
+
+
+def _ignoring(monkeypatch, state, *ids):
+    library.save(library.Library(ignore=set(ids)))
+
+
+def test_the_keyword_search_never_opens_an_ignored_note(monkeypatch, state):
+    from notron import notes, retrieval
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Groceries"), note("n2", "Groceries")])
+    opened = []
+    monkeypatch.setattr(notes, "read_body", lambda i: opened.append(i) or "<div>Groceries</div><div>oat milk</div>")
+    _ignoring(monkeypatch, state, "n2")
+    retrieval.search("groceries oat milk")
+    assert opened == ["n1"]
+
+
+def test_the_index_never_embeds_an_ignored_note(monkeypatch, state):
+    from notron import notes, index
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "A"), note("n2", "B")])
+    monkeypatch.setattr(notes, "read_body", lambda i: f"<div>{i}</div><div>body text</div>")
+    monkeypatch.setattr(index, "_load", lambda: {})
+    saved = {}
+    monkeypatch.setattr(index, "_save", lambda data: saved.update(data))
+
+    class Brain:
+        def embed(self, texts): return [[0.0] for _ in texts]
+
+    _ignoring(monkeypatch, state, "n2")
+    index.build(Brain())
+    assert set(saved) == {"n1"}
+
+
+def test_a_stale_index_still_hides_an_ignored_note_at_search_time(state):
+    """The user ignores a note; the index was built last week. It must not surface."""
+    from notron import index
+    rows = [{"note_id": "n1", "modified": stamp(1)}, {"note_id": "n2", "modified": stamp(1)}]
+    library.save(library.Library(ignore={"n2"}))
+    assert [r["note_id"] for r in index._readable(rows)] == ["n1"]
+
+
+def test_a_tag_inside_an_ignored_note_is_never_answered(monkeypatch, state):
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", state.parent / "seen.json")
+    monkeypatch.setattr(mentions.notes, "list_all_notes", lambda: [note("n1"), note("n2")])
+    _ignoring(monkeypatch, state, "n2")
+    s = mentions.Scanner()
+    assert [n.id for n in s.changed()] == ["n1"]
+    assert "n2" in s.seen, "remembered as seen, so un-ignoring later does not replay old tags"
+
+
+def test_care_counts_only_notes_she_is_allowed_to_read(monkeypatch, state):
+    """`care.check()` also reads About Me, Memory, usage and permissions — every
+    one of those is stubbed so the test never touches Notes."""
+    from notron import care, notes, index, permissions
+    monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1"), note("n2")])
+    monkeypatch.setattr(notes, "find_note", lambda folder, title: None)
+    monkeypatch.setattr(index, "exists", lambda: False)
+    monkeypatch.setattr(permissions, "check", lambda: [])
+    monkeypatch.setattr(care, "_usage", lambda days=7: {"calls": 0, "in": 0, "out": 0})
+    _ignoring(monkeypatch, state, "n2")
+    hit = [s for s in care.check() if s.key == "index"]
+    assert hit and "your 1 notes" in hit[0].fact

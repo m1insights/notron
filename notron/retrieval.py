@@ -35,10 +35,9 @@ def search(query: str, *, limit: int = 12, excerpt_chars: int = 900) -> list[Hit
     if not terms:
         return []
 
-    candidates = [
-        n for n in notes.list_all_notes()
-        if n.folder != workspace.FOLDER
-    ]
+    from . import library
+
+    candidates = library.user_notes()
 
     # Cheap pass: score titles, so we only pay to read the bodies that matter.
     scored = []
