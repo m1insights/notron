@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notron Mac Companion — Design System</title>
+<style>
+  :root{
+    --bg:#FAFAFA; --surface:#FFFFFF; --surface-alt:#EFEFF1;
+    --text:#1A1A1E; --text-dim:#6B6B70; --text-faint:#8A8A90;
+    --accent:#0FA3B1; --hairline:#E4E4E8; --success:#28A745;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0B0B0D; --surface:#131316; --surface-alt:#151519;
+      --text:#F2F2F4; --text-dim:#9A9AA2; --text-faint:#9C9CA6;
+      --accent:#0FA3B1; --hairline:rgba(255,255,255,.1); --success:#3FD4E0;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0B0B0D; --surface:#131316; --surface-alt:#151519;
+    --text:#F2F2F4; --text-dim:#9A9AA2; --text-faint:#9C9CA6;
+    --accent:#0FA3B1; --hairline:rgba(255,255,255,.1); --success:#3FD4E0;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",Helvetica,Arial,sans-serif;padding:48px;}
+  .mono{font-family:"SF Mono",ui-monospace,Menlo,monospace;}
+  h1{font-size:26px;font-weight:700;margin:0 0 4px;}
+  .sub{color:var(--text-dim);font-size:14px;margin-bottom:40px;}
+  section{margin-bottom:48px;}
+  h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--text-faint);margin:0 0 16px;}
+  .swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:14px;}
+  .swatch{border:1px solid var(--hairline);border-radius:12px;overflow:hidden;}
+  .swatch .fill{height:64px;}
+  .swatch .meta{padding:10px 12px;background:var(--surface);}
+  .swatch .name{font-size:13px;font-weight:600;}
+  .swatch .hex{font-size:11.5px;color:var(--text-dim);}
+  .type-row{display:flex;align-items:baseline;gap:20px;padding:14px 0;border-bottom:1px solid var(--hairline);}
+  .type-row .label{width:110px;font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0;}
+  .space-row{display:flex;align-items:center;gap:16px;padding:6px 0;}
+  .space-row .bar{background:var(--accent);height:10px;border-radius:2px;}
+  .space-row .label{width:100px;font-size:12.5px;color:var(--text-dim);}
+  .radii{display:flex;gap:20px;flex-wrap:wrap;}
+  .radius-sample{width:80px;height:80px;background:var(--surface);border:1px solid var(--hairline);display:flex;align-items:flex-end;justify-content:center;padding-bottom:8px;font-size:11px;color:var(--text-dim);}
+  .comp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;}
+  .comp-card{border:1px solid var(--hairline);border-radius:14px;padding:16px;background:var(--surface);}
+  .comp-card .title{font-size:13px;font-weight:600;margin-bottom:10px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em;}
+  button.primary{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:10px 20px;font-size:14px;font-weight:600;}
+  .toggle{width:38px;height:22px;border-radius:11px;position:relative;}
+  .toggle.on{background:var(--accent);}
+  .toggle.off{background:var(--surface-alt);border:1.5px solid var(--hairline);}
+  .toggle .knob{width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:1.5px;}
+  .toggle.on .knob{right:2px;}
+  .toggle.off .knob{left:2px;background:var(--text-faint);}
+  .pill{display:inline-block;font-size:11px;font-weight:600;padding:3px 8px;border-radius:20px;background:var(--surface-alt);color:var(--text-dim);}
+  .dodont{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+  .dodont .do,.dodont .dont{border-radius:12px;padding:14px 16px;font-size:13.5px;line-height:1.5;}
+  .dodont .do{background:color-mix(in srgb, var(--accent) 10%, var(--surface));border:1px solid var(--accent);}
+  .dodont .dont{background:var(--surface);border:1px solid var(--hairline);color:var(--text-dim);}
+  .theme-toggle{position:fixed;top:24px;right:24px;font-size:12px;color:var(--text-dim);border:1px solid var(--hairline);border-radius:8px;padding:6px 10px;cursor:pointer;background:var(--surface);}
+</style>
+</head>
+<body>
+<div class="theme-toggle" onclick="document.documentElement.setAttribute('data-theme', document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark')">Toggle theme</div>
+
+<h1>Notron Mac Companion — Design System</h1>
+<div class="sub">Derived from the Gate B canvas, 2026-08-31. Notes-native base, Operator dark skin on Skills &amp; Plugins only.</div>
+
+<section>
+  <h2>Colour</h2>
+  <div class="swatches">
+    <div class="swatch"><div class="fill" style="background:var(--bg)"></div><div class="meta"><div class="name">bg</div><div class="hex mono">#FAFAFA / #0B0B0D</div></div></div>
+    <div class="swatch"><div class="fill" style="background:var(--surface)"></div><div class="meta"><div class="name">surface</div><div class="hex mono">#FFFFFF / #131316</div></div></div>
+    <div class="swatch"><div class="fill" style="background:var(--surface-alt)"></div><div class="meta"><div class="name">surface-alt</div><div class="hex mono">#EFEFF1 / #151519</div></div></div>
+    <div class="swatch"><div class="fill" style="background:var(--accent)"></div><div class="meta"><div class="name">accent</div><div class="hex mono">#0FA3B1</div></div></div>
+    <div class="swatch"><div class="fill" style="background:var(--text)"></div><div class="meta"><div class="name">text</div><div class="hex mono">#1A1A1E / #F2F2F4</div></div></div>
+    <div class="swatch"><div class="fill" style="background:var(--text-dim)"></div><div class="meta"><div class="name">text-dim</div><div class="hex mono">#6B6B70 / #9A9AA2</div></div></div>
+    <div class="swatch"><div class="fill" style="background:var(--success)"></div><div class="meta"><div class="name">success</div><div class="hex mono">#28A745 / #3FD4E0</div></div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Type</h2>
+  <div class="type-row"><div class="label">Headline</div><div style="font-size:24px;font-weight:700;">No key. No Terminal.</div></div>
+  <div class="type-row"><div class="label">Title</div><div style="font-size:20px;font-weight:700;">Skills &amp; Plugins</div></div>
+  <div class="type-row"><div class="label">Body</div><div style="font-size:15px;font-weight:600;">Reminders</div></div>
+  <div class="type-row"><div class="label">Caption</div><div style="font-size:13px;color:var(--text-dim);">Turns "remind me to…" into a real reminder.</div></div>
+  <div class="type-row"><div class="label">Label</div><div style="font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-faint);">Model tiers</div></div>
+  <div class="type-row"><div class="label">Literal value</div><div style="font-size:14px;letter-spacing:.02em;">sk-nf-••••••••••••3fQ2</div></div>
+  <div class="sub" style="margin:8px 0 0;">No monospace font anywhere — literal values stay in SF Pro with slight letter-spacing. Removed 2026-08-31.</div>
+</section>
+
+<section>
+  <h2>Spacing</h2>
+  <div class="space-row"><div class="label">space-1 · 4px</div><div class="bar" style="width:4px;"></div></div>
+  <div class="space-row"><div class="label">space-2 · 8px</div><div class="bar" style="width:8px;"></div></div>
+  <div class="space-row"><div class="label">space-3 · 12px</div><div class="bar" style="width:12px;"></div></div>
+  <div class="space-row"><div class="label">space-4 · 16px</div><div class="bar" style="width:16px;"></div></div>
+  <div class="space-row"><div class="label">space-5 · 22px</div><div class="bar" style="width:22px;"></div></div>
+  <div class="space-row"><div class="label">space-6 · 28px</div><div class="bar" style="width:28px;"></div></div>
+  <div class="space-row"><div class="label">space-7 · 32px</div><div class="bar" style="width:32px;"></div></div>
+</section>
+
+<section>
+  <h2>Radius</h2>
+  <div class="radii">
+    <div class="radius-sample" style="border-radius:8px;">sm · 8</div>
+    <div class="radius-sample" style="border-radius:10px;">md · 10</div>
+    <div class="radius-sample" style="border-radius:14px;">lg · 14</div>
+    <div class="radius-sample" style="border-radius:999px;">pill</div>
+  </div>
+</section>
+
+<section>
+  <h2>Components</h2>
+  <div class="comp-grid">
+    <div class="comp-card"><div class="title">Button — primary</div><button class="primary">Start Simple</button></div>
+    <div class="comp-card"><div class="title">Toggle — on / off</div>
+      <div style="display:flex;gap:16px;align-items:center;">
+        <div class="toggle on"><div class="knob"></div></div>
+        <div class="toggle off"><div class="knob"></div></div>
+      </div>
+    </div>
+    <div class="comp-card"><div class="title">Skill card — core</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;"><div style="font-size:14px;font-weight:600;">Calendar</div><div class="pill">Core</div></div>
+      <div style="font-size:12.5px;color:var(--text-dim);margin-top:6px;">Puts real events on your calendar.</div>
+    </div>
+    <div class="comp-card"><div class="title">API key — connected</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:13px;letter-spacing:.02em;">sk-nf-••••3fQ2</div>
+        <div style="color:var(--success);font-size:12px;font-weight:600;">✓ Connected</div>
+      </div>
+    </div>
+    <div class="comp-card" style="grid-column:span 2;"><div class="title">Slider — plain-language question, not a raw number</div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;">
+        <div style="font-size:13.5px;font-weight:600;">How much can she spend before pausing?</div>
+        <div style="font-size:14px;font-weight:700;color:var(--accent);">$25<span style="font-size:11px;font-weight:500;color:var(--text-faint);">/mo</span></div>
+      </div>
+      <div style="position:relative;height:20px;margin-top:12px;">
+        <div style="position:absolute;top:8px;left:0;right:0;height:4px;border-radius:2px;background:var(--surface-alt);"></div>
+        <div style="position:absolute;top:8px;left:0;width:38%;height:4px;border-radius:2px;background:var(--accent);"></div>
+        <div style="position:absolute;top:1px;left:38%;width:18px;height:18px;border-radius:50%;background:var(--surface);border:2.5px solid var(--accent);margin-left:-9px;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:6px;font-size:11.5px;color:var(--text-faint);">
+        <div>Careful — $5</div><div>No limit — $100</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Do / Don't</h2>
+  <div class="dodont">
+    <div class="do">Do keep the accent to one use per screen — one active toggle, one CTA.</div>
+    <div class="dont">Don't let two accent elements compete for the eye on the same screen.</div>
+    <div class="do">Do mask API keys with a copy/paste affordance.</div>
+    <div class="dont">Don't render a full unmasked key outside the paste moment.</div>
+    <div class="do">Do use the dashed border only for "drop a skill here."</div>
+    <div class="dont">Don't reuse dashed borders for any other empty state.</div>
+  </div>
+</section>
+
+</body>
+</html>
