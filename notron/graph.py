@@ -4,15 +4,15 @@ Not an agent in a while-loop. A declared network of specialised nodes with
 explicit edges, so it is obvious — to you and to a reviewer — exactly what runs,
 in what order, and on which model tier.
 
-    watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► writer ─► executor
-                  │          │             │           │         │           │           │        │       │          │
-                  └──────────┴─────────────┴───────────┘         └───────────┴───────────┴────────┴───────┴──────────┘
+    watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► organizer ─► undoer ─► writer ─► executor
+                  │          │             │           │         │           │           │        │         │          │        │          │
+                  └──────────┴─────────────┴───────────┘         └───────────┴───────────┴────────┴─────────┴──────────┴────────┴──────────┘
                   (each skipped unless the router asked for it)
 
 Every node may decline: `retriever` no-ops unless the router asked for context,
-`planner` only fires on plan intent, `filer` only on file intent, `writer` steps
-aside for plans and filings. The Guard sits inside `executor` and is the single
-choke point for every write.
+`planner` only fires on plan intent, `filer` only on file intent, `organizer` and
+`undoer` only on their own, and `writer` steps aside for all four. The Guard sits
+inside `executor` and is the single choke point for every write.
 """
 
 from __future__ import annotations
@@ -42,6 +42,8 @@ NODES: dict[str, Node] = {
     "scheduler": nodes.scheduler,
     "doer": nodes.doer,
     "filer": nodes.filer,
+    "organizer": nodes.organizer,
+    "undoer": nodes.undoer,
     "writer": nodes.writer,
     "executor": nodes.executor,
 }
@@ -55,12 +57,15 @@ EDGES = (
     Edge("planner", "scheduler"),
     Edge("scheduler", "doer"),
     Edge("doer", "filer"),
-    Edge("filer", "writer"),
+    Edge("filer", "organizer"),
+    Edge("organizer", "undoer"),
+    Edge("undoer", "writer"),
     Edge("writer", "executor"),
 )
 
 ORDER = ("watcher", "router", "retriever", "researcher", "agenda",
-         "planner", "scheduler", "doer", "filer", "writer", "executor")
+         "planner", "scheduler", "doer", "filer", "organizer", "undoer",
+         "writer", "executor")
 
 
 def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,

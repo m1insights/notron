@@ -254,6 +254,49 @@ def test_the_declared_order_still_matches_the_declared_edges():
         assert graph.ORDER.index(e.frm) < graph.ORDER.index(e.to)
 
 
+def _a_note_of_theirs(monkeypatch, body="<div>Parking Garages</div><div>12 Trinity — $18</div>"):
+    """Every `notes` lookup in the graph resolves, so the walk can be exercised
+    end to end without the Notes app."""
+    from notron.notes import Note
+
+    monkeypatch.setattr(nodes.notes, "find_note",
+                        lambda folder, title: Note(id="n1", title=title, folder=folder,
+                                                   modified="x"))
+    monkeypatch.setattr(nodes.notes, "read_body", lambda note_id: body)
+
+
+def test_undo_walks_the_whole_graph_without_ever_asking_the_model(monkeypatch):
+    """Tagged on one of their own notes, "undo" is answered by plain code from
+    end to end: the router reads the word, the undoer pops the saved copy, and
+    the writer stands aside instead of paying for a second reply."""
+    from notron import undo
+
+    _a_note_of_theirs(monkeypatch)
+    monkeypatch.setattr(undo, "pop", lambda note_id: "<div>the way it was</div>")
+    brain = FakeBrain()
+    state = graph.run("undo", brain=brain, trigger="notes", dry_run=True,
+                      reply_to=("Parking Garages", "Notes", 3))
+
+    assert [w.mode for w in state.writes] == ["restore"]
+    assert brain.calls == [], "nothing here needs a model"
+
+
+def test_a_tidy_up_lands_below_the_note_until_that_note_is_opted_in(monkeypatch):
+    """Invariant #2 end to end: routed in code, cleaned by Super, and still only
+    *added* to a note nobody has opted into rewrite-in-place."""
+    from notron import rewrite
+
+    _a_note_of_theirs(monkeypatch)
+    monkeypatch.setattr(rewrite, "allowed", lambda note_id: False)
+    brain = FakeBrain()
+    state = graph.run("clean this up", brain=brain, trigger="notes", dry_run=True,
+                      reply_to=("Parking Garages", "Notes", 3))
+
+    assert [w.mode for w in state.writes] == ["insert"]
+    assert ("json", "fast") not in brain.calls, "the router read the words itself"
+    assert brain.calls.count(("text", "smart")) == 1, "cleaned once, not once per node"
+
+
 def test_the_planner_is_told_not_to_plan_over_a_real_appointment():
     from notron import nodes
 

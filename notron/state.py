@@ -7,14 +7,21 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Write:
-    """A proposed change to a note. Nothing is applied until the Guard passes it."""
+    """A proposed change to a note. Nothing is applied until the Guard passes it.
+
+    `markdown` is Markdown in every mode but one: a `restore` carries the exact
+    HTML the note held before her last write (what `undo.save` captured), and
+    `Executor.restore` puts it back verbatim rather than rendering it again.
+    """
     title: str
     markdown: str
-    mode: str = "replace"       # "replace" | "append" | "insert"
+    mode: str = "replace"       # "replace" | "append" | "insert" | "mark" | "restore"
     folder: str | None = None   # None -> NOTRON's own folder
     after: int | None = None    # insert mode: put the reply after this block
     anchor: str = ""            # insert mode: the text the reply belongs under,
                                 # so it can be found again if the note moved
+    rewrite_allowed: bool = False   # replace mode: the user has opted this one
+                                    # note into being rewritten in place
 
 
 @dataclass

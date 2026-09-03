@@ -10,17 +10,29 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from . import conversation, markup, notes, privacy, workspace
+from . import conversation, markup, notedoc, notes, privacy, rewrite, undo, workspace
 from .executor import Executor
 from .state import Action, State, Write
 
-INTENTS = ("question", "task", "capture", "plan", "remind", "schedule", "file", "ignore")
+INTENTS = ("question", "task", "capture", "plan", "remind", "schedule", "file",
+           "undo", "organize", "ignore")
 
 # "file this: …", "file my brain dump", "sort these" — said in plain words, so
 # the Filer is chosen in code and the model is never asked. A tag that says
 # "file" must file, every time, not nine times in ten.
 FILE_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?(?:file\b|sort\s+(?:this|these|that|it|them)\b)"
                         r"|\bbrain\s*dump\b")
+
+# "undo", "revert that", "clean this up" — the same posture as filing. Whether
+# someone said "put it back" is a fact about the words, never a judgment call,
+# so it costs no model call and cannot come out right only nine times in ten.
+UNDO_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?undo\b|revert\s+(?:that|this)\b")
+ORGANIZE_WORDS = re.compile(r"(?i)\borganize\s+this\b|clean\s+(?:this|it)\s+up\b|"
+                            r"tidy\s+(?:this|it)\s+(?:note\s+)?up?\b")
+# The `yes` under her one-line offer to keep a note clean in place. Read here
+# rather than sent to the classifier for the same reason the Filer's `yes` is
+# read in code: it is one word, and there is nothing to interpret.
+CONFIRM_WORDS = re.compile(r"(?i)^\s*(?:yes|yep|yeah|sure|go ahead|do it)\.?\s*$")
 
 
 # ---------------------------------------------------------------- Watcher
@@ -71,6 +83,26 @@ def router(state: State, *, brain) -> State:
         state.intent = "file"
         state.note("router", "file — said so in plain words, no model asked")
         return state
+    if state.reply_to is not None:
+        # Everything below is about *this* note, so it only means anything when
+        # the request came from inside one. Said with no note behind it —
+        # `notron ask "undo my last change"` — it falls through to the model and
+        # gets an ordinary answer, rather than a guess at which note was meant.
+        if UNDO_WORDS.search(state.request):
+            state.intent = "undo"
+            state.note("router", "undo — said so in plain words, no model asked")
+            return state
+        # Rewriting in place is only ever a question about the user's own
+        # notes. `reply_to` is set for 📥 Ask Notron too — the listener answers
+        # there the same way it answers a tag anywhere else — and tidying her
+        # own inbox note is not what any of this is for, nor is reading a `yes`
+        # meant for something else as consent to rewrite it.
+        if state.reply_to[1] != workspace.FOLDER and (
+                ORGANIZE_WORDS.search(state.request)
+                or CONFIRM_WORDS.fullmatch(state.request.strip())):
+            state.intent = "organize"
+            state.note("router", "organize — said so in plain words, no model asked")
+            return state
     try:
         out = brain.ask_json(system=ROUTER_SYSTEM, user=state.request, tier="fast", max_tokens=400)
     except Exception as e:
@@ -82,6 +114,13 @@ def router(state: State, *, brain) -> State:
     state.intent = out.get("intent", "question")
     if state.intent not in INTENTS:
         state.intent = "question"
+    if state.intent in ("undo", "organize"):
+        # Those two are settled above, in code, from the words themselves. The
+        # router prompt never offers them — but a hallucinated one would reach a
+        # node that expects a real note behind `state.reply_to`, so it is
+        # refused here rather than defended against twice downstream.
+        state.intent = "question"
+        state.note("router", "the model cannot choose undo or organize — answering instead")
     if state.intent == "ignore" and state.trigger in ("notes", "manual"):
         # Everything that reaches the router today was said *to* her — typed in
         # the Ask note, tagged #notron, or given on the command line. A router
@@ -325,6 +364,204 @@ def filer(state: State, *, brain, dry_run: bool = False) -> State:
     return state
 
 
+# ---------------------------------------------------------------- Organizer
+
+ORGANIZER_SYSTEM = """You are Notron, a personal assistant living inside the user's Apple Notes.
+
+You are given one whole note. Reply with that entire note, cleaned and organized,
+in Markdown, and nothing else.
+
+Rules:
+- Keep every fact. Every thing the note says must still be there afterwards.
+- Never invent anything. You are tidying what is there, not adding to it.
+- Their words stay their words. Group, order and format them; do not rewrite
+  their voice or summarise their thoughts away.
+- Markdown: ## headings, - bullets, "- [ ]" for tasks, | tables | when comparing.
+- The first line you are given is the note's title. It is kept for you — do not
+  repeat it in your reply.
+- Leave out the line where they asked you to tidy the note, and anything you
+  said back to them. Those are the conversation, not the note.
+- Never repeat a password, PIN, key or account number, even if you can see one.
+- No preamble, no explanation, no code fence. Just the note."""
+
+#: The phrase that makes her offer recognisable when she reads the note back a
+#: poll later. It has to appear verbatim in `ORGANIZE_ASK`, and it is the only
+#: thing that tells a `yes` about rewriting from a `yes` about anything else.
+ORGANIZE_ASK_MARKER = "keep this note clean in place"
+ORGANIZE_ASK = (f"Want me to {ORGANIZE_ASK_MARKER} next time, instead of adding below? "
+                "Reply **yes** and I will.")
+
+#: Her receipt for a rewrite. Said once, written into the note once — the
+#: answer she reports and the turn the note ends on are the same sentence.
+CLEANED = "Cleaned it up."
+
+#: Room for the whole note to come back, not just an answer about it. Every
+#: other node asks the model for a reply, so a fixed budget is fine there; here
+#: the reply *is* the note, and `brain.ask` cannot tell an answer that finished
+#: from one that ran out of room — so a long note under a fixed budget would
+#: come back silently missing its tail, and on an opted-in note that lands
+#: straight over the original. Roughly two tokens of room per four characters,
+#: floored so a short note still has space to think in, capped so a huge one
+#: cannot run away.
+MIN_CLEAN_TOKENS, MAX_CLEAN_TOKENS = 1500, 8000
+
+
+def _budget_for(text: str) -> int:
+    return max(MIN_CLEAN_TOKENS, min(len(text) // 2, MAX_CLEAN_TOKENS))
+
+
+def organizer(state: State, *, brain) -> State:
+    """The whole note, cleaned. Super, because it is the note itself at stake.
+
+    Outside 🤖 NOTRON she may only add (invariant #2), so by default the cleaned
+    version lands *underneath* what the user wrote, exactly like any other
+    reply, plus one line offering to keep that note clean in place instead. A
+    `yes` typed under that line — tagged, because outside her folder nothing
+    untagged is ever read — is the opt-in, and it costs no model call.
+
+    She never applies anything herself: every branch here ends in a proposed
+    `Write` for the Guard to judge and the Executor to apply.
+    """
+    if state.intent != "organize" or state.reply_to is None:
+        return state
+    title, folder, _ = state.reply_to
+    note = notes.find_note(folder, title)
+    if note is None:
+        state.answer = "I can't find that note any more."
+        state.note("organizer", "no such note")
+        return state
+    body = notes.read_body(note.id)
+
+    if CONFIRM_WORDS.fullmatch(state.request.strip()):
+        if ORGANIZE_ASK_MARKER not in _her_last_turn(body):
+            # A bare `yes` is consent to rewrite a note only directly under the
+            # offer to rewrite it. Anywhere else it is answering something else
+            # entirely — the router matched a word, not a meaning — so hand it
+            # back to be answered like any other turn.
+            state.intent = "question"
+            state.note("organizer", "a yes, but not to my offer — answering it normally")
+            return state
+        rewrite.allow(note.id)
+        state.answer = "Got it — from now on I'll keep this note clean in place."
+        state.writes.append(_reply(state))
+        state.note("organizer", f"{title} may be rewritten in place — no model asked")
+        return state
+
+    text = markup.to_text(body)
+    cleaned = _without_tags(brain.ask(
+        system=ORGANIZER_SYSTEM,
+        user=(f"# The note, exactly as it is now\n{text}\n\n"
+              f"# The user's standing instructions\n{state.about or '(none yet)'}\n\n"
+              f"# What they asked\n{state.request}"),
+        tier="smart",
+        max_tokens=_budget_for(text),
+    ))
+
+    if rewrite.allowed(note.id):
+        # One write, not two. Every successful write saves the note's prior body
+        # for undo, and there is only one slot per note — a separate reply write
+        # straight after this one would overwrite it with the *cleaned* body,
+        # and "undo that" would hand back her own version instead of theirs.
+        # So her turn rides along inside the rewrite.
+        state.writes.append(Write(title=title, folder=folder, mode="replace",
+                                  rewrite_allowed=True,
+                                  markdown=f"{cleaned}\n\n{conversation.turn(CLEANED)}"))
+        state.answer = CLEANED
+        state.note("organizer", f"rewrote {title} in place ({len(cleaned)} chars)")
+    else:
+        state.answer = f"{cleaned}\n\n{ORGANIZE_ASK}"
+        state.writes.append(_reply(state))
+        state.note("organizer", f"added a cleaned copy below and asked ({len(cleaned)} chars)")
+    return state
+
+
+def _without_tags(markdown: str) -> str:
+    """Drop any line still addressed to her.
+
+    A rewrite replaces the whole note, so a `@notron clean this up` the model
+    copied through would sit there unanswered — and the mention scanner would
+    hand it straight back on the next poll, and the one after that. The prompt
+    asks for it to be left out; this is what makes sure.
+    """
+    kept = [l for l in markdown.split("\n") if not conversation.TAG.search(l)]
+    return "\n".join(kept).strip()
+
+
+def _her_last_turn(body_html: str) -> str:
+    """The last thing Notron said in a note, as plain text.
+
+    `conversation.unanswered` finds what the user said that she has not answered;
+    this is the other half — what she said last — which is the only way to tell a
+    `yes` that answers her offer from a `yes` that answers something else.
+    """
+    texts = notedoc.texts(body_html)
+    found: list[str] = []
+    i = 0
+    while i < len(texts):
+        if not texts[i].lstrip().startswith(conversation.SIGNATURE):
+            i += 1
+            continue
+        # Everything through to her closing rule is one turn of hers — the same
+        # reading `conversation.unanswered` uses, so a heading or a list inside
+        # her reply is not mistaken for the start of another one.
+        turn: list[str] = []
+        while i < len(texts) and texts[i].strip() != conversation.RULE:
+            turn.append(texts[i])
+            i += 1
+        found = turn        # keep going: the last of her turns is the live one
+    return "\n".join(found)
+
+
+# ------------------------------------------------------------------- Undoer
+
+def undoer(state: State, *, brain=None) -> State:
+    """No model. Puts a note back the way it was before her last write to it.
+
+    One step back, per note (`undo.py`), and the saved copy is consumed as it is
+    used — so a second "undo" in a row says there is nothing to undo rather than
+    bouncing the note between two versions.
+    """
+    if state.intent != "undo" or state.reply_to is None:
+        return state
+    title, folder, _ = state.reply_to
+    note = notes.find_note(folder, title)
+    if note is None:
+        # No note means nothing to put back — and nowhere to say so either,
+        # since `_reply` anchors inside this very note. Popping the slot here
+        # would spend the one step back on a write that could never land.
+        state.answer = "Nothing to undo here."
+        state.note("undoer", "no such note")
+        return state
+
+    old = undo.pop(note.id)
+    if old:
+        state.answer = "Done — put it back the way it was."
+        # `markdown` carries the note's own saved HTML here, not Markdown —
+        # `Executor.restore` puts it back verbatim (see `state.Write`) — with her
+        # one line of receipt rendered onto the end of it. That is deliberate,
+        # twice over. It is one write, not two: `restore` saves no undo slot, so
+        # a second write would fill the slot with the body she just put back and
+        # leave the note one step behind itself. And the receipt has to sit at
+        # the *end* of the restored note rather than under the line that asked
+        # for the undo, because that line is gone along with everything else she
+        # wrote over — what is back is the note as it stood before her last
+        # write, and whatever the user had said in it then is unanswered all
+        # over again. Without a turn after it the watcher hands it straight back
+        # and she redoes the very write that was just undone.
+        state.writes.append(Write(
+            title=title, folder=folder, mode="restore",
+            markdown=old + markup.to_html(conversation.turn(state.answer)),
+        ))
+    else:
+        # Nothing moved, so her turn goes under the line that asked, like any
+        # other reply. A turn with no visible answer reads as unanswered next
+        # pass, and she is asked to undo again, and again.
+        state.answer = "Nothing to undo here."
+        state.writes.append(_reply(state))
+    state.note("undoer", "restored" if old else "nothing saved for this note")
+    return state
+
+
 # ---------------------------------------------------------------- Planner
 
 PLANNER_SYSTEM = """You are Notron, a personal assistant living inside the user's Apple Notes.
@@ -410,8 +647,10 @@ Rules:
 
 
 def writer(state: State, *, brain) -> State:
-    if state.intent in ("ignore", "plan", "file"):
-        return state       # the planner and the filer have already said their piece
+    if state.intent in ("ignore", "plan", "file", "undo", "organize"):
+        # The planner, the filer, the undoer and the organizer have each already
+        # said their piece, where it was asked. A second reply would double up.
+        return state
     if state.intent in ("remind", "schedule"):
         # The doer already said exactly what happened. Paying a smart model to
         # rephrase a fact would only give it room to get the fact wrong.
@@ -515,8 +754,12 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
                           anchor=w.anchor)
         elif w.mode == "append":
             r = ex.append(w.title, w.markdown, folder=folder)
+        elif w.mode == "restore":
+            # Already the note's own HTML, saved before she wrote over it.
+            r = ex.restore(w.title, w.markdown, folder=folder)
         else:
-            r = ex.replace(w.title, w.markdown, folder=folder)
+            r = ex.replace(w.title, w.markdown, folder=folder,
+                           rewrite_allowed=w.rewrite_allowed)
         state.results.append(f"{'✓' if r.ok else '✗'} {w.title} — {r.reason}")
     state.note("executor", f"{len(state.writes)} writes")
     return state
