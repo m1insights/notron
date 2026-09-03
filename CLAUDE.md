@@ -8,6 +8,14 @@ Built for the Nebius × NVIDIA Global AI Hackathon (Personal AI track, due
 run on Nebius Token Factory**, and **at least one NVIDIA open model must be used**.
 Do not swap the model provider.
 
+## Status: pre-launch
+
+No production users. The developer is the only person running this, against
+their own Notes/Reminders/Calendar, to find rough edges before anyone else touches
+it. No deadline pressure beyond the hackathon date above — prefer the correct
+long-term design over the fastest thing to ship, and it's fine to land a feature
+in stages (e.g. safe-default now, riskier opt-in once its safety net exists).
+
 ## Design
 
 Before building or changing ANY UI in the `mac/` companion app, read `docs/design/DESIGN.md`
@@ -23,7 +31,7 @@ is specced in `docs/design/04-onboarding-flow.md`.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 300 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 361 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing
@@ -57,9 +65,9 @@ a long query still delays the listener.
 A declared graph of specialised nodes, not one agent in a loop:
 
 ```
-watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► writer ─► executor
-  │          │          │            │           │          │           │          │        │       │          │
-no LLM     Nano      no LLM       Tavily      no LLM       Super       Nano     no LLM   Super   Super   no LLM + Guard
+watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► organizer ─► undoer ─► writer ─► executor
+  │          │          │            │           │          │           │          │        │        │           │        │          │
+no LLM     Nano      no LLM       Tavily      no LLM       Super       Nano     no LLM   Super     Super     no LLM   Super   no LLM + Guard
 ```
 
 Nodes decline work they do not own. Model tiers live in `brain.DEFAULT_MODELS`
@@ -82,6 +90,8 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `filer.py` | The Brain Dump: sorts lines into the user's own notes, ticks them, proposes new notes |
 | `layout.py` | How a filed thought is laid out — journal (one bold date a day) or list; pure Markdown |
 | `library.py` | Per-note home / read only / ignore choices; the one place "never reads it" lives |
+| `rewrite.py` | Per-note permission to rewrite in place instead of only adding — off by default |
+| `undo.py` | One saved copy per note, consumed on use — the safety net under rewrite |
 | `guard.py` | The single choke point for every write |
 | `executor.py` | Applies writes. No model runs here, ever. |
 | `graph.py` / `nodes.py` / `state.py` | The graph and what flows along it |
@@ -238,6 +248,40 @@ user is sitting in, not the model. `privacy.is_key_dump` catches the unlabelled
 case (that "CRITICAL" note is six bare Obsidian recovery codes) and is deliberately
 **not** wired into `contains_secret` — a run of order numbers must cost one click in
 a panel, never a write the Guard refuses.
+
+## Rewrite permission and undo (`rewrite.py`, `undo.py`, `organizer`, `undoer`)
+
+Invariant #2 — outside `🤖 NOTRON` she may only add — has exactly two narrow,
+deliberate carve-outs, both gated to a single chokepoint. **`organizer`**
+("organize this" / "clean this up" / "tidy this note up") asks Super for the
+whole note, cleaned; by default the result lands *underneath* what the user
+wrote, exactly like any other reply, plus one line offering to keep that note
+clean in place next time. That offer must be answered with a tagged
+`@notron yes` — outside her folder nothing untagged is ever read — and only
+then does `rewrite.allow(note.id)` fire, which is the only thing that ever
+sets `Write.rewrite_allowed = True`, which is the only thing that lets
+`guard.check`'s outside-folder block pass a `replace`. A `yes` only confirms
+the offer directly above it (`organizer._offer_precedes`), never an older,
+already-superseded one lower in the same note. An empty or implausibly short
+model answer never becomes the note — the one path here that can overwrite a
+user's own words outright refuses to write rather than risk it.
+
+**`undoer`** (`@notron undo` / `revert this`, said inside the note itself —
+bare "undo" in 📥 Ask Notron asks which note rather than guessing) puts a note
+back to what it held before Notron's immediately-prior write, one level,
+consumed on use. Every successful write except `restore` itself saves the
+prior body (`Executor._apply`); `restore` is exempt from the outside-folder
+block and the append-preserve/secret-scan checks (`guard.py`) because it puts
+back words that were already live in that exact note a moment ago — not new,
+AI-authored content. The receipt rides inside the single `restore` write
+(a second write would refill the one undo slot with the wrong body) and ticks
+every unanswered tagged turn the restored body still holds, or the watcher
+would hand the note straight back and redo the very write that was just
+undone.
+
+Full design: `docs/plans/2026-09-03-rewrite-permission-and-undo-design.md`.
+Onboarding's global default (`rewrite.default_for_new_notes`) has no `mac/`
+screen yet — deliberately deferred, not blocking for single-user testing.
 
 ## The self-improvement loop (`reflect.py`)
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import calendar, guard, markup, notedoc, notes, reminders, workspace
+from . import calendar, guard, markup, notedoc, notes, reminders, undo, workspace
 
 
 @dataclass(frozen=True)
@@ -28,9 +28,12 @@ class Executor:
 
     # -- public API ------------------------------------------------------
 
-    def replace(self, title: str, body_markdown: str, *, folder: str = workspace.FOLDER) -> WriteResult:
-        """Rewrite a note Notron owns."""
-        return self._apply(folder, title, body_markdown, mode="replace")
+    def replace(self, title: str, body_markdown: str, *, folder: str = workspace.FOLDER,
+                rewrite_allowed: bool = False) -> WriteResult:
+        """Rewrite a note Notron owns — or, with `rewrite_allowed`, one of the
+        user's own notes they have opted into rewrite-in-place."""
+        return self._apply(folder, title, body_markdown, mode="replace",
+                           rewrite_allowed=rewrite_allowed)
 
     def append(self, title: str, body_markdown: str, *, folder: str = workspace.FOLDER) -> WriteResult:
         """Add to the end of a note without touching what is already there."""
@@ -48,11 +51,19 @@ class Executor:
         Each mark is (the line's text, a block hint, the receipt)."""
         return self._apply(folder, title, "", mode="mark", marks=marks)
 
+    def restore(self, title: str, raw_html_body: str, *, folder: str = workspace.FOLDER) -> WriteResult:
+        """Put a note back exactly as it was — the undo path. `raw_html_body` is
+        already-rendered HTML (what `undo.save` captured), never Markdown — it
+        must not go through `markup.render`/`markup.to_html` a second time.
+        Refused on a note that no longer exists — there is nothing to put back."""
+        return self._apply(folder, title, raw_html_body, mode="restore")
+
     # -- internals -------------------------------------------------------
 
     def _apply(self, folder: str, title: str, body_markdown: str, *, mode: str,
                after: int | None = None, anchor: str = "",
-               marks: list[tuple[str, int, str]] | None = None) -> WriteResult:
+               marks: list[tuple[str, int, str]] | None = None,
+               rewrite_allowed: bool = False) -> WriteResult:
         note = notes.find_note(folder, title)
         old_body = notes.read_body(note.id) if note else ""
 
@@ -74,11 +85,18 @@ class Executor:
             # the user keeps typing while the model thinks. Re-find the words.
             at = notedoc.locate(old_body, anchor, near=after or 0)
             new_body = notedoc.insert_after(old_body, at, markup.to_html(body_markdown))
+        elif mode == "restore":
+            if not old_body:
+                return WriteResult(False, "cannot restore a note that does not exist")
+            # Already the note's own HTML, saved before she wrote over it.
+            # Rendering it again would turn her markup into visible text.
+            new_body = body_markdown
         else:
             new_body = markup.render(title, body_markdown)
 
         verdict = guard.check(
-            folder=folder, title=title, old_body=old_body, new_body=new_body, mode=mode
+            folder=folder, title=title, old_body=old_body, new_body=new_body, mode=mode,
+            rewrite_allowed=rewrite_allowed if mode == "replace" else False,
         )
         if not verdict:
             self._log(f"**BLOCKED** {mode} on *{title}* — {verdict.reason}")
@@ -102,6 +120,18 @@ class Executor:
             if mode in ("append", "insert", "mark") and notes.read_body(note.id) != old_body:
                 return WriteResult(False, "the note changed while she was writing — "
                                           "she'll try again next pass", note.id)
+            # One step back, per note: what this note held a second before she
+            # wrote, so "undo that" can put it back. Last thing before the
+            # write, so a blocked or skipped write leaves no slot pointing at a
+            # write that never happened. Only for a note that already existed —
+            # a brand-new note has nothing to go back to. Not for `restore`
+            # itself (design decision 4 lists append/insert/mark/replace, not
+            # restore) — saving here would let a second `@notron undo` pop a
+            # slot holding Notron's own overwritten body, tag line and all,
+            # and write it right back: an undo/redo loop the mention scanner
+            # would keep re-triggering forever, with no receipt to break it.
+            if mode != "restore":
+                undo.save(note.id, old_body)
             notes.write_body(note.id, new_body)
             note_id = note.id
         else:

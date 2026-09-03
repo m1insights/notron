@@ -12,6 +12,19 @@ to call `notes.write_body` directly. Three guarantees, in plain terms:
 A fourth mode, `mark`, exists for the Filer: it may put a `✓ ` in front of a
 line and a receipt after it, and `notedoc.marks_between` proves that is all it
 did. It is an addition like any other — nothing of yours is ever removed.
+
+Guarantee 2 has exactly two carve-outs, both narrow and both deliberate. A
+fifth mode, `restore`, is the undo path: it puts back a body this very note
+held a moment ago — your words, not the model's — so it needs no rewrite
+permission and is exempt both from the checks that prove an append kept what
+was there and from guarantee 3's secret scan (that text was already live in
+the note; refusing to restore it would leave you stuck with what she wrote
+over it). `check` cannot prove that a `restore` body really is what the note
+held before — it trusts the caller entirely for that mode, the same way it
+trusts every caller's `old_body`. Only `undo.pop`'s saved copy, fed through
+`Executor.restore`, is meant to reach here as one. And `rewrite_allowed` lets
+a `replace` land outside her folder only on a note you have explicitly opted
+into rewrite-in-place.
 """
 
 from __future__ import annotations
@@ -47,12 +60,15 @@ class Verdict:
 ALLOW = Verdict(True, "ok")
 
 
-def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str) -> Verdict:
-    """Judge one proposed write. `mode` is "replace" or "append"."""
+def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str,
+          rewrite_allowed: bool = False) -> Verdict:
+    """Judge one proposed write. `mode` is "replace", "append", "insert",
+    "mark" or "restore"; `rewrite_allowed` is the user's opt-in to a `replace`
+    outside her folder."""
     if title in workspace.READ_ONLY:
         return Verdict(False, f"{title} is read-only — it is the user's instruction note.")
 
-    if mode not in ("replace", "append", "insert", "mark"):
+    if mode not in ("replace", "append", "insert", "mark", "restore"):
         return Verdict(False, f"unknown write mode {mode!r}")
 
     if not new_body.strip():
@@ -62,7 +78,7 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str) -
         return Verdict(False, f"body is {len(new_body)} chars, over the {MAX_BODY_CHARS} limit")
 
     outside = folder != workspace.FOLDER
-    if outside and mode == "replace":
+    if outside and mode == "replace" and not rewrite_allowed:
         return Verdict(
             False,
             f"{title!r} is outside {workspace.FOLDER}; Notron may only add to it, never rewrite it.",
@@ -90,7 +106,10 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str) -
         added = "".join(marks)
     else:
         added = new_body
-    if privacy.contains_secret(added):
+    # A restore is exempt: the body going back in was live in this exact note a
+    # moment ago, so anything key-shaped in it is the user's own text, already
+    # theirs. Refusing it would leave them stuck with the version she wrote.
+    if mode != "restore" and privacy.contains_secret(added):
         return Verdict(False, "the text contains something that looks like a password or key")
 
     if mode == "replace" and title in workspace.SHARED:

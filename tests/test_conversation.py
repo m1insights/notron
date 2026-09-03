@@ -32,6 +32,15 @@ def test_an_answered_question_is_not_asked_again():
     assert conversation.unanswered(body, ignore=IGNORE) == []
 
 
+def test_a_ticked_line_written_as_a_bullet_is_not_asked_again():
+    """`to_text` turns a list item's opening tag into a literal "• " ahead of
+    whatever the line starts with, so a ticked list item reads "• ✓ …", not
+    "✓ …". A bare `startswith(FILED)` missed that and called it unfiled
+    forever — the exact loop the undo tick relies on this function to close."""
+    body = "<div>📥 Ask Notron</div><ul><li>✓ @notron file this → Somewhere</li></ul>"
+    assert conversation.unanswered(body, ignore=IGNORE, require_tag=True) == []
+
+
 def test_two_questions_in_different_places_are_both_found():
     body = note("header\n\nfirst thing\n\n———\n\n**Notron:** answered that\n\n———\n\nsecond thing")
     qs = conversation.unanswered(body, ignore=IGNORE)

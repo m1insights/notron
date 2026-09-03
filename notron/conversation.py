@@ -120,7 +120,13 @@ def unanswered(
         # do not have to be ticked — unless nothing was tagged (the Ask note),
         # where every line is the question.
         spoke = [p for p in parts if TAG.search(p)] or parts
-        filed = bool(parts) and all(p.startswith(notedoc.FILED) for p in spoke)
+        # `to_text` (what `parts` is made of) turns a list item's opening tag
+        # into a literal "• " ahead of whatever the line starts with — so a
+        # ticked list item reads "• ✓ …", not "✓ …", and a bare `startswith`
+        # would call it unfiled forever. A block-level part, not a per-line
+        # one, so the bullet marker is `parts`'s own prefix to strip here, not
+        # something the mark itself could have put first.
+        filed = bool(parts) and all(p.removeprefix("• ").startswith(notedoc.FILED) for p in spoke)
 
         turn = "\n".join(parts).strip()
         if turn and not answered and not filed and (not require_tag or TAG.search(turn)):

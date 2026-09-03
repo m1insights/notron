@@ -20,6 +20,9 @@ Homepage = "https://github.com/m1insights/notron"
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools.packages.find]
+include = ["notron*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

@@ -66,3 +66,48 @@ def test_absurdly_large_writes_are_refused():
     v = guard.check(folder=workspace.FOLDER, title=workspace.TODAY, mode="replace",
                     old_body="x", new_body="y" * (guard.MAX_BODY_CHARS + 1))
     assert not v
+
+
+def test_restore_is_allowed_outside_the_folder():
+    v = guard.check(folder="Notes", title="Parking Garages", old_body="<div>new</div>",
+                    new_body="<div>original</div>", mode="restore")
+    assert v.allowed
+
+
+def test_restore_still_refuses_an_empty_body():
+    v = guard.check(folder="Notes", title="X", old_body="<div>y</div>",
+                    new_body="", mode="restore")
+    assert not v.allowed
+
+
+def test_replace_outside_the_folder_needs_rewrite_allowed():
+    blocked = guard.check(folder="Notes", title="X", old_body="<div>a</div>",
+                          new_body="<div>b</div>", mode="replace")
+    assert not blocked.allowed
+    allowed = guard.check(folder="Notes", title="X", old_body="<div>a</div>",
+                          new_body="<div>b</div>", mode="replace", rewrite_allowed=True)
+    assert allowed.allowed
+
+
+def test_the_instruction_note_cannot_even_be_restored():
+    v = guard.check(folder=workspace.FOLDER, title=workspace.ABOUT, mode="restore",
+                    old_body="<div>old</div>", new_body="<div>original</div>")
+    assert not v and "read-only" in v.reason
+
+
+def test_a_restored_body_is_not_rescanned_for_secrets():
+    # The text was already live in this exact note a moment ago — it's the
+    # user's own, not the model's, so the privacy scan that guards new
+    # AI-authored content doesn't apply here (design decision 6).
+    v = guard.check(folder="Notes", title="Parking Garages", mode="restore",
+                    old_body="<div>x</div>", new_body="<div>password: hunter22</div>")
+    assert v.allowed
+
+
+def test_rewrite_allowed_does_not_unlock_the_instruction_note_or_a_shared_note():
+    about = guard.check(folder=workspace.FOLDER, title=workspace.ABOUT, mode="replace",
+                        rewrite_allowed=True, **OK)
+    assert not about.allowed
+    ask = guard.check(folder=workspace.FOLDER, title=workspace.ASK, mode="replace",
+                      rewrite_allowed=True, **OK)
+    assert not ask.allowed
