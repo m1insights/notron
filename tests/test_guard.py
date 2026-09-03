@@ -66,3 +66,24 @@ def test_absurdly_large_writes_are_refused():
     v = guard.check(folder=workspace.FOLDER, title=workspace.TODAY, mode="replace",
                     old_body="x", new_body="y" * (guard.MAX_BODY_CHARS + 1))
     assert not v
+
+
+def test_restore_is_allowed_outside_the_folder():
+    v = guard.check(folder="Notes", title="Parking Garages", old_body="<div>new</div>",
+                    new_body="<div>original</div>", mode="restore")
+    assert v.allowed
+
+
+def test_restore_still_refuses_an_empty_body():
+    v = guard.check(folder="Notes", title="X", old_body="<div>y</div>",
+                    new_body="", mode="restore")
+    assert not v.allowed
+
+
+def test_replace_outside_the_folder_needs_rewrite_allowed():
+    blocked = guard.check(folder="Notes", title="X", old_body="<div>a</div>",
+                          new_body="<div>b</div>", mode="replace")
+    assert not blocked.allowed
+    allowed = guard.check(folder="Notes", title="X", old_body="<div>a</div>",
+                          new_body="<div>b</div>", mode="replace", rewrite_allowed=True)
+    assert allowed.allowed
