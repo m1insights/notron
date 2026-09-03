@@ -16,9 +16,15 @@ did. It is an addition like any other — nothing of yours is ever removed.
 Guarantee 2 has exactly two carve-outs, both narrow and both deliberate. A
 fifth mode, `restore`, is the undo path: it puts back a body this very note
 held a moment ago — your words, not the model's — so it needs no rewrite
-permission and is exempt from the checks that prove an append kept what was
-there. And `rewrite_allowed` lets a `replace` land outside her folder only on
-a note you have explicitly opted into rewrite-in-place.
+permission and is exempt both from the checks that prove an append kept what
+was there and from guarantee 3's secret scan (that text was already live in
+the note; refusing to restore it would leave you stuck with what she wrote
+over it). `check` cannot prove that a `restore` body really is what the note
+held before — it trusts the caller entirely for that mode, the same way it
+trusts every caller's `old_body`. Only `undo.pop`'s saved copy, fed through
+`Executor.restore`, is meant to reach here as one. And `rewrite_allowed` lets
+a `replace` land outside her folder only on a note you have explicitly opted
+into rewrite-in-place.
 """
 
 from __future__ import annotations
