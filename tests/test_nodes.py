@@ -167,6 +167,26 @@ def test_the_receipt_rides_along_inside_the_restore(monkeypatch, note_in_notes):
     assert landed.index("old") < landed.index(conversation.SIGNATURE)
 
 
+def test_the_undoer_ticks_every_open_tagged_turn_not_just_the_last(monkeypatch, note_in_notes):
+    """A trailing turn only closes the turn right next to it. A tagged ask
+    separated from the rest of the note by a real gap (more than
+    conversation.MAX_GAP) is still unanswered after the restore, and the
+    watcher hands it straight back — redoing the very write that was just
+    undone — unless it gets ticked, the same way a filed line does."""
+    old_body = (
+        "<div>Parking Garages</div>"
+        "<div>@notron clean this up</div>"
+        "<div><br></div><div><br></div><div><br></div>"   # a real break: > MAX_GAP
+        "<div>12 Trinity — $18</div>"
+    )
+    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: old_body)
+    state = nodes.undoer(_state("undo", intent="undo"))
+
+    landed = state.writes[0].markdown
+    assert conversation.unanswered(landed, ignore=(NOTE,), require_tag=True) == []
+    assert "✓ " in landed and "put back" in landed
+
+
 def test_the_undoer_says_nothing_to_undo_when_the_slot_is_empty(monkeypatch, note_in_notes):
     """One level, consumed on use: undo twice in a row is a plain sentence, not
     an error and not a bounce between two versions."""

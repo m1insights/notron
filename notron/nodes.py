@@ -26,9 +26,13 @@ FILE_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?(?:file\b|sort\s+(?:this|these|t
 # "undo", "revert that", "clean this up" — the same posture as filing. Whether
 # someone said "put it back" is a fact about the words, never a judgment call,
 # so it costs no model call and cannot come out right only nine times in ten.
-UNDO_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?undo\b|revert\s+(?:that|this)\b")
-ORGANIZE_WORDS = re.compile(r"(?i)\borganize\s+this\b|clean\s+(?:this|it)\s+up\b|"
-                            r"tidy\s+(?:this|it)\s+(?:note\s+)?up?\b")
+# Anchored the way FILE_WORDS anchors "file" — otherwise "|" splits the whole
+# pattern, not just the alternative it sits next to, and "we should revert
+# that decision, @notron what do you think" would fire a real, unchecked
+# restore on an ordinary opinion question.
+UNDO_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?(?:undo\b|revert\s+(?:that|this)\b)")
+ORGANIZE_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?(?:organize\s+this\b|"
+                            r"clean\s+(?:this|it)\s+up\b|tidy\s+(?:this|it)\s+(?:note\s+)?up\b)")
 # The `yes` under her one-line offer to keep a note clean in place. Read here
 # rather than sent to the classifier for the same reason the Filer's `yes` is
 # read in code: it is one word, and there is nothing to interpret.
@@ -548,6 +552,24 @@ def undoer(state: State, *, brain=None) -> State:
         # write, and whatever the user had said in it then is unanswered all
         # over again. Without a turn after it the watcher hands it straight back
         # and she redoes the very write that was just undone.
+        #
+        # A trailing turn only closes the *last* one of those — two tagged asks
+        # separated by a real gap (`conversation.MAX_GAP`) are still two turns,
+        # and only the final one sits next to what comes after it. So every
+        # unanswered tagged turn the restored body holds gets ticked first, the
+        # same primitive the Filer already relies on to stop a filed line being
+        # re-asked forever (`conversation.unanswered` treats a ticked turn as
+        # answered). Outside her folder only — inside it (☀️ Today, the Ask
+        # note) nothing is tagged, and re-answering a restored question there is
+        # the ordinary, correct thing to do, not a loop to close.
+        if folder != workspace.FOLDER:
+            marks = [
+                (line.strip(), q.after, " → put back")
+                for q in conversation.unanswered(old, ignore=(title,), require_tag=True)
+                for line in q.text.split("\n")
+                if conversation.TAG.search(line)
+            ]
+            old, _ = notedoc.mark_lines(old, marks)
         state.writes.append(Write(
             title=title, folder=folder, mode="restore",
             markdown=old + markup.to_html(conversation.turn(state.answer)),
