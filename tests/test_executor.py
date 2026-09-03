@@ -77,6 +77,76 @@ def test_replace_mode_is_not_slowed_by_the_extra_read(monkeypatch):
     assert len(reads) == 1
 
 
+def test_a_write_to_an_existing_note_saves_its_old_body(monkeypatch):
+    """One step back, per note: whatever it held before she wrote is kept so
+    "undo that" can put it back."""
+    body = "<div>Some Note</div><div>a line the user wrote</div>"
+    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
+    monkeypatch.setattr(ex_mod.notes, "read_body", lambda note_id: body)
+    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: None)
+    saved = {}
+    monkeypatch.setattr(ex_mod.undo, "save", lambda nid, old: saved.setdefault(nid, old))
+
+    ex = ex_mod.Executor(audit=False)
+    result = ex.append("Some Note", "more text", folder="Notes")
+
+    assert result.ok
+    assert saved == {"n1": body}
+
+
+def test_a_refused_write_saves_no_undo(monkeypatch):
+    """A slot saved for a write that never happened would undo to the wrong
+    moment — so the save sits after the Guard and after the changed-note check."""
+    old_body = "<div>📥 Ask Notron</div><div>How does</div>"
+    live_body = "<div>📥 Ask Notron</div><div>How does the moon landing footage hold up</div>"
+
+    reads = [old_body, live_body]
+    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
+    monkeypatch.setattr(ex_mod.notes, "read_body",
+                        lambda note_id: reads.pop(0) if reads else live_body)
+    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: None)
+    saved = {}
+    monkeypatch.setattr(ex_mod.undo, "save", lambda nid, old: saved.setdefault(nid, old))
+
+    ex = ex_mod.Executor(audit=False)
+    changed = ex.insert("📥 Ask Notron", "an answer", after=1, anchor="How does")
+    blocked = ex.replace("Recipes", "a rewrite", folder="Notes")
+
+    assert not changed.ok and not blocked.ok
+    assert saved == {}
+
+
+def test_restore_writes_the_body_back_verbatim(monkeypatch, tmp_path):
+    """`raw_html_body` is already-rendered HTML — what `undo.save` captured —
+    so it has to land byte for byte, never through `markup.render` a second time."""
+    monkeypatch.setattr(ex_mod.undo, "STATE", tmp_path / "undo.json")
+    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
+    monkeypatch.setattr(ex_mod.notes, "read_body",
+                        lambda note_id: "<div>☀️ Today</div><div>what she wrote over it</div>")
+    written = []
+    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: written.append(b))
+
+    original = "<div>☀️ Today</div><div>*original* — her words, not markdown</div>"
+    result = ex_mod.Executor(audit=False).restore("☀️ Today", original)
+
+    assert result.ok
+    assert written == [original]
+
+
+def test_replace_outside_her_folder_needs_the_opt_in(monkeypatch, tmp_path):
+    """`rewrite_allowed` reaches the Guard from `replace`, and only from it."""
+    monkeypatch.setattr(ex_mod.undo, "STATE", tmp_path / "undo.json")
+    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
+    monkeypatch.setattr(ex_mod.notes, "read_body", lambda note_id: "<div>Recipes</div><div>old</div>")
+    written = []
+    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: written.append(b))
+
+    ex = ex_mod.Executor(audit=False)
+    assert not ex.replace("Recipes", "a rewrite", folder="Notes").ok
+    assert ex.replace("Recipes", "a rewrite", folder="Notes", rewrite_allowed=True).ok
+    assert len(written) == 1
+
+
 def test_the_log_recreates_itself_if_it_was_deleted(monkeypatch):
     """Every write is supposed to land in 📊 Log (invariant #4). If the note
     itself got deleted, the old code just returned — every future write still
