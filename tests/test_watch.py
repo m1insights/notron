@@ -124,10 +124,11 @@ def test_a_restart_does_not_lose_a_tag(tmp_path, monkeypatch):
     assert after_restart.pending == {"n1"}, "it forgot it still owed an answer"
 
 
-def test_a_tagged_note_keeps_being_reported_until_it_is_answered():
+def test_a_tagged_note_keeps_being_reported_until_it_is_answered(tmp_path, monkeypatch):
     """Change detection reports a note once. Settling needs at least two looks,
     so a report-once scanner and a wait-for-quiet reply rule deadlock."""
     from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
 
     s = mentions.Scanner()
     s.pending = {"n1"}
@@ -136,12 +137,8 @@ def test_a_tagged_note_keeps_being_reported_until_it_is_answered():
     class Note:
         id, title, folder, modified = "n1", "Book idea", "Notes", "monday"
 
-    mentions.notes.list_all_notes = lambda: [Note()]
-    try:
-        assert [n.id for n in s.changed()] == ["n1"], "an unanswered note must come back"
-    finally:
-        import importlib
-        importlib.reload(mentions.notes)
+    monkeypatch.setattr(mentions.notes, "list_all_notes", lambda: [Note()])
+    assert [n.id for n in s.changed()] == ["n1"], "an unanswered note must come back"
 
 
 def test_a_note_it_could_not_read_is_kept_not_dropped(tmp_path, monkeypatch):

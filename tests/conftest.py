@@ -8,7 +8,7 @@ one itself.
 
 import pytest
 
-from notron import rewrite, undo
+from notron import mentions, rewrite, undo
 
 
 @pytest.fixture(autouse=True)
@@ -26,6 +26,21 @@ def _undo_state_is_disposable(monkeypatch, tmp_path):
     note ids and fake bodies. A test that specifically exercises undo.py itself
     still overrides this per-test, same as before."""
     monkeypatch.setattr(undo, "STATE", tmp_path / "undo.json")
+
+
+@pytest.fixture(autouse=True)
+def _mentions_state_is_disposable(monkeypatch, tmp_path):
+    """A `mentions.Scanner()` constructed without patching `STATE` first and
+    then exercised (`.prime()`/`.changed()`/`.scan()`) writes straight to the
+    real, live `.notron/seen.json` — the background listener's own "what has
+    she already looked at" record. One test that skipped this (predating this
+    fixture, not this branch) overwrote the developer's real file with two
+    lines of fake test data during this branch's own work — no Notes content
+    was lost, but the listener's next restart would otherwise have treated
+    every real note as newly changed and rescanned the whole library for old
+    `#notron` tags. Same blanket redirect as undo/rewrite above, so no future
+    test can do this again by omission."""
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
 
 
 @pytest.fixture(autouse=True)
