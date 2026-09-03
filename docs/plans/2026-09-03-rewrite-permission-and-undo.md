@@ -161,8 +161,15 @@ this repo's Executor tests are already monkeypatched against `notes.py`.)
   arg, no rendering — same treatment as the existing `else` branch for
   `replace`, but skip `markup.render` entirely).
 - Right before the `notes.write_body(note.id, new_body)` call (today's line
-  105): `if note: undo.save(note.id, old_body)`. One line, every mode, only
-  when the note already existed — a brand-new note has nothing to save.
+  105): `if note and mode != "restore": undo.save(note.id, old_body)` — every
+  mode *except* restore itself (decision 4 lists append/insert/mark/replace,
+  not restore — saving on a restore would let a second `@notron undo` pop a
+  slot holding Notron's own overwritten body and write it right back, an
+  undo/redo loop nothing could break), only when the note already existed —
+  a brand-new note has nothing to save.
+- `mode == "restore"` on a note that no longer exists is refused, same
+  posture as the existing `mark`/`insert` guards on a missing note — "put
+  this note back" has no meaning without a note.
 - `guard.check(...)` call gains `rewrite_allowed=rewrite_allowed if mode ==
   "replace" else False` (restore doesn't need it — Task 2 already exempts
   `restore` from the block that flag controls).

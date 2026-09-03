@@ -54,7 +54,8 @@ class Executor:
     def restore(self, title: str, raw_html_body: str, *, folder: str = workspace.FOLDER) -> WriteResult:
         """Put a note back exactly as it was — the undo path. `raw_html_body` is
         already-rendered HTML (what `undo.save` captured), never Markdown — it
-        must not go through `markup.render`/`markup.to_html` a second time."""
+        must not go through `markup.render`/`markup.to_html` a second time.
+        Refused on a note that no longer exists — there is nothing to put back."""
         return self._apply(folder, title, raw_html_body, mode="restore")
 
     # -- internals -------------------------------------------------------
@@ -85,6 +86,8 @@ class Executor:
             at = notedoc.locate(old_body, anchor, near=after or 0)
             new_body = notedoc.insert_after(old_body, at, markup.to_html(body_markdown))
         elif mode == "restore":
+            if not old_body:
+                return WriteResult(False, "cannot restore a note that does not exist")
             # Already the note's own HTML, saved before she wrote over it.
             # Rendering it again would turn her markup into visible text.
             new_body = body_markdown
@@ -121,8 +124,14 @@ class Executor:
             # wrote, so "undo that" can put it back. Last thing before the
             # write, so a blocked or skipped write leaves no slot pointing at a
             # write that never happened. Only for a note that already existed —
-            # a brand-new note has nothing to go back to.
-            undo.save(note.id, old_body)
+            # a brand-new note has nothing to go back to. Not for `restore`
+            # itself (design decision 4 lists append/insert/mark/replace, not
+            # restore) — saving here would let a second `@notron undo` pop a
+            # slot holding Notron's own overwritten body, tag line and all,
+            # and write it right back: an undo/redo loop the mention scanner
+            # would keep re-triggering forever, with no receipt to break it.
+            if mode != "restore":
+                undo.save(note.id, old_body)
             notes.write_body(note.id, new_body)
             note_id = note.id
         else:

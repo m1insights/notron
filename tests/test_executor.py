@@ -147,6 +147,40 @@ def test_replace_outside_her_folder_needs_the_opt_in(monkeypatch, tmp_path):
     assert len(written) == 1
 
 
+def test_a_restore_saves_no_undo_slot(monkeypatch):
+    """Design decision 4 lists append/insert/mark/replace as the modes that
+    save — not restore. Saving here too would let a second `@notron undo` pop
+    a slot holding Notron's own overwritten body and write it right back: an
+    undo/redo loop the mention scanner would keep re-triggering forever."""
+    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
+    monkeypatch.setattr(ex_mod.notes, "read_body",
+                        lambda note_id: "<div>☀️ Today</div><div>what she wrote over it</div>")
+    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: None)
+    saved = {}
+    monkeypatch.setattr(ex_mod.undo, "save", lambda nid, old: saved.setdefault(nid, old))
+
+    result = ex_mod.Executor(audit=False).restore("☀️ Today", "<div>original</div>")
+
+    assert result.ok
+    assert saved == {}
+
+
+def test_restoring_a_note_that_no_longer_exists_is_refused(monkeypatch):
+    """'Put this note back' has no meaning without a note — the same posture
+    `mark` and `insert` already take on a missing note."""
+    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: None)
+    written = []
+    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: written.append(b))
+    created = []
+    monkeypatch.setattr(ex_mod.notes, "create_note",
+                        lambda folder, body: created.append(body) or "new-id")
+
+    result = ex_mod.Executor(audit=False).restore("Gone Note", "<div>original</div>")
+
+    assert not result.ok
+    assert written == [] and created == []
+
+
 def test_the_log_recreates_itself_if_it_was_deleted(monkeypatch):
     """Every write is supposed to land in 📊 Log (invariant #4). If the note
     itself got deleted, the old code just returned — every future write still
