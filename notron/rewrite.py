@@ -32,6 +32,12 @@ def _load() -> dict:
         "allow": list(raw.get("allow") or []),
         "default_new": raw.get("default_new") or "ask",
         "chosen_at": raw.get("chosen_at") or "",
+        # Its own field, deliberately not "chosen_at" — that one is stamped by
+        # allow() for a per-note yes, a different question from "has the user
+        # ever picked the global default." Sharing one field meant the Mac
+        # app's onboarding sheet (gated on this) would never show for a user
+        # who'd already said `@notron yes` on a single note.
+        "default_chosen_at": raw.get("default_chosen_at") or "",
     }
 
 
@@ -59,10 +65,17 @@ def default_for_new_notes() -> str:
     return _load()["default_new"]
 
 
+def default_chosen() -> bool:
+    """Has the user ever picked the global default, as opposed to just
+    saying yes to one note's organizer offer? What the onboarding sheet
+    checks before showing itself."""
+    return bool(_load()["default_chosen_at"])
+
+
 def set_default_for_new_notes(value: str) -> None:
     if value not in DEFAULTS:
         raise ValueError(f"{value!r} isn't a default — use one of {DEFAULTS}")
     data = _load()
     data["default_new"] = value
-    data["chosen_at"] = datetime.now().isoformat(timespec="minutes")
+    data["default_chosen_at"] = datetime.now().isoformat(timespec="minutes")
     _write(data)

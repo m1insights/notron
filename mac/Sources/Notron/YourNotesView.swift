@@ -12,6 +12,7 @@ struct YourNotesView: View {
     @StateObject private var model = LibraryModel()
     @State private var query = ""
     @State private var saved = false
+    @State private var showRewriteDefault = false
     @FocusState private var searching: Bool
     @Environment(\.dismiss) private var dismiss
 
@@ -43,6 +44,13 @@ struct YourNotesView: View {
         .focusEffectDisabled()
         .onKeyPress(action: key)
         .onAppear { model.load() }
+        // Asked once, ever, and deliberately not a fifth step in
+        // `Onboarding.swift`: decision 3 puts it after "Your notes", the
+        // screen that prevents real damage (misfiling). This one is a
+        // preference, so it waits until that job is done.
+        .sheet(isPresented: $showRewriteDefault, onDismiss: { dismiss() }) {
+            RewriteDefaultSheet { showRewriteDefault = false }
+        }
     }
 
     // ------------------------------------------------------------ keyboard
@@ -362,7 +370,11 @@ struct YourNotesView: View {
                 do {
                     try model.save()
                     saved = true
-                    dismiss()
+                    if RewriteDefaultState.needsChoice {
+                        showRewriteDefault = true
+                    } else {
+                        dismiss()
+                    }
                 } catch {
                     model.problem = "Couldn't save: \(error)"
                 }
