@@ -393,7 +393,7 @@ Rules:
 #: thing that tells a `yes` about rewriting from a `yes` about anything else.
 ORGANIZE_ASK_MARKER = "keep this note clean in place"
 ORGANIZE_ASK = (f"Want me to {ORGANIZE_ASK_MARKER} next time, instead of adding below? "
-                "Reply **yes** and I will.")
+                "Reply **@notron yes** and I will.")
 
 #: Her receipt for a rewrite. Said once, written into the note once — the
 #: answer she reports and the turn the note ends on are the same sentence.
@@ -428,7 +428,7 @@ def organizer(state: State, *, brain) -> State:
     """
     if state.intent != "organize" or state.reply_to is None:
         return state
-    title, folder, _ = state.reply_to
+    title, folder, after = state.reply_to
     note = notes.find_note(folder, title)
     if note is None:
         state.answer = "I can't find that note any more."
@@ -437,11 +437,15 @@ def organizer(state: State, *, brain) -> State:
     body = notes.read_body(note.id)
 
     if CONFIRM_WORDS.fullmatch(state.request.strip()):
-        if ORGANIZE_ASK_MARKER not in _her_last_turn(body):
+        if not _offer_precedes(body, after):
             # A bare `yes` is consent to rewrite a note only directly under the
-            # offer to rewrite it. Anywhere else it is answering something else
-            # entirely — the router matched a word, not a meaning — so hand it
-            # back to be answered like any other turn.
+            # offer to rewrite it — not just anywhere in the note. A later,
+            # unrelated question of hers can sit lower in the same note (she
+            # asked twice; the offer is old), and a `yes` answering *that* must
+            # never be read as consent to something asked earlier. So this
+            # checks the turn immediately above the `yes`, not merely the last
+            # turn of hers found anywhere — the router matched a word, not a
+            # meaning, unless it's the *right* word in the *right* place.
             state.intent = "question"
             state.note("organizer", "a yes, but not to my offer — answering it normally")
             return state
@@ -460,6 +464,18 @@ def organizer(state: State, *, brain) -> State:
         tier="smart",
         max_tokens=_budget_for(text),
     ))
+
+    # An empty answer (a retry that still ran out of room — see brain.ask) or
+    # an implausibly short one (the model summarised the note away instead of
+    # tidying it) must never become the note. This is the one path that can
+    # overwrite a user's own words outright — undo can bring the original
+    # back, but that must never be the only thing standing between a bad
+    # answer and a wiped note.
+    if not cleaned.strip() or len(cleaned) < 0.5 * len(_without_tags(text)):
+        state.answer = "I couldn't tidy that safely, so I left it alone."
+        state.writes.append(_reply(state))
+        state.note("organizer", "model's answer was empty or too short — refused to write it")
+        return state
 
     if rewrite.allowed(note.id):
         # One write, not two. Every successful write saves the note's prior body
@@ -491,29 +507,30 @@ def _without_tags(markdown: str) -> str:
     return "\n".join(kept).strip()
 
 
-def _her_last_turn(body_html: str) -> str:
-    """The last thing Notron said in a note, as plain text.
+def _offer_precedes(body_html: str, before: int) -> bool:
+    """Whether the turn immediately above block `before` — skipping blank
+    space, the same way `conversation.unanswered` skips it when deciding a
+    turn is answered — is Notron's own, and is the one where she offered to
+    keep this note clean in place.
 
-    `conversation.unanswered` finds what the user said that she has not answered;
-    this is the other half — what she said last — which is the only way to tell a
-    `yes` that answers her offer from a `yes` that answers something else.
+    Not "did she ever offer, anywhere in the note": a note can hold an old
+    offer lower down and a newer, unrelated turn of hers above it, and a `yes`
+    has to answer the turn it actually sits under, not the first offer found
+    by scanning the whole note.
     """
     texts = notedoc.texts(body_html)
-    found: list[str] = []
-    i = 0
-    while i < len(texts):
-        if not texts[i].lstrip().startswith(conversation.SIGNATURE):
-            i += 1
-            continue
-        # Everything through to her closing rule is one turn of hers — the same
-        # reading `conversation.unanswered` uses, so a heading or a list inside
-        # her reply is not mistaken for the start of another one.
-        turn: list[str] = []
-        while i < len(texts) and texts[i].strip() != conversation.RULE:
-            turn.append(texts[i])
-            i += 1
-        found = turn        # keep going: the last of her turns is the live one
-    return "\n".join(found)
+    i = before - 1
+    while i >= 0 and not texts[i].strip():
+        i -= 1
+    if i < 0 or texts[i].strip() != conversation.RULE:
+        return False
+    turn: list[str] = []
+    i -= 1
+    while i >= 0 and not texts[i].lstrip().startswith(conversation.SIGNATURE):
+        turn.append(texts[i])
+        i -= 1
+    turn.reverse()
+    return ORGANIZE_ASK_MARKER in "\n".join(turn)
 
 
 # ------------------------------------------------------------------- Undoer
@@ -528,6 +545,17 @@ def undoer(state: State, *, brain=None) -> State:
     if state.intent != "undo" or state.reply_to is None:
         return state
     title, folder, _ = state.reply_to
+    if title == workspace.ASK:
+        # The Ask note is the conversation itself, not a thing that was
+        # written — "undo" said here has no note to point at. Design doc:
+        # ask which one rather than guess (guessing would mean restoring the
+        # Ask note's own body, discarding the whole conversation, while
+        # reporting a "done" that has nothing to do with what the user meant).
+        state.answer = ("Tag me with @notron undo on the note you want put back — "
+                        "from here I can't tell which one.")
+        state.writes.append(_reply(state))
+        state.note("undoer", "asked in the Ask note — no note named")
+        return state
     note = notes.find_note(folder, title)
     if note is None:
         # No note means nothing to put back — and nowhere to say so either,
@@ -563,8 +591,23 @@ def undoer(state: State, *, brain=None) -> State:
         # note) nothing is tagged, and re-answering a restored question there is
         # the ordinary, correct thing to do, not a loop to close.
         if folder != workspace.FOLDER:
+            # `notedoc.texts` (what `conversation.unanswered` reads) prefixes
+            # every list item with "• " for display; `notedoc.find_line` (what
+            # `mark_lines` matches against) compares the bare <li> text — the
+            # same prefix the Filer already strips for the same reason
+            # (filer.py). Without stripping it here, a tagged line inside a
+            # bulleted note never matches and never gets ticked.
+            #
+            # Known remaining gap, not closed here: `notedoc.blocks()` treats
+            # a whole <ul> as one block, so a tagged line sharing a list with
+            # untagged siblings still reads as unanswered even once ticked —
+            # `conversation.unanswered`'s filed-check tests the whole block's
+            # text, not the one line inside it. Pre-existing and deeper than
+            # this fix (a block-vs-line granularity mismatch between notedoc
+            # and conversation.py); see test_the_undoer_ticks_a_tagged_line_
+            # written_as_its_own_bullet for what this does and doesn't close.
             marks = [
-                (line.strip(), q.after, " → put back")
+                (line.strip().removeprefix("• "), q.after, " → put back")
                 for q in conversation.unanswered(old, ignore=(title,), require_tag=True)
                 for line in q.text.split("\n")
                 if conversation.TAG.search(line)

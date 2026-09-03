@@ -72,8 +72,8 @@ def no_such_note(monkeypatch):
                         lambda note_id: pytest.fail("read a note that does not exist"))
 
 
-def _state(request="", **kw):
-    return State(request=request, reply_to=(NOTE, FOLDER, 3), **kw)
+def _state(request="", after=3, **kw):
+    return State(request=request, reply_to=(NOTE, FOLDER, after), **kw)
 
 
 # ----------------------------------------------------------------- the router
@@ -187,6 +187,35 @@ def test_the_undoer_ticks_every_open_tagged_turn_not_just_the_last(monkeypatch, 
     assert "✓ " in landed and "put back" in landed
 
 
+def test_the_undoer_ticks_a_tagged_line_written_as_its_own_bullet(monkeypatch, note_in_notes):
+    """`notedoc.texts` (what `conversation.unanswered` reads) prefixes every
+    list item with "• " for display; `notedoc.find_line` (what `mark_lines`
+    matches against) compares the bare <li> text. Without stripping that
+    prefix first, a tagged line written as a bullet never matches, never gets
+    ticked, and the re-ask/redo loop the tick fix closes stays open for
+    anything written as a list.
+
+    NOTE — a real, narrower gap this does not close: when the tagged line
+    shares a <ul> with untagged siblings, `notedoc.blocks()` treats the whole
+    list as one block, and `conversation.unanswered`'s filed-check tests that
+    whole block's text, not the one line inside it that got ticked — so a
+    partially-ticked list block still reads as unanswered. Pre-existing,
+    deeper than this diff (a block-vs-line granularity mismatch between
+    notedoc and conversation.py), and not fixed here."""
+    old_body = (
+        "<div>Parking Garages</div>"
+        "<ul><li>@notron clean this up</li></ul>"
+        "<div><br></div><div><br></div><div><br></div>"
+        "<div>Beacon St — $22</div>"
+    )
+    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: old_body)
+    state = nodes.undoer(_state("undo", intent="undo"))
+
+    landed = state.writes[0].markdown
+    assert conversation.unanswered(landed, ignore=(NOTE,), require_tag=True) == []
+    assert "✓ " in landed and "put back" in landed
+
+
 def test_the_undoer_says_nothing_to_undo_when_the_slot_is_empty(monkeypatch, note_in_notes):
     """One level, consumed on use: undo twice in a row is a plain sentence, not
     an error and not a bounce between two versions."""
@@ -210,6 +239,21 @@ def test_the_undoer_leaves_a_note_that_is_gone_completely_alone(monkeypatch, no_
     assert "nothing to undo" in state.answer.lower()
 
 
+def test_undo_in_the_ask_note_asks_which_note_instead_of_guessing(monkeypatch, note_in_notes):
+    """The Ask note is the conversation itself, not a thing that was written —
+    restoring it would discard the whole conversation and report a "done"
+    that has nothing to do with what the user meant. Design doc: ask which
+    note rather than guess."""
+    popped = []
+    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: popped.append(note_id))
+    state = State(request="undo", reply_to=(workspace.ASK, workspace.FOLDER, 3), intent="undo")
+    out = nodes.undoer(state)
+
+    assert popped == []
+    assert out.writes and out.writes[0].mode != "restore"
+    assert "which" in out.answer.lower() or "tag me" in out.answer.lower()
+
+
 def test_the_undoer_declines_anything_that_is_not_an_undo(note_in_notes):
     state = nodes.undoer(_state("what did I park where", intent="question"))
     assert state.writes == [] and state.answer == ""
@@ -226,6 +270,29 @@ def test_the_organizer_rewrites_a_note_that_has_earned_it(monkeypatch, note_in_n
     assert state.writes[0].rewrite_allowed is True
     assert state.writes[0].folder == FOLDER
     assert ("text", "smart") in brain.calls, "a whole note is Super's job, not Nano's"
+
+
+def test_an_empty_answer_never_becomes_the_note(monkeypatch, note_in_notes):
+    """`brain.ask` can come back empty after its one retry, with no exception —
+    see brain.py. That must never overwrite a note outright; undo can bring
+    the original back, but it must never be the only thing standing between a
+    bad answer and a wiped note."""
+    monkeypatch.setattr(nodes.rewrite, "allowed", lambda note_id: True)
+    state = nodes.organizer(_state("clean this up", intent="organize"), brain=FakeBrain(answer=""))
+
+    assert not any(w.mode == "replace" for w in state.writes)
+    assert "couldn't tidy" in state.answer.lower() or "left it alone" in state.answer.lower()
+
+
+def test_a_suspiciously_short_answer_never_becomes_the_note(monkeypatch, note_in_notes):
+    """Not just empty — a model that summarised the note away instead of
+    tidying it is just as dangerous on the one path that can overwrite a
+    user's own words outright."""
+    monkeypatch.setattr(nodes.rewrite, "allowed", lambda note_id: True)
+    state = nodes.organizer(_state("clean this up", intent="organize"),
+                            brain=FakeBrain(answer="Garages."))
+
+    assert not any(w.mode == "replace" for w in state.writes)
 
 
 def test_a_rewrite_is_one_write_so_undo_still_holds_the_original(monkeypatch, note_in_notes):
@@ -271,14 +338,24 @@ def test_the_ask_is_recognisable_again_once_it_is_in_the_note(monkeypatch, note_
     state = nodes.organizer(_state("clean this up", intent="organize"), brain=FakeBrain())
 
     landed = markup.render(NOTE, BODY_MD) + markup.to_html(state.writes[0].markdown)
-    assert nodes.ORGANIZE_ASK_MARKER in nodes._her_last_turn(landed)
+    assert nodes._offer_precedes(landed, len(nodes.notedoc.texts(landed)))
+
+
+def _after(note_in_notes) -> int:
+    """The block index a `yes` typed right now would sit at — the end of the
+    note's body exactly as it stands, since a test builds `note_in_notes` up
+    to but not including the `yes` line itself (that's `state.request`, not
+    stored in the body): the note's body never gets ahead of what she has
+    actually read."""
+    return len(nodes.notedoc.texts(note_in_notes["body"]))
 
 
 def test_a_yes_under_the_ask_opts_that_one_note_in(monkeypatch, tmp_path, note_in_notes):
     monkeypatch.setattr(rewrite, "STATE", tmp_path / "rewrite.json")
     note_in_notes["body"] += markup.to_html(conversation.turn(f"Here you go.\n\n{nodes.ORGANIZE_ASK}"))
 
-    state = nodes.organizer(_state("yes", intent="organize"), brain=NoBrain())
+    state = nodes.organizer(_state("yes", intent="organize", after=_after(note_in_notes)),
+                            brain=NoBrain())
 
     assert rewrite.allowed("n1") is True
     assert [w.mode for w in state.writes] == ["insert"], "a receipt, not a rewrite"
@@ -291,7 +368,8 @@ def test_saying_yes_does_not_also_rewrite_the_note_on_the_spot(monkeypatch, tmp_
     monkeypatch.setattr(rewrite, "STATE", tmp_path / "rewrite.json")
     note_in_notes["body"] += markup.to_html(conversation.turn(nodes.ORGANIZE_ASK))
 
-    state = nodes.organizer(_state("yes", intent="organize"), brain=NoBrain())
+    state = nodes.organizer(_state("yes", intent="organize", after=_after(note_in_notes)),
+                            brain=NoBrain())
 
     assert not any(w.mode == "replace" for w in state.writes)
 
@@ -304,7 +382,8 @@ def test_a_yes_that_answers_something_else_is_not_consent_to_rewrite(monkeypatch
     monkeypatch.setattr(rewrite, "STATE", tmp_path / "rewrite.json")
     note_in_notes["body"] += markup.to_html(conversation.turn("Want me to book the 6pm one?"))
 
-    state = nodes.organizer(_state("yes", intent="organize"), brain=NoBrain())
+    state = nodes.organizer(_state("yes", intent="organize", after=_after(note_in_notes)),
+                            brain=NoBrain())
 
     assert rewrite.allowed("n1") is False
     assert state.writes == []
@@ -312,13 +391,15 @@ def test_a_yes_that_answers_something_else_is_not_consent_to_rewrite(monkeypatch
 
 
 def test_an_old_offer_further_up_the_note_is_not_a_live_one(monkeypatch, tmp_path, note_in_notes):
-    """Only the last thing she said counts. An offer from weeks ago, already
-    answered and buried, must not turn today's unrelated `yes` into consent."""
+    """Only the turn right above the `yes` counts. An offer from weeks ago,
+    buried under something she asked since, must not turn today's unrelated
+    `yes` into consent — even though she did genuinely offer, earlier."""
     monkeypatch.setattr(rewrite, "STATE", tmp_path / "rewrite.json")
     note_in_notes["body"] += markup.to_html(conversation.turn(nodes.ORGANIZE_ASK))
     note_in_notes["body"] += markup.to_html(conversation.turn("Want me to book the 6pm one?"))
 
-    state = nodes.organizer(_state("yes", intent="organize"), brain=NoBrain())
+    state = nodes.organizer(_state("yes", intent="organize", after=_after(note_in_notes)),
+                            brain=NoBrain())
 
     assert rewrite.allowed("n1") is False
 
