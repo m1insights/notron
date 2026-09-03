@@ -8,6 +8,14 @@ Built for the Nebius × NVIDIA Global AI Hackathon (Personal AI track, due
 run on Nebius Token Factory**, and **at least one NVIDIA open model must be used**.
 Do not swap the model provider.
 
+## Status: pre-launch
+
+No production users. The developer is the only person running this, against
+their own Notes/Reminders/Calendar, to find rough edges before anyone else touches
+it. No deadline pressure beyond the hackathon date above — prefer the correct
+long-term design over the fastest thing to ship, and it's fine to land a feature
+in stages (e.g. safe-default now, riskier opt-in once its safety net exists).
+
 ## Design
 
 Before building or changing ANY UI in the `mac/` companion app, read `docs/design/DESIGN.md`
