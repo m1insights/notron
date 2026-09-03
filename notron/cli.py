@@ -8,7 +8,7 @@ import os
 import pathlib
 import sys
 
-from . import graph, workspace
+from . import graph, rewrite, workspace
 from .brain import Brain, BrainUnavailable
 
 
@@ -289,6 +289,12 @@ def cmd_library(args):
     print()
 
 
+def cmd_rewrite(args):
+    """Where a brand-new note starts: ask each time, always clean up in place, or never."""
+    rewrite.set_default_for_new_notes(args.default)
+    print(f"\n  New notes will default to: {args.default}\n")
+
+
 def cmd_models(args):
     for m in _brain().available_models():
         mark = " ←" if "nemotron" in m.lower() else ""
@@ -364,6 +370,11 @@ def main(argv=None):
                     help="with peek: show a note even if its body looks like credentials")
     lb.add_argument("--reset", action="store_true", help="forget every choice")
     lb.set_defaults(fn=cmd_library)
+
+    rw = sub.add_parser("rewrite", help="how new notes handle 'clean this up' by default")
+    rw.add_argument("--default", choices=rewrite.DEFAULTS, required=True,
+                    help="ask each time / always clean it up in place / never")
+    rw.set_defaults(fn=cmd_rewrite)
 
     sub.add_parser("models", help="list models this Nebius key can run").set_defaults(fn=cmd_models)
     sub.add_parser("graph", help="show the node graph").set_defaults(fn=cmd_graph)

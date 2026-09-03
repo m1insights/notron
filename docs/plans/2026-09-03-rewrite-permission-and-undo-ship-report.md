@@ -82,13 +82,28 @@ lost. Fixed the test and added a repo-wide autouse fixture isolating
   (a `Package.swift` + `Sources/` dir) was tripping a flat-layout guard and
   blocking a fresh `pip install -e .[dev]` for anyone starting a new worktree.
 
-## Not built
+## Task 7 — shipped separately, on `feature/onboarding-rewrite-default`
 
-**Task 7** — a `mac/` onboarding screen for the global rewrite default
-(ask/always/never for new notes). Explicitly scoped in the plan as optional
-and sequenced last; core functionality (undo + rewrite permission +
-organizer) already works end-to-end for a `#notron`/CLI user without it.
-~Half a day whenever it's wanted.
+The `mac/` onboarding screen for the global rewrite default (ask/always/never
+for new notes), deferred above. A new `RewriteDefaultSheet` shows once, right
+after "Your notes"' own Done button — sequenced *after* that screen per
+decision 3, since "Your notes" is the one that prevents real damage
+(misfiling). Fabricated before/after example + the existing `Segmented`
+control (no new DesignSystem tokens needed); writes through a new thin
+`notron rewrite --default ask|always|never` CLI flag over
+`rewrite.set_default_for_new_notes` (already tested in Task 4); the Mac side
+reads `.notron/rewrite.json` directly to decide whether to show the sheet at
+all, same direct-file-read pattern `LibraryCounts`/`MoodWatcher` already use.
+Tests: 361 → 363 passed. No invariant touched — no guard/executor/notes/
+notedoc change, just a CLI wrapper and Mac UI.
+
+**Caught in review, fixed before merge:** the gating check and `rewrite.allow()`
+(a per-note `@notron yes`) were reading and writing the same `chosen_at`
+field — so a user who'd already used organizer once, via Notes or the CLI,
+before ever opening "Your notes" would never see this sheet, and `default_new`
+would silently stay `"ask"` forever. `rewrite.py` now stamps a separate
+`default_chosen_at`, set only by `set_default_for_new_notes`; a new
+`rewrite.default_chosen()` accessor and regression test cover it.
 
 ## Try it
 

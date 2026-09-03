@@ -280,8 +280,14 @@ would hand the note straight back and redo the very write that was just
 undone.
 
 Full design: `docs/plans/2026-09-03-rewrite-permission-and-undo-design.md`.
-Onboarding's global default (`rewrite.default_for_new_notes`) has no `mac/`
-screen yet — deliberately deferred, not blocking for single-user testing.
+Onboarding's global default (`rewrite.default_for_new_notes`) has a `mac/`
+screen: a sheet on "Your notes," shown once, right after its own Done button,
+until the user has picked once (`RewriteDefaultState.needsChoice` in
+`RewriteDefault.swift`, reading `.notron/rewrite.json` directly). Sequenced
+*after* "Your notes" per decision 3 — that screen prevents real damage
+(misfiling), this one is a nice-to-have default. Writes through the same
+`Core.run` bridge as everywhere else, via a thin `notron rewrite --default
+ask|always|never` CLI flag over `rewrite.set_default_for_new_notes`.
 
 ## The self-improvement loop (`reflect.py`)
 
