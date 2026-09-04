@@ -140,7 +140,21 @@ possible at all.
 | First call after Notes goes idle — **~40s** | Absorb once at startup (`notes.warm_up`) |
 
 Notes also allows two folders with the same name, so looking one up by name can
-silently return the first one twice. Address folders by index.
+silently return the first one twice. Address folders by index — **and check the
+name that comes back.** Notes keeps folders in alphabetical order, so a folder
+created anywhere above hers shifts her index down one, and a cached index then
+addresses the folder *next to* the one asked for and returns its notes as if
+they were hers. No error, no slow read, just the wrong folder. On 2026-09-03 an
+empty second "Notes" folder pushed `🤖 NOTRON` from position 5 to 6 and she read
+**Recently Deleted** as her own folder for two minutes — long enough to lose
+sight of `📊 Log` and recreate it fourteen times. `notes.resolve` is now the
+only way to reach a folder: it verifies the name `folder_at` hands back (free —
+it arrives in the same request) and re-asks once if it does not match.
+`create_note` goes through it too, so a write can never land in a different
+folder than reads come from, and it no longer falls back to `make new folder`
+when a name matches nothing — that fallback is what created the duplicate.
+`ensure_folder` is the one place a folder is ever created, and it refreshes the
+index the moment it does.
 
 **Reminders and Calendar: never AppleScript. EventKit.**
 
@@ -319,5 +333,12 @@ by editing the note. Run record: `.notron/reflect.json`, append-only.
 - Plain functions and dataclasses. No agent framework — the graph is the point.
 - Comments explain **why**, especially where a fix encodes a bug that actually
   happened. Several tests are named after real failures; keep them that way.
-- Tests run with no API key and no network. Fake brains, monkeypatched Notes.
+- Tests run with no API key, no network and no real Notes app. Fake brains, and a
+  fake Notes app (`conftest.FakeNotesApp`) under **every** test, autouse — it
+  answers the same AppleScript the real one does, so index addressing and name
+  verification are genuinely exercised, and anything else (a write, a `show
+  note`, an EventKit script) fails loudly naming the script. Until 2026-09-03
+  seventeen tests read the developer's own 358 notes because they never patched
+  `applescript.run`; live work that day also left fourteen junk `📊 Log` notes
+  in that library. A test must never be able to touch the real one.
 - User-facing strings are plain and warm. She is an assistant, not a pet.

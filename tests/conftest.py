@@ -1,14 +1,23 @@
-"""Tests run with no API key and no network — always.
+"""Tests run with no API key, no network and no real Notes app — always.
 
 Every world question now routes to the researcher by design, so a Tavily key
 exported in the developer's shell would quietly turn the graph tests into
 live web searches. Strip it before every test; a test that wants a key sets
 one itself.
+
+The same went for the Notes app itself, and that one had teeth. Any test that
+reached code calling `applescript.run` without patching it first talked to the
+developer's own Apple Notes — 358 real notes, read as if they were fixtures.
+On 2026-09-03 live work on this machine left fourteen junk `📊 Log` notes in
+that library. `_notes_is_never_the_real_one` puts a small fake Notes app under
+every test instead, so a forgotten patch produces a deterministic fake library
+rather than whatever the person running the suite happens to have written down
+— and no test can ever write into it.
 """
 
 import pytest
 
-from notron import mentions, rewrite, undo
+from notron import applescript, mentions, notes, rewrite, undo
 
 
 @pytest.fixture(autouse=True)
@@ -51,3 +60,79 @@ def _rewrite_state_is_disposable(monkeypatch, tmp_path):
     standing permission to rewrite a real note in place. Redirect it
     everywhere, same as undo above."""
     monkeypatch.setattr(rewrite, "STATE", tmp_path / "rewrite.json")
+
+
+class FakeNotesApp:
+    """An in-memory Notes app, addressed exactly the way the real one is.
+
+    It answers the same scripts `notron/notes.py` sends, so it exercises the
+    real index-addressing and name-verification logic rather than stubbing it
+    out. `insert_folder` reproduces the one move that broke everything: a new
+    folder appearing above an existing one and shifting its index.
+    """
+
+    def __init__(self, folders=None):
+        self.folders = [(name, list(titles)) for name, titles in (folders or [
+            ("Notes", ["Parking Garages", "Supps"]),
+            ("Recently Deleted", ["an old thing"]),
+            ("🤖 NOTRON", ["📌 About Me", "📥 Ask Notron", "🧠 Brain Dump", "📊 Log"]),
+        ])]
+        self.bodies: dict[str, str] = {}
+        self.calls: list[str] = []
+
+    def insert_folder(self, position: int, name: str) -> None:
+        self.folders.insert(position - 1, (name, []))
+
+    def run(self, script: str, *args: str, **kw) -> str:
+        if script is notes._FOLDER_NAMES:
+            self.calls.append("folders")
+            return notes.US.join(name for name, _ in self.folders)
+
+        if script is notes._LIST_BY_INDEX:
+            index = int(args[0])
+            self.calls.append(f"list:{index}")
+            if index > len(self.folders):
+                raise applescript.AppleScriptError(
+                    'Can\'t get folder %d of application "Notes"' % index)
+            name, titles = self.folders[index - 1]
+            ids = [f"{name}/{t}" for t in titles]
+            dates = ["Wednesday, 2 September 2026 at 21:30:00"] * len(titles)
+            rest = notes.RS.join(
+                (notes.US.join(ids), notes.US.join(titles), notes.US.join(dates)))
+            return f"{name}{notes.RS}{rest}"
+
+        if script is notes._BODY:
+            self.calls.append("body")
+            return self.bodies.get(args[0], f"<div>{args[0].split('/')[-1]}</div>")
+
+        if script is notes._CREATE_AT_INDEX:
+            index = int(args[0])
+            self.calls.append(f"create:{index}")
+            name, titles = self.folders[index - 1]
+            title = args[1].splitlines()[0]
+            titles.append(title)
+            self.bodies[f"{name}/{title}"] = args[1]
+            return f"{name}/{title}"
+
+        if script is notes._ENSURE_FOLDER:
+            self.calls.append("ensure")
+            if any(name == args[0] for name, _ in self.folders):
+                return "exists"
+            self.folders.append((args[0], []))
+            return "created"
+
+        # A write, a `show note`, an EventKit JXA script — anything that would
+        # have reached the real machine. Loud, with the script in the message,
+        # so the test that forgot to patch is obvious from the failure alone.
+        raise AssertionError(
+            "a test reached the real Notes app — patch it:\n" + script.strip()[:200])
+
+
+@pytest.fixture(autouse=True)
+def _notes_is_never_the_real_one(monkeypatch):
+    app = FakeNotesApp()
+    monkeypatch.setattr(applescript, "run", app.run)
+    monkeypatch.setattr(notes, "run", app.run)
+    monkeypatch.setattr(notes, "_folders_cache", None)
+    yield app
+    notes._folders_cache = None

@@ -186,6 +186,7 @@ def test_the_log_recreates_itself_if_it_was_deleted(monkeypatch):
     itself got deleted, the old code just returned — every future write still
     reported success while the audit trail was silently gone for good."""
     monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: None)
+    monkeypatch.setattr(ex_mod.notes, "folder_exists", lambda folder: True)
     created = []
     monkeypatch.setattr(ex_mod.notes, "create_note",
                          lambda folder, body: created.append((folder, body)) or "new-id")
@@ -197,3 +198,23 @@ def test_the_log_recreates_itself_if_it_was_deleted(monkeypatch):
     assert folder == ex_mod.workspace.FOLDER
     assert "did a thing" in body
     assert ex_mod.workspace.LOG in body  # the seed's title heading survives
+
+
+def test_a_folder_she_cannot_see_never_multiplies_the_log_note(monkeypatch):
+    """The self-heal above is right when the note was deleted and wrong when
+    the *folder* read failed: a missing 📊 Log then means "look somewhere
+    else", not "make another one". On 2026-09-03 a shifted folder index made
+    every read of 🤖 NOTRON return Recently Deleted, and this branch fired on
+    each write — fourteen duplicate 📊 Log notes in two minutes. So the folder
+    is confirmed to be readable, from a freshly asked list, before anything is
+    created (see tests/test_notes.py)."""
+    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: None)
+    monkeypatch.setattr(ex_mod.notes, "folder_exists", lambda folder: False)
+    created = []
+    monkeypatch.setattr(ex_mod.notes, "create_note",
+                         lambda folder, body: created.append(folder) or "new-id")
+
+    for _ in range(14):
+        ex_mod.Executor()._log("insert on *Parking Garages* (462 chars)")
+
+    assert created == [], "she invented a new 📊 Log instead of finding hers"

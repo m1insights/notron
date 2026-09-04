@@ -199,11 +199,19 @@ class Executor:
         if log:
             body = notes.read_body(log.id)
             notes.write_body(log.id, body + markup.to_html(entry))
-        else:
+        elif notes.folder_exists(workspace.FOLDER):
             # Every write is supposed to land here (invariant #4). If the note
             # itself got deleted, recreate it from its seed instead of
             # silently losing the audit trail from here on — the same
             # self-heal 📖 Lessons already gets from `replace` recreating it
             # the next time there's something to write.
+            #
+            # But only once the folder itself has answered. A missing 📊 Log
+            # can also mean the *folder* read went astray, and then the honest
+            # move is to wait, not to build a replacement: on 2026-09-03 a
+            # shifted folder index made every read of 🤖 NOTRON return
+            # Recently Deleted, and this branch fired on each write — fourteen
+            # duplicate 📊 Log notes in two minutes. `folder_exists` asks Notes
+            # again rather than trusting the cached folder list.
             seed = markup.render(workspace.LOG, workspace.SEEDS[workspace.LOG])
             notes.create_note(workspace.FOLDER, seed + markup.to_html(entry))
