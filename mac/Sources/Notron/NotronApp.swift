@@ -77,7 +77,8 @@ struct NotronApp: App {
             }
             Text("Say \u{201C}Hey Siri, ask Notron\u{2026}\u{201D} anytime.")
             Divider()
-            OpenLibraryButton(title: LibraryModel.exists ? "Your notes\u{2026}" : "Set up your notes\u{2026}")
+            OpenWindowButton(title: LibraryModel.exists ? "Your notes\u{2026}" : "Set up your notes\u{2026}", id: "library")
+            OpenWindowButton(title: "Pin her notes\u{2026}", id: "pins")
             Divider()
             Button("Quit Notron") { NSApplication.shared.terminate(nil) }
         } label: {
@@ -92,6 +93,11 @@ struct NotronApp: App {
 
         Window("Welcome", id: "onboarding") {
             OnboardingView()
+        }
+        .windowResizability(.contentMinSize)
+
+        Window("Pin her notes", id: "pins") {
+            PinNotesView()
         }
         .windowResizability(.contentMinSize)
     }
@@ -121,14 +127,15 @@ private struct MenuBarLabel: View {
     }
 }
 
-private struct OpenLibraryButton: View {
+private struct OpenWindowButton: View {
     let title: String
+    let id: String
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Button(title) {
             NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: "library")
+            openWindow(id: id)
         }
     }
 }
