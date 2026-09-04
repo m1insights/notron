@@ -298,8 +298,6 @@ def cmd_pins(args):
     """
     import json
 
-    from . import workspace
-
     rows = workspace.pin_guide()
     if args.json:
         print(json.dumps(rows))

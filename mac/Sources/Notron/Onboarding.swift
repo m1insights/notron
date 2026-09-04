@@ -7,22 +7,19 @@ enum OnboardingStep: Int, CaseIterable {
 }
 
 /// One row of `notron pins --json`. Field names already match, like
-/// `PermissionCheck` — no key strategy needed.
+/// `PermissionCheck` — no key strategy needed. `id` is the Notes id, which
+/// `Identifiable` and `library open` both want, so it carries both jobs
+/// exactly as `LibraryNote` does.
 struct PinNote: Codable, Equatable, Identifiable {
-    var id: String { noteID }
+    let id: String
     let title: String
     let why: String
     let suggested: Bool
-    private let noteID: String
 
-    enum CodingKeys: String, CodingKey {
-        case title, why, suggested
-        case noteID = "id"
-    }
-
-    /// The Notes id, for `library open`. Named apart from `Identifiable.id`
-    /// only because SwiftUI wants that name and the core already uses it.
-    var notesID: String { noteID }
+    /// The core's titles lead with an emoji — "📌 About Me" — and the row
+    /// shows the two apart, like the examples on the previous screen.
+    var glyph: String { String(title.prefix(1)) }
+    var name: String { String(title.dropFirst()).trimmingCharacters(in: .whitespaces) }
 }
 
 /// One row of `notron permissions --json` — field names already match, so
@@ -46,6 +43,11 @@ final class OnboardingModel: ObservableObject {
     @Published var checksLoading = false
     @Published var listening = false
     @Published var startingListener = false
+    @Published var pins: [PinNote] = []
+    /// Notes the user has already been shown, and the one being opened now —
+    /// the row dims once it has been visited, so a long list stays trackable.
+    @Published var opened: Set<String> = []
+    @Published var opening: String?
 
     static let file = Core.home.appendingPathComponent(".notron/onboarding.json")
 
@@ -144,10 +146,6 @@ final class OnboardingModel: ObservableObject {
 
     // ------------------------------------------------------------------ pins
 
-    @Published var pins: [PinNote] = []
-    @Published var opened: Set<String> = []
-    @Published var opening: String? = nil
-
     func loadPins() {
         Task.detached { [weak self] in
             guard let json = try? Core.run(["pins", "--json"]),
@@ -163,11 +161,11 @@ final class OnboardingModel: ObservableObject {
     /// call: this one goes through the AppleScript lock and can queue behind
     /// the listener that the previous step just installed.
     func show(_ note: PinNote) {
-        opening = note.notesID
+        opening = note.id
         Task.detached { [weak self] in
-            _ = try? Core.run(["library", "open", note.notesID])
+            _ = try? Core.run(["library", "open", note.id])
             await MainActor.run {
-                self?.opened.insert(note.notesID)
+                self?.opened.insert(note.id)
                 self?.opening = nil
             }
         }

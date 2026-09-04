@@ -238,14 +238,15 @@ private struct ExampleRow<Trailing: View>: View {
     var dimmed: Bool = false
     @ViewBuilder var trailing: () -> Trailing
 
+    /// A row the user has already dealt with steps back to the caption colour.
+    private var ink: Color { dimmed ? DS.Color.textDim : DS.Color.text }
+
     var body: some View {
-        HStack(alignment: .center, spacing: DS.Space.s3) {
-            Text(glyph).font(DS.Font.headline)
-                .foregroundStyle(dimmed ? DS.Color.textDim : DS.Color.text)
+        HStack(spacing: DS.Space.s3) {
+            Text(glyph).font(DS.Font.headline).foregroundStyle(ink)
                 .frame(width: 32, alignment: .leading)
             VStack(alignment: .leading, spacing: DS.Space.s1) {
-                Text(name).font(DS.Font.body)
-                    .foregroundStyle(dimmed ? DS.Color.textDim : DS.Color.text)
+                Text(name).font(DS.Font.body).foregroundStyle(ink)
                 Text(example).font(DS.Font.caption).foregroundStyle(DS.Color.textDim)
             }
             Spacer(minLength: DS.Space.s3)
@@ -262,7 +263,7 @@ private struct ExampleRow<Trailing: View>: View {
 
 extension ExampleRow where Trailing == EmptyView {
     init(glyph: String, name: String, example: String) {
-        self.init(glyph: glyph, name: name, example: example, dimmed: false) { EmptyView() }
+        self.init(glyph: glyph, name: name, example: example) { EmptyView() }
     }
 }
 
@@ -342,6 +343,9 @@ struct PinStep: View {
 
     private var suggested: [PinNote] { model.pins.filter(\.suggested) }
     private var others: [PinNote] { model.pins.filter { !$0.suggested } }
+    /// `pin_guide()` hands them back suggested-first, so showing the rest is
+    /// showing the whole list — no second `ForEach`, no reordering.
+    private var shown: [PinNote] { showingOthers ? model.pins : suggested }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.s4) {
@@ -354,10 +358,7 @@ struct PinStep: View {
 
             ScrollView {
                 VStack(spacing: DS.Space.s3) {
-                    ForEach(suggested) { PinRow(note: $0, model: model) }
-                    if showingOthers {
-                        ForEach(others) { PinRow(note: $0, model: model) }
-                    }
+                    ForEach(shown) { PinRow(note: $0, model: model) }
                     if !others.isEmpty {
                         Button(showingOthers ? "Fewer" : "Her other notes (\(others.count))") {
                             withAnimation(DS.Motion.standard) { showingOthers.toggle() }
@@ -387,14 +388,11 @@ private struct PinRow: View {
     let note: PinNote
     @ObservedObject var model: OnboardingModel
 
-    private var used: Bool { model.opened.contains(note.notesID) }
+    private var used: Bool { model.opened.contains(note.id) }
 
     var body: some View {
-        ExampleRow(glyph: String(note.title.prefix(1)),
-                   name: String(note.title.dropFirst()).trimmingCharacters(in: .whitespaces),
-                   example: note.why,
-                   dimmed: used) {
-            if model.opening == note.notesID {
+        ExampleRow(glyph: note.glyph, name: note.name, example: note.why, dimmed: used) {
+            if model.opening == note.id {
                 ProgressView().controlSize(.small)
             } else {
                 Button(used ? "Show again" : "Show in Notes") { model.show(note) }
