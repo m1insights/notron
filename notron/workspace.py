@@ -27,6 +27,25 @@ SHARED = frozenset({ASK, DUMP})
 
 SYSTEM_NOTES = (ABOUT, ASK, DUMP, TODAY, WEEK, MEMORY, LESSONS, CARE, LOG)
 
+#: The three she is used through, every day — the ones worth pinning first.
+PIN_SUGGESTED = (ABOUT, ASK, DUMP)
+
+#: Every system note, suggested first, then in the order the user meets them.
+PIN_ORDER = (ABOUT, ASK, DUMP, TODAY, WEEK, CARE, MEMORY, LESSONS, LOG)
+
+#: One plain line per note, for the screen that asks the user to pin it.
+PIN_WHY: dict[str, str] = {
+    ABOUT: "Your instruction note. She reads it before everything — you'll edit it often.",
+    ASK: "Where you ask her things. The note you'll open most.",
+    DUMP: "Throw a thought in and she files it. Only works if it's one click away.",
+    TODAY: "What she's lined up for today. Rebuilt every morning.",
+    WEEK: "The week ahead. Rebuilt Sunday night.",
+    CARE: "What she needs from you to keep working well.",
+    MEMORY: "What she's learned about you.",
+    LESSONS: "Rules she's taught herself. Delete any you disagree with.",
+    LOG: "Everything she's done, newest first.",
+}
+
 SEEDS: dict[str, str] = {
     ABOUT: """This note is **yours**. Notron reads it before every single thing she does, and she can never write to it. Edit it whenever you like.
 
@@ -95,3 +114,22 @@ def bootstrap() -> dict[str, str]:
         notes.create_note(FOLDER, markup.render(title, SEEDS[title]))
         result[title] = "created"
     return result
+
+
+def pin_guide() -> list[dict]:
+    """Her system notes with their live ids, for the screen that asks the user
+    to pin them.
+
+    Nothing here pins anything: Apple's Notes scripting has no `pinned`
+    property — not in AppleScript, not in Shortcuts — and the only writable pin
+    state is `ZISPINNED` in the TCC-protected iCloud SQLite store, which this
+    project will not touch. All she can do is name the note and open it.
+
+    A note `bootstrap()` has not created yet is left out rather than offered
+    with no id: a row whose one button does nothing is worse than no row.
+    """
+    from . import notes
+
+    live = {n.title: n.id for n in notes.list_notes(FOLDER)}
+    return [{"title": t, "id": live[t], "why": PIN_WHY[t], "suggested": t in PIN_SUGGESTED}
+            for t in PIN_ORDER if t in live]
