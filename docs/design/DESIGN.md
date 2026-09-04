@@ -82,6 +82,8 @@ No red/yellow/green/amber anywhere else. Good/bad, on/off, core/added = opacity 
 
 **Example row** (added 2026-09-02, "how to talk to her") — `surface` background, `hairline` border, radius `lg`, `space-4` padding, laid out as a flex row: the real glyph (`📥`/`🧠`/`#`) at ~24px on the left in a 32px-wide column, a name in `body` weight + one line of real example `caption` text stacked to its right. No icon tile beyond the glyph itself — the emoji already reads as the icon.
 
+**Example row — action variant** (added 2026-09-03, "Keep her notes at the top") — the same **Example row** with a trailing control on the right edge: a plain-text `accent` button in `caption`, vertically centered, `space-3` from the text column. Once used, the whole row drops to `text-dim` and the button relabels — it marks what the user has already looked at, never a state the app cannot verify.
+
 **Listening status card** (added 2026-09-02) — full-width `surface` card, `hairline` border, radius `lg`, `space-6` padding, centered content. Off state: an `accent`-tinted icon tile (waveform glyph), `body` headline, `caption` explanatory line, primary button. On state: swaps the icon tile for the same success-teal checkmark the **API key field** uses, headline becomes "Notron is listening," caption names the exact trigger phrase (`#notron`, "Hey Siri, ask Notron…"). Transitions on `DS.Motion.standard` (200ms ease) — light skin only.
 
 ## Motion
