@@ -44,3 +44,15 @@ def test_a_note_bootstrap_has_not_made_yet_is_left_out(monkeypatch):
                         lambda folder: [fake(workspace.ASK, "id-ask")])
     rows = workspace.pin_guide()
     assert [r["title"] for r in rows] == [workspace.ASK]
+
+
+def test_the_cli_prints_the_guide_as_json(monkeypatch, capsys):
+    import json
+
+    from notron import cli
+
+    monkeypatch.setattr(notes, "list_notes", lambda folder: [fake(workspace.ASK, "id-ask")])
+    cli.cmd_pins(type("A", (), {"json": True})())
+    rows = json.loads(capsys.readouterr().out)
+    assert rows == [{"title": workspace.ASK, "id": "id-ask",
+                     "why": workspace.PIN_WHY[workspace.ASK], "suggested": True}]

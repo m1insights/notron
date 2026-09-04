@@ -289,6 +289,30 @@ def cmd_library(args):
     print()
 
 
+def cmd_pins(args):
+    """Which of her notes to pin in Apple Notes, and why.
+
+    She cannot pin them herself — Notes exposes no `pinned` property to any
+    script — so this command names them and the user Control-clicks. The
+    Mac app reads `--json`; a person reads the plain list.
+    """
+    import json
+
+    from . import workspace
+
+    rows = workspace.pin_guide()
+    if args.json:
+        print(json.dumps(rows))
+        return
+
+    print("\n  Pin these in Notes and they'll sit above everything else —")
+    print("  in her folder and in All iCloud. Control-click a note → Pin Note.\n")
+    for row in rows:
+        mark = "★" if row["suggested"] else " "
+        print(f"  {mark} {row['title']} — {row['why']}")
+    print("\n  ★ = start with these three.\n")
+
+
 def cmd_rewrite(args):
     """Where a brand-new note starts: ask each time, always clean up in place, or never."""
     rewrite.set_default_for_new_notes(args.default)
@@ -370,6 +394,10 @@ def main(argv=None):
                     help="with peek: show a note even if its body looks like credentials")
     lb.add_argument("--reset", action="store_true", help="forget every choice")
     lb.set_defaults(fn=cmd_library)
+
+    pn = sub.add_parser("pins", help="which of her notes to pin in Apple Notes")
+    pn.add_argument("--json", action="store_true", help="JSON for the Mac app")
+    pn.set_defaults(fn=cmd_pins)
 
     rw = sub.add_parser("rewrite", help="how new notes handle 'clean this up' by default")
     rw.add_argument("--default", choices=rewrite.DEFAULTS, required=True,
