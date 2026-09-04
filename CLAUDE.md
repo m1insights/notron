@@ -25,8 +25,12 @@ token set there first. The Notes-native (light) skin is the default everywhere;
 the Operator (dark) skin is reserved for the Skills & Plugins screen only, since
 that screen is Advanced-tier only. Key screens and the magic moment are specced
 in `docs/design/02-screens.md`; the first-run onboarding sequence (welcome →
-permissions → how to talk to her → start listening → handoff to "Your notes")
-is specced in `docs/design/04-onboarding-flow.md`.
+permissions → how to talk to her → start listening → pin her notes → handoff
+to "Your notes") is specced in `docs/design/04-onboarding-flow.md`. The pin
+step exists because **Apple Notes exposes no `pinned` property to any
+script** — not AppleScript, not Shortcuts — so Notron can neither pin a note
+nor tell whether one is pinned; that screen instructs and opens
+(`notron pins`, `notron library open <id>`) and never confirms.
 
 ## Commands
 
