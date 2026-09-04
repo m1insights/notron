@@ -8,9 +8,8 @@ their ids; a human does the Control-clicking.
 from notron import notes, workspace
 
 
-def fake(title, id="x"):
-    return notes.Note(id=id, title=title, folder=workspace.FOLDER,
-                      modified="Monday, 1 September 2026 at 09:00:00")
+def fake(title, id="x", modified="Monday, 1 September 2026 at 09:00:00"):
+    return notes.Note(id=id, title=title, folder=workspace.FOLDER, modified=modified)
 
 
 def test_every_system_note_is_offered_and_has_a_why():
@@ -44,6 +43,21 @@ def test_a_note_bootstrap_has_not_made_yet_is_left_out(monkeypatch):
                         lambda folder: [fake(workspace.ASK, "id-ask")])
     rows = workspace.pin_guide()
     assert [r["title"] for r in rows] == [workspace.ASK]
+
+
+def test_a_duplicate_title_offers_the_newest_note(monkeypatch):
+    # Notes allows two notes with the same name (CLAUDE.md's Performance
+    # section). library.py's suggest() keeps the newest as the real one —
+    # match that convention here instead of silently picking whichever the
+    # AppleScript happened to return last.
+    # Newest listed *first* — a plain "last one wins" dict build would pick
+    # the wrong (older) note here, which is the bug this test catches.
+    monkeypatch.setattr(notes, "list_notes", lambda folder: [
+        fake(workspace.ASK, "id-new", modified="Wednesday, 3 September 2026 at 09:00:00"),
+        fake(workspace.ASK, "id-old", modified="Monday, 1 September 2026 at 09:00:00"),
+    ])
+    rows = workspace.pin_guide()
+    assert [r["id"] for r in rows] == ["id-new"]
 
 
 def test_the_cli_prints_the_guide_as_json(monkeypatch, capsys):

@@ -35,7 +35,7 @@ nor tell whether one is pinned; that screen instructs and opens
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 361 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 369 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing

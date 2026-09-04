@@ -127,9 +127,20 @@ def pin_guide() -> list[dict]:
 
     A note `bootstrap()` has not created yet is left out rather than offered
     with no id: a row whose one button does nothing is worse than no row.
+
+    Notes allows two notes with the same name (see CLAUDE.md's Performance
+    section); a duplicate system-note title keeps the newest, matching
+    `library.suggest()`'s same tie-break rather than whichever the
+    AppleScript happened to list last.
     """
+    from datetime import datetime
+
     from . import notes
 
-    live = {n.title: n.id for n in notes.list_notes(FOLDER)}
-    return [{"title": t, "id": live[t], "why": PIN_WHY[t], "suggested": t in PIN_SUGGESTED}
+    live: dict[str, notes.Note] = {}
+    for n in notes.list_notes(FOLDER):
+        twin = live.get(n.title)
+        if twin is None or (n.modified_at or datetime.min) >= (twin.modified_at or datetime.min):
+            live[n.title] = n
+    return [{"title": t, "id": live[t].id, "why": PIN_WHY[t], "suggested": t in PIN_SUGGESTED}
             for t in PIN_ORDER if t in live]
