@@ -1,9 +1,28 @@
 import SwiftUI
 
-/// The four screens a fresh install walks through, in order, before handing
+/// The five screens a fresh install walks through, in order, before handing
 /// off to the already-built "Your notes" window.
 enum OnboardingStep: Int, CaseIterable {
-    case welcome, permissions, talk, listening
+    case welcome, permissions, talk, listening, pins
+}
+
+/// One row of `notron pins --json`. Field names already match, like
+/// `PermissionCheck` — no key strategy needed.
+struct PinNote: Codable, Equatable, Identifiable {
+    var id: String { noteID }
+    let title: String
+    let why: String
+    let suggested: Bool
+    private let noteID: String
+
+    enum CodingKeys: String, CodingKey {
+        case title, why, suggested
+        case noteID = "id"
+    }
+
+    /// The Notes id, for `library open`. Named apart from `Identifiable.id`
+    /// only because SwiftUI wants that name and the core already uses it.
+    var notesID: String { noteID }
 }
 
 /// One row of `notron permissions --json` — field names already match, so
@@ -121,5 +140,36 @@ final class OnboardingModel: ObservableObject {
               let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Bool]
         else { return false }
         return obj["running"] ?? false
+    }
+
+    // ------------------------------------------------------------------ pins
+
+    @Published var pins: [PinNote] = []
+    @Published var opened: Set<String> = []
+    @Published var opening: String? = nil
+
+    func loadPins() {
+        Task.detached { [weak self] in
+            guard let json = try? Core.run(["pins", "--json"]),
+                  let rows = try? JSONDecoder().decode([PinNote].self, from: Data(json.utf8))
+            else { return }
+            await MainActor.run { self?.pins = rows }
+        }
+    }
+
+    /// Brings the note up in Notes and selects it in the list — which is where
+    /// the Control-click has to happen, because nothing in Notes' scripting
+    /// surface can pin it for us. Off the main thread like every other core
+    /// call: this one goes through the AppleScript lock and can queue behind
+    /// the listener that the previous step just installed.
+    func show(_ note: PinNote) {
+        opening = note.notesID
+        Task.detached { [weak self] in
+            _ = try? Core.run(["library", "open", note.notesID])
+            await MainActor.run {
+                self?.opened.insert(note.notesID)
+                self?.opening = nil
+            }
+        }
     }
 }
