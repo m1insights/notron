@@ -547,3 +547,11 @@ opened by this revision. Recovery must restore the matched ledger/payload store;
 there is no automatic reset. This detects missing/empty state and authenticates its
 marker, not arbitrary rollback/replacement of a valid database by privileged local
 software. Payload stores are dedicated to one ledger.
+
+Follow-up occurrence mapping correction: rebasing now precedes receipt recognition,
+so an unrelated insertion above a completed turn does not hide its receipt. Stable
+matching is evaluated per anchor group against mapped source spans, independently of
+other request groups entering or leaving the same note. Thus adding/removing a distinct
+request preserves an existing identical pair, while changing the size of that pair or
+reordering pending anchors still requires review. Historical uncertain rows cannot use
+the latest visible snapshot's offsets as positional proof.

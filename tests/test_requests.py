@@ -333,3 +333,39 @@ def test_identical_pending_turns_keep_identity_across_unrelated_edits(edit):
     second = store.observe('n1', updated, questions, source='ask', title='Ask', folder='Notes')
     assert [envelope.request_id for envelope in second] == [envelope.request_id for envelope in first]
     assert all(store.get(envelope.request_id).status == 'prepared' for envelope in second)
+
+
+@pytest.mark.parametrize('position', ['before', 'between', 'after', 'removed'])
+def test_distinct_request_insertion_or_removal_preserves_identical_pending_turns(position):
+    from notron import conversation
+    store = requests.current()
+    call = '<div>remind me to call</div>'
+    write = '<div>remind me to write</div>'
+    gap = '<div></div><div></div>'
+    body = '<div>Ask</div>' + call + gap + call
+    if position == 'removed':
+        body += gap + write
+    first = store.observe('n1', body, conversation.unanswered(body, ignore=('Ask',)), source='ask', title='Ask', folder='Notes')
+    expected = [envelope.request_id for envelope in first if envelope.text == 'remind me to call']
+    turns = {'before': [write, call, call], 'between': [call, write, call],
+             'after': [call, call, write], 'removed': [call, call]}[position]
+    updated = '<div>Ask</div>' + gap.join(turns)
+    second = store.observe('n1', updated, conversation.unanswered(updated, ignore=('Ask',)), source='ask', title='Ask', folder='Notes')
+    retained = [envelope for envelope in second if envelope.text == 'remind me to call']
+    assert [envelope.request_id for envelope in retained] == expected
+    assert all(store.get(envelope.request_id).status == 'prepared' for envelope in retained)
+
+
+def test_shifted_receipt_preserves_second_identical_pending_turn():
+    from notron import conversation
+    store = requests.current()
+    original = '<div>Ask</div><div>remind me to call</div><div></div><div></div><div>remind me to call</div>'
+    first, second = store.observe('n1', original, conversation.unanswered(original, ignore=('Ask',)), source='ask', title='Ask', folder='Notes')
+    store.claim(first.request_id)
+    store.finish(first.request_id)
+    updated = '<div></div><div>Ask</div><div>remind me to call</div><div>Notron:</div><div>Reminder set</div><div>———</div><div></div><div></div><div>remind me to call</div>'
+    remaining = store.observe('n1', updated, conversation.unanswered(updated, ignore=('Ask',)), source='ask', title='Ask', folder='Notes')
+    assert len(remaining) == 1 and remaining[0].request_id == second.request_id
+    assert store.claim(second.request_id)
+    store.finish(second.request_id)
+    assert store.get(first.request_id).status == store.get(second.request_id).status == 'completed'

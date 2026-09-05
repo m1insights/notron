@@ -235,22 +235,33 @@ class RequestStore:
                                 'anchor': revision(envelope.source_text or envelope.text),
                                 'after': envelope.reply_to[2] if envelope.reply_to else -1})
             old_by_id = {x['id']: self._read(db.execute('SELECT * FROM requests WHERE request_id=?', (x['id'],)).fetchone()) for x in old}
-            # A ledger-completed occurrence with a receipt at its observed span
-            # has left the unanswered set. Remove only that proven occurrence
-            # from matching, preserving a distinct identical pending sibling.
-            old = [x for x in old if not (
-                old_by_id[x['id']].status == 'completed'
-                and x['after'] in self._answered_anchor_spans(body, old_by_id[x['id']].envelope.source_text)
-                and not any(item['after'] == x['after'] for item in items))]
-            counts, previous = Counter(x['anchor'] for x in items), Counter(x['anchor'] for x in old)
+            # Rebase all spans before matching either pending turns or receipts.
+            # A different request can be inserted/removed without changing the
+            # identity of an unchanged anchor group elsewhere in the note.
             span_map = {}
             if old_blocks:
                 for old_start, new_start, length in SequenceMatcher(None, old_blocks, blocks, autojunk=False).get_matching_blocks():
                     span_map.update((old_start + offset, new_start + offset) for offset in range(length))
-            stable_spans = (bool(old_blocks) and len(old) == len(items)
-                            and all(previous_item['anchor'] == current_item['anchor']
-                                    and span_map.get(previous_item['after']) == current_item['after']
-                                    for previous_item, current_item in zip(old, items)))
+            def mapped_after(item):
+                if item['id'] not in visible_ids:
+                    return None  # historical uncertainty predates this snapshot
+                return span_map.get(item['after']) if old_blocks else item['after']
+
+            # Remove only a ledger-completed occurrence whose rebased span is
+            # now visibly answered, preserving its identical pending sibling.
+            old = [x for x in old if not (
+                old_by_id[x['id']].status == 'completed'
+                and mapped_after(x) in self._answered_anchor_spans(body, old_by_id[x['id']].envelope.source_text)
+                and not any(item['after'] == mapped_after(x) for item in items))]
+            counts, previous = Counter(x['anchor'] for x in items), Counter(x['anchor'] for x in old)
+            stable_anchors = set()
+            for anchor in previous:
+                old_group = [x for x in old if x['anchor'] == anchor]
+                new_group = [x for x in items if x['anchor'] == anchor]
+                if (old_blocks and len(old_group) == len(new_group)
+                        and all(mapped_after(before) == after['after']
+                                for before, after in zip(old_group, new_group))):
+                    stable_anchors.add(anchor)
             active = {'prepared', 'running', 'needs_review'}
             overlap_old = [x['anchor'] for x in old if counts[x['anchor']] and old_by_id[x['id']].status in active]
             overlap_new = [x['anchor'] for x in items if x['anchor'] in overlap_old]
@@ -260,12 +271,12 @@ class RequestStore:
             for item in items:
                 candidates = [x for x in old if x['anchor'] == item['anchor'] and x['id'] not in used]
                 duplicates = counts[item['anchor']] > 1 or previous[item['anchor']] > 1
-                ambiguous = duplicates and not stable_spans and any(old_by_id[x['id']].status in active for x in old if x['anchor'] == item['anchor'])
+                ambiguous = duplicates and item['anchor'] not in stable_anchors and any(old_by_id[x['id']].status in active for x in old if x['anchor'] == item['anchor'])
                 match = None
                 if len(candidates) == 1 and not duplicates:
                     match = candidates[0]
                 else:
-                    exact = [x for x in candidates if (span_map.get(x['after']) if stable_spans else x['after']) == item['after']]
+                    exact = [x for x in candidates if (mapped_after(x) if item['anchor'] in stable_anchors else x['after']) == item['after']]
                     if len(exact) == 1:
                         match = exact[0]
                     elif candidates:
