@@ -360,3 +360,47 @@ def test_queued_morning_retains_original_capture_time():
     value = worker.Queue().payload(job)
     assert value['envelope']['source'] == 'morning'
     assert value['envelope']['captured_at'] is not None
+
+
+def test_refused_care_write_does_not_report_successful_queue_completion(monkeypatch, capsys):
+    from notron import worker, cli, care
+    from notron.executor import WriteResult
+    from notron.health import HealthStore
+    monkeypatch.setattr(worker, 'probe', lambda: None)
+    monkeypatch.setattr(care, 'run', lambda *a, **kw: ([], 'synthetic status', WriteResult(ok=False, reason='write refused')))
+    cli.main(['care', '--offline'])
+    assert worker.Queue().pending()[0]['status'] == 'needs_review'
+    assert HealthStore().status()['last_success_at'] is None
+
+
+def test_morning_plan_completion_does_not_hide_failed_care_write(monkeypatch, capsys):
+    from notron import worker, cli, daily
+    from notron.health import HealthStore
+    monkeypatch.setattr(worker, 'probe', lambda: None)
+    monkeypatch.setattr(cli, '_brain', lambda: None)
+    def morning(*a, envelope, **kw):
+        store = requests.current()
+        store.claim(envelope.request_id)
+        store.finish(envelope.request_id)
+        return {'plan': 'plan completed', 'care': [], 'care_written': False}
+    monkeypatch.setattr(daily, 'morning', morning)
+    cli.main(['morning'])
+    assert worker.Queue().pending()[0]['status'] == 'needs_review'
+    assert HealthStore().status()['last_success_at'] is None
+
+
+@pytest.mark.parametrize('kind', ['reflect', 'morning'])
+def test_reflection_write_refusal_remains_review_required(kind, monkeypatch, capsys):
+    from notron import worker, cli, reflect, daily
+    monkeypatch.setattr(worker, 'probe', lambda: None)
+    monkeypatch.setattr(cli, '_brain', lambda: None)
+    reflected = {'misses': 1, 'proposed': 1, 'kept': [], 'written': False}
+    monkeypatch.setattr(reflect, 'run', lambda *a, **kw: reflected)
+    def morning(*a, envelope, **kw):
+        store = requests.current()
+        store.claim(envelope.request_id)
+        store.finish(envelope.request_id)
+        return {'plan': 'done', 'care_written': True, 'reflect': reflected}
+    monkeypatch.setattr(daily, 'morning', morning)
+    cli.main([kind])
+    assert worker.Queue().pending()[0]['status'] == 'needs_review'

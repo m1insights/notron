@@ -153,7 +153,7 @@ def test_relative_date_after_resume_requires_confirmation(delayed_request):
 
 ## Task 6 — Worker lifecycle, queue health and migration
 
-Completed 2026-09-05; [implementation, migration and rollback handoff](../handoffs/2026-09-05-P02-task-6.md). Independent review approved; 1,047 tests pass. Native signed-app/sleep-wake qualification remains P06.
+Completed 2026-09-05; [implementation, migration and rollback handoff](../handoffs/2026-09-05-P02-task-6.md). Independent task and final integration reviews approved; 1,051 tests pass. Native signed-app/sleep-wake qualification remains P06.
 
 
 **Files:** Create `notron/health.py`, `tests/test_health.py`, `tests/test_worker_lifecycle.py`; Modify `notron/watch.py`, `notron/cli.py`, `notron/daily.py`, `notron/brain.py`, `notron/mentions.py`.

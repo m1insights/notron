@@ -137,6 +137,7 @@ def cmd_care(args):
         print(f" {mark} {s.fact}")
     print(f"\n{body}\n")
     print(f"  {'\u2713' if result.ok else '\u2717'} {workspace.CARE} — {result.reason}\n")
+    return result
 
 
 @command('reflect')
@@ -147,12 +148,13 @@ def cmd_reflect(args):
     out = reflect.run(_brain(), dry_run=args.dry_run, on_step=lambda m: print(f"  · {m}"))
     if out.get("skipped"):
         print(f"  {out['skipped']}\n")
-        return
+        return out
     print(f"\n  {out['misses']} miss(es), {out['proposed']} lesson(s) proposed, "
           f"{len(out['kept'])} kept\n")
     for l in out["kept"]:
         print(f"  + {l}")
     print()
+    return out
 
 
 @command('morning')
@@ -168,6 +170,7 @@ def cmd_morning(args):
         for f in out["care"]:
             print(f"    ! {f}")
     print(f"\n  Open Notes → {workspace.FOLDER}\n")
+    return out
 
 
 def cmd_schedule(args):

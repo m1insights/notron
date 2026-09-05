@@ -240,6 +240,13 @@ def execute(job, fn=None):
         queue.finish(job['job_id'], 'needs_review')
         raise
     status = 'completed'
+    # Normal return means the job ran, not that every guarded write succeeded.
+    # A composite morning owns more than its nested plan request's completion.
+    if (getattr(result, 'ok', True) is False
+            or (isinstance(result, dict) and (result.get('care_written', True) is False
+                or result.get('written', True) is False
+                or result.get('reflect', {}).get('written', True) is False))):
+        status = 'needs_review'
     if job['request_id'] and not getattr(args, 'dry_run', False):
         record = requests.current().get(job['request_id'])
         if record and record.status != 'completed':

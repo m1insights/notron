@@ -126,18 +126,18 @@ This approved roadmap supersedes older product assumptions where they conflict: 
 
 ## Next implementation session
 
-Continue with **P02 Task 6: Worker lifecycle, queue health and migration**.
-P02 Tasks 1–5 are implemented and reviewed. Task 5 adds capture-aware scheduling,
-explicit target selection, exact-event conflict confirmation, truthful context
-availability and query-time refresh of changed selected notes. See the
-[Task 5 handoff](handoffs/2026-09-05-P02-task-5.md) for commits, review evidence,
-compatibility and remaining limits. The full Python suite has **967 passing tests**.
+Continue with **P03 Task 1: Ask conversation contracts**.
+P02 Tasks 1–6 are implemented and reviewed. Task 6 adds truthful worker health,
+durable pause/resume, shared worker ownership, encrypted queue/restart handling,
+provider deadlines and conservative legacy migration. See the
+[Task 6 handoff](handoffs/2026-09-05-P02-task-6.md) for commits, verification,
+migration/rollback and remaining limits.
 Retain branch `production/p01-task1` and worktree `.worktrees/p01-task1`; reuse the
 root `.venv/bin/python`. The original checkout has unrelated work; inspect status
 before edits. Nothing was merged or pushed.
 
-P02 Task 6 remains open; the M1 safe-local-core gate still requires complete P02
-and P03 evidence. Native Apple adapter behavior and the final iCloud race remain
+The M1 safe-local-core gate still requires P03 evidence and native qualification.
+Native Apple adapter behavior and the final iCloud race remain
 unverified/nontransactional respectively. P01's private reporting-route decision,
 provider retention and P06/P07 signed/native/security review gates remain open;
 real processing stays paused. P04 Task 1 remains a separately schedulable device
