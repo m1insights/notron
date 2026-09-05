@@ -12,6 +12,7 @@ import pytest
 
 from notron import markup, nodes, reflect, workspace
 from notron.state import State
+from notron.outbound import Passage, prepare_outbound
 
 
 def ask_note(md):
@@ -93,6 +94,7 @@ def in_notes(monkeypatch, tmp_path):
         def __init__(self, id):
             self.id = id
             self.title = id
+            self.modified = ""
 
     monkeypatch.setattr(reflect.notes, "find_note",
                         lambda folder, title: N(title) if title in bodies else None)
@@ -166,17 +168,46 @@ def test_lessons_sit_below_the_standing_instructions_in_every_prompt():
     """About Me always wins — so it must come first, and the lessons must say so."""
     state = State(request="x", about="Never schedule me before 9am.",
                   lessons="- When they say 'my notes', answer from their notes only.")
-    prompt = nodes._prompt(state)
+    state.system_sources = {"about": Passage(state.about, "standing", f"{workspace.FOLDER}/{workspace.ABOUT}"),
+                            "lessons": Passage(state.lessons, "lesson", f"{workspace.FOLDER}/{workspace.LESSONS}")}
+    prompt = "\n".join(prepare_outbound("write", nodes._prompt(state)))
     assert prompt.index("standing instructions") < prompt.index("taught yourself")
-    assert "unless the standing instructions above say otherwise" in prompt
+    assert "subordinate to standing instructions" in prompt
 
 
 def test_the_placeholder_lessons_note_is_not_fed_to_the_model():
     state = State(request="x", lessons="Nothing learned yet.")
-    assert "taught yourself" not in nodes._prompt(state)
+    assert "taught yourself" not in "\n".join(prepare_outbound("write", nodes._prompt(state)))
 
 
 def test_the_lessons_note_is_capped_so_it_stays_a_page():
     known = [f"lesson number {i}" for i in range(reflect.MAX_LESSONS + 5)]
     merged = (["the new one"] + known)[:reflect.MAX_LESSONS]
     assert len(merged) == reflect.MAX_LESSONS and merged[0] == "the new one"
+
+
+def test_reflection_transports_prepare_history_standing_lessons_and_model_output(monkeypatch, outbound_policy, outbound_transport):
+    import json
+    from notron import notes
+    from notron.notes import Note
+    secret = 'synthetic-example-only'
+    roles = {title: title for title in (workspace.ASK, workspace.ABOUT, workspace.LESSONS)}
+    outbound_policy(system_notes=roles)
+    bodies = {
+        workspace.ASK: ask_note(CHAT.replace('Focus on the launch.', f'Focus password: {secret}')),
+        workspace.ABOUT: markup.render(workspace.ABOUT, f'Keep it short. password: {secret}'),
+        workspace.LESSONS: markup.render(workspace.LESSONS, f'- Be brief. password: {secret}'),
+    }
+    monkeypatch.setattr(notes, 'find_note', lambda folder, title: Note(title, title, folder, '') if title in roles else None)
+    monkeypatch.setattr(notes, 'read_body', lambda nid: bodies[nid])
+    brain, calls = outbound_transport
+    calls.replies.extend([
+        json.dumps({'lessons': [{'rule': f'Be concise. password: {secret}',
+                                'evidence': 'No, I meant from my health notes.'}]}),
+        '{"keep":[]}',
+    ])
+    result = reflect.run(brain, dry_run=True)
+    assert result['proposed'] == 1 and result['kept'] == []
+    assert len(calls.chat) == 2
+    assert secret not in json.dumps(calls.chat)
+    assert all('password:' not in c['messages'][0]['content'] for c in calls.chat)

@@ -5,6 +5,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from notron import conversation, graph, nodes, workspace
 from notron.state import State
+from notron.outbound import Passage, prepare_outbound
 
 
 class FakeBrain:
@@ -83,7 +84,8 @@ def test_routing_runs_on_the_cheap_tier_and_writing_on_the_smart_one():
 
 def test_the_instruction_note_is_always_loaded_before_the_model_is_called():
     state = State(request="x", about="Never schedule me before 9am.")
-    prompt = nodes._prompt(state)
+    state.system_sources["about"] = Passage(state.about, "standing", f"{workspace.FOLDER}/{workspace.ABOUT}")
+    prompt = "\n".join(prepare_outbound("write", nodes._prompt(state)))
     assert prompt.index("standing instructions") < prompt.index("Their request")
 
 
@@ -275,7 +277,7 @@ def test_undo_walks_the_whole_graph_without_ever_asking_the_model(monkeypatch):
     monkeypatch.setattr(undo, "pop", lambda note_id: "<div>the way it was</div>")
     brain = FakeBrain()
     state = graph.run("undo", brain=brain, trigger="notes", dry_run=True,
-                      reply_to=("Parking Garages", "Notes", 3))
+                      reply_to=("Parking Garages", "Notes", 3), source_note_id="n1")
 
     assert [w.mode for w in state.writes] == ["restore"]
     assert brain.calls == [], "nothing here needs a model"
@@ -290,7 +292,7 @@ def test_a_tidy_up_lands_below_the_note_until_that_note_is_opted_in(monkeypatch)
     monkeypatch.setattr(rewrite, "allowed", lambda note_id: False)
     brain = FakeBrain()
     state = graph.run("clean this up", brain=brain, trigger="notes", dry_run=True,
-                      reply_to=("Parking Garages", "Notes", 3))
+                      reply_to=("Parking Garages", "Notes", 3), source_note_id="n1")
 
     assert [w.mode for w in state.writes] == ["insert"]
     assert ("json", "fast") not in brain.calls, "the router read the words itself"

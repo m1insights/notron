@@ -3,6 +3,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 from notron import graph, nodes, research
 from notron.state import State
+from notron.outbound import prepare_outbound
 
 
 def test_no_search_happens_unless_the_router_asked_for_one():
@@ -38,7 +39,7 @@ def test_findings_reach_the_writer_as_context(monkeypatch):
     state = State(request="did Fonda Lee win anything?", needs_web=True)
     nodes.researcher(state)
     assert any("Aurora" in w for w in state.web)
-    assert "https://example.com" in nodes._prompt(state)
+    assert "https://example.com" in "\n".join(prepare_outbound("write", nodes._prompt(state)))
 
 
 def test_the_researcher_sits_in_the_declared_graph():

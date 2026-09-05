@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from .outbound import Passage
+
 
 @dataclass
 class Write:
@@ -52,7 +54,10 @@ class State:
     source: str = ""                 # the exact lines she was tagged in, tags intact —
                                      # what the Filer copies and ticks
     reply_to: tuple | None = None    # (title, folder, block index) to answer under
-    context: list[str] = field(default_factory=list)
+    source_note_id: str | None = None
+    source_modified: str = ""
+    system_sources: dict[str, Passage] = field(default_factory=dict)
+    context: list[Passage] = field(default_factory=list)
     web: list[str] = field(default_factory=list)
     agenda: str = ""                          # today's calendar + open reminders
     actions: list[Action] = field(default_factory=list)

@@ -24,6 +24,8 @@ class Hit:
     folder: str
     excerpt: str
     score: float
+    note_id: str
+    modified: str = ""
 
 
 def _terms(text: str) -> list[str]:
@@ -54,13 +56,15 @@ def search(query: str, *, limit: int = 12, excerpt_chars: int = 900) -> list[Hit
     hits = []
     for n in shortlist:
         text = markup.to_text(notes.read_body(n.id))
+        from .outbound import Passage, prepare_outbound
+        text = prepare_outbound("write", [Passage.from_note(text, n)])[0]
         body_terms = _terms(text)
         body_set = set(body_terms)
         score = sum(2.0 for t in terms if t in set(_terms(n.title)))
         score += sum(1.0 for t in terms if t in body_set)
         if score <= 0:
             continue
-        hits.append(Hit(n.title, n.folder, text[:excerpt_chars], score))
+        hits.append(Hit(n.title, n.folder, text[:excerpt_chars], score, n.id, n.modified))
 
     hits.sort(key=lambda h: -h.score)
     return hits[:limit]

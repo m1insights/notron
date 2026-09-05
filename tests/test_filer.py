@@ -1,3 +1,4 @@
+from notron.outbound import prepare_outbound
 """The Filer: a brain dump sorted into the notes it belongs in, with nothing
 ever deleted, and a question instead of a guess when no note fits.
 
@@ -88,6 +89,7 @@ class FilerBrain:
         self.prompts = []
 
     def ask_json(self, *, system, user, **kw):
+        user = "\n".join(prepare_outbound(kw["purpose"], user))
         self.calls += 1
         self.prompts.append(user)
         assert kw.get("tier") == filer.TIER
@@ -305,13 +307,13 @@ def test_in_the_ask_note_nothing_is_tagged_and_every_line_is_the_request():
 # ------------------------------------------------------------- the model
 
 def test_a_title_the_model_invented_becomes_a_proposal_never_a_write():
-    masters = [filer.Master("Supplements", "Notes", "magnesium 400mg"), filer.Master("Book idea", "Notes"),
-               filer.Master("Book", "Notes")]
-    items = [filer.Item("magnesium", "magnesium", 1, "d", "f"),
-             filer.Item("lighthouse", "lighthouse", 2, "d", "f"),
-             filer.Item("serum", "serum", 3, "d", "f"),
-             filer.Item("oats", "oats", 4, "d", "f"),
-             filer.Item("act two", "act two", 5, "d", "f")]
+    masters = [filer.Master("Supplements", "Notes", "magnesium 400mg", "n1"), filer.Master("Book idea", "Notes", note_id="n1"),
+               filer.Master("Book", "Notes", note_id="n1")]
+    items = [filer.Item("magnesium", "magnesium", 1, "d", "f", note_id="n1"),
+             filer.Item("lighthouse", "lighthouse", 2, "d", "f", note_id="n1"),
+             filer.Item("serum", "serum", 3, "d", "f", note_id="n1"),
+             filer.Item("oats", "oats", 4, "d", "f", note_id="n1"),
+             filer.Item("act two", "act two", 5, "d", "f", note_id="n1")]
     brain = FilerBrain({"magnesium": {"note": "supplements"},                    # case slips are fine
                         "lighthouse": {"note": "Book Ideas"},                    # not on the list
                         "serum": {"new": "Skincare Brand."},
@@ -324,24 +326,24 @@ def test_a_title_the_model_invented_becomes_a_proposal_never_a_write():
 
 
 def test_the_model_sees_a_blank_line_between_runs():
-    items = [filer.Item("a", "a", 0, "d", "f", run=0), filer.Item("b", "b", 1, "d", "f", run=0),
-             filer.Item("c", "c", 3, "d", "f", run=1)]
-    assert filer._prompt(items, []).endswith("# Lines to file\n1. a\n2. b\n\n3. c")
+    items = [filer.Item("a", "a", 0, "d", "f", note_id="n1", run=0), filer.Item("b", "b", 1, "d", "f", note_id="n1", run=0),
+             filer.Item("c", "c", 3, "d", "f", note_id="n1", run=1)]
+    assert "\n".join(prepare_outbound("organize", filer._prompt(items, []))).endswith("# Lines to file\n1. a\n2. b\n\n3. c")
 
 
 def test_a_part_points_at_an_earlier_line_in_the_same_run_or_it_is_ignored():
-    items = [filer.Item("the stack today:", "x", 0, "d", "f", run=0),
-             filer.Item("magnesium", "x", 1, "d", "f", run=0),
-             filer.Item("zinc", "x", 2, "d", "f", run=0),
-             filer.Item("act two needs a storm", "x", 4, "d", "f", run=1),
-             filer.Item("a lighthouse", "x", 5, "d", "f", run=1)]
+    items = [filer.Item("the stack today:", "x", 0, "d", "f", note_id="n1", run=0),
+             filer.Item("magnesium", "x", 1, "d", "f", note_id="n1", run=0),
+             filer.Item("zinc", "x", 2, "d", "f", note_id="n1", run=0),
+             filer.Item("act two needs a storm", "x", 4, "d", "f", note_id="n1", run=1),
+             filer.Item("a lighthouse", "x", 5, "d", "f", note_id="n1", run=1)]
     brain = FilerBrain({"the stack today:": {"note": "Supps"},
                         "magnesium": {"part_of": "the stack today:"},
                         "zinc": {"part_of": "magnesium"},                 # a part of a part → the lead
                         "act two needs a storm": {"part_of": "zinc"},      # crosses a run → ignored
                         "a lighthouse": {"part_of": "a lighthouse"}},     # points at itself → ignored
                        shapes={"Supps": "log", "Nonsense": "list"})
-    verdicts, shapes = filer.classify(brain, items, [filer.Master("Supps", "Notes")])
+    verdicts, shapes = filer.classify(brain, items, [filer.Master("Supps", "Notes", note_id="n1")])
     assert verdicts == [("note", "Supps"), ("part", "0"), ("part", "0"), None, None]
     assert shapes == {"Supps": "log", "Nonsense": "list"}
 
@@ -709,7 +711,7 @@ def test_a_tagged_line_is_filed_where_it_sits(store):
     store.add("Supplements", "-")
     nid = store.add("Scratch", "random thoughts\n@notron file this: took vitamin D today")
     items, bare = filer.items_from_turn("@notron file this: took vitamin D today",
-                                        title="Scratch", folder="Notes", near=2)
+                                        title="Scratch", folder="Notes", near=2, note_id=nid)
     out = filer.file_items(FilerBrain({"took vitamin D today": {"note": "Supplements"}}), items, bare=bare)
     assert "took vitamin D today" in store.text("Supplements")
     assert "✓ @notron file this: took vitamin D today → Supplements" in store.text("Scratch")

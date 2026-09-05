@@ -78,14 +78,14 @@ class Watcher:
     # --------------------------------------------------------------- answering
 
     def _answer(self, question: str, *, title: str, folder: str, after: int,
-                here: str = "", source: str = "", note_id: str | None = None) -> bool:
+                here: str = "", source: str = "", note_id: str | None = None, modified: str = "") -> bool:
         self._say(f"\n> [{title}] {question}")
         if note_id is None:
             raise policy.PolicyError('Reply requires the observed note ID.')
         with policy.explicit_reply(note_id):
             state = graph.run(
                 question, brain=self.brain, trigger="notes",
-                reply_to=(title, folder, after), here=here, source=source,
+                reply_to=(title, folder, after), here=here, source=source, source_note_id=note_id, source_modified=modified,
             )
         for line in state.trace:
             self._say(f"  {line}")
@@ -175,8 +175,9 @@ class Watcher:
                 continue
             body = notes.read_body(m.note_id)
             from .markup import to_text
+            from . import privacy
             wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                                 here=to_text(body)[:4000], source=m.raw, note_id=m.note_id)
+                                 here=privacy.redact(to_text(body))[:4000], source=m.raw, note_id=m.note_id, modified=m.modified)
             self._attempted(key, wrote)
             self._pending.pop(key, None)
             return

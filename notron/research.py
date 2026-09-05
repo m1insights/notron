@@ -16,6 +16,9 @@ import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from typing import Sequence
+
+from .outbound import Passage, prepare_outbound
 
 ENDPOINT = "https://api.tavily.com/search"
 TIMEOUT = 20
@@ -60,10 +63,9 @@ def check_url(url: str, *, timeout: int = 5) -> bool:
         return False
 
 
-def search(query: str, *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
+def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
     """Return Tavily's own summary answer plus the sources behind it."""
-    from . import policy
-    policy.require_ready()
+    query = "\n".join(prepare_outbound("search", passages))
     key = os.environ.get("TAVILY_API_KEY", "").strip()
     if not key:
         raise NoSearchKey("TAVILY_API_KEY is not set")

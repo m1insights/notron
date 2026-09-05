@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from . import conversation, markup, notes, workspace
+from .outbound import Passage, sanitized
 
 STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "reflect.json"
 
@@ -150,7 +151,10 @@ Reject a candidate that:
 
 
 def current_lessons() -> list[str]:
-    n = workspace.readable_system_note(workspace.LESSONS)
+    return _read_lessons(workspace.readable_system_note(workspace.LESSONS))
+
+
+def _read_lessons(n) -> list[str]:
     if not n:
         return []
     text = markup.to_text(notes.read_body(n.id))
@@ -197,13 +201,17 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
         f"You: {m.exchange.question}\nNotron: {m.exchange.answer}\n"
         f"You ({m.why}): {m.followup}" for m in found[-8:]
     )
-    known = current_lessons()
+    lesson_note = workspace.readable_system_note(workspace.LESSONS)
+    known = _read_lessons(lesson_note)
+    lesson_passages = ([Passage.from_note("\n".join(known), lesson_note, "lesson")]
+                       if lesson_note else [])
+    transcript_passage = sanitized("reflect", [Passage.from_note(transcript, ask, "history")])[0]
+    transcript = transcript_passage.text
 
     try:
         proposed = brain.ask_json(
             system=PROPOSER_SYSTEM % MAX_NEW_PER_RUN,
-            user=f"# Transcript of the misses\n{transcript}\n\n"
-                 f"# Lessons already learned\n" + ("\n".join(f"- {l}" for l in known) or "(none)"),
+            user=[transcript_passage, *lesson_passages], purpose="reflect",
             tier="smart", max_tokens=600,
         ).get("lessons", [])
     except Exception as e:
@@ -226,10 +234,10 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
     try:
         verdict = brain.ask_json(
             system=VERIFIER_SYSTEM,
-            user=f"# Standing instructions\n{about or '(none)'}\n\n"
-                 f"# Lessons already learned\n" + ("\n".join(f"- {l}" for l in known) or "(none)")
-                 + "\n\n# Candidates\n"
-                 + "\n".join(f"{i}. {c['rule']}" for i, c in enumerate(candidates)),
+            user=([Passage.from_note(about, about_note, "standing")] if about_note else [])
+                 + lesson_passages + [transcript_passage,
+                   Passage("# Candidates\n" + "\n".join(f"{i}. {c['rule']}" for i, c in enumerate(candidates)),
+                           "model")], purpose="reflect",
             tier="fast", max_tokens=300,
         )
         keep = {i for i in verdict.get("keep", []) if isinstance(i, int)}

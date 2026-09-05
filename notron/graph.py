@@ -70,6 +70,7 @@ ORDER = ("watcher", "router", "retriever", "researcher", "agenda",
 
 def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
         reply_to: tuple | None = None, here: str = "", source: str = "",
+        source_note_id: str | None = None, source_modified: str = "",
         on_node: Callable[[str, State], None] | None = None) -> State:
     """Walk the graph once.
 
@@ -82,7 +83,8 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
     from . import policy
     policy.require_ready()
     state = State(request=request, trigger=trigger, reply_to=reply_to, here=here,
-                  source=source)
+                  source=source, source_note_id=source_note_id or policy.request_note_id(),
+                  source_modified=source_modified)
     for name in ORDER:
         fn = NODES[name]
         if name in ("executor", "doer", "filer"):

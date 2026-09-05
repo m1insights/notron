@@ -18,6 +18,7 @@ from datetime import date, datetime, timedelta
 
 from . import index, markup, notes, permissions, workspace
 from .brain import USAGE_LOG
+from .outbound import Passage
 
 # Thresholds. Past these, Notron asks for help.
 ABOUT_COMFORTABLE = 2500      # chars of instructions she re-reads on every single run
@@ -111,7 +112,7 @@ def check() -> list[Signal]:
     from . import library
 
     live = library.user_notes()
-    known = set(json.loads(index.CACHE.read_text()).keys()) if index.exists() else set()
+    known = set(index._load()) if index.exists() else set()
     unlearned = [x for x in live if x.id not in known]
     if not index.exists():
         out.append(Signal(
@@ -212,7 +213,7 @@ def compose(signals: list[Signal], brain=None) -> str:
     header = f"{emoji} {label}\n\n"
     if brain is None:
         return header + _plain(signals)
-    written = brain.ask(system=CARE_SYSTEM, user=f"Facts about your state today:\n{facts}",
+    written = brain.ask(system=CARE_SYSTEM, user=[Passage(f"Facts about your state today:\n{facts}", "diagnostic")], purpose="write",
                         tier="fast", max_tokens=600)
     # This note must never be blank — it is the one that tells you something is wrong.
     return header + (written or _plain(signals))

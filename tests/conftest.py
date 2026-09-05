@@ -150,3 +150,65 @@ def _policy_is_disposable(monkeypatch, tmp_path):
         homes={'n1', 'note-1'}, decided={'n1', 'note-1'},
         allow_new_notes=True,
         system_notes={title: f'{workspace.FOLDER}/{title}' for title in workspace.SYSTEM_NOTES}))
+
+
+@pytest.fixture(autouse=True)
+def _outbound_resources_are_disposable(monkeypatch, tmp_path):
+    from notron import brain, care, filer, index, reflect
+    import socket
+    import urllib.request
+
+    def blocked(*args, **kwargs):
+        raise AssertionError('Live network is forbidden in unit tests')
+
+    monkeypatch.setattr(socket.socket, 'connect', blocked)
+    monkeypatch.setattr(urllib.request, 'urlopen', blocked)
+    monkeypatch.setattr(brain, '_load_env', lambda: None)
+    monkeypatch.delenv('NEBIUS_API_KEY', raising=False)
+    for module, attr, name in (
+        (brain, 'USAGE_LOG', 'usage.json'), (care, 'USAGE_LOG', 'usage.json'),
+        (care, 'MOOD_FILE', 'mood.json'), (filer, 'STATE', 'filer.json'),
+        (reflect, 'STATE', 'reflect.json'), (index, 'CACHE', 'index.json'),
+        (index, 'VECTORS', 'vectors.npy'),
+    ):
+        monkeypatch.setattr(module, attr, tmp_path / name)
+    monkeypatch.setattr(index, '_MMAP', None)
+
+
+@pytest.fixture
+def outbound_policy():
+    def select(*, ignored=(), decided=('approved',), system_notes=None):
+        library.save(library.Library(homes=set(), decided=set(decided),
+                                    ignore=set(ignored), system_notes=system_notes or {}))
+    select()
+    return select
+
+
+@pytest.fixture
+def outbound_transport(monkeypatch):
+    """Real Brain, fake provider adapters; never construct a credential client."""
+    from types import SimpleNamespace as NS
+    from notron.brain import Brain
+    import json
+    import urllib.request
+
+    calls = NS(chat=[], embed=[], search=[], replies=[])
+    def chat(**kw):
+        calls.chat.append(kw)
+        reply = calls.replies.pop(0) if calls.replies else 'synthetic answer'
+        return NS(choices=[NS(message=NS(content=reply))], usage=None)
+    def embed(**kw):
+        calls.embed.append(kw)
+        return NS(data=[NS(index=i, embedding=[1., 0.]) for i, _ in enumerate(kw['input'])], usage=None)
+    def search(request, **kw):
+        calls.search.append(json.loads(request.data))
+        class Response:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def read(self): return b'{"answer":"synthetic result","results":[]}'
+        return Response()
+    brain = Brain.__new__(Brain)
+    brain._client = NS(chat=NS(completions=NS(create=chat)), embeddings=NS(create=embed))
+    monkeypatch.setattr(urllib.request, 'urlopen', search)
+    monkeypatch.setenv('TAVILY_API_KEY', 'synthetic-test-key')
+    return brain, calls

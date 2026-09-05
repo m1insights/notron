@@ -13,6 +13,7 @@ from datetime import datetime
 from . import conversation, markup, notedoc, notes, privacy, rewrite, undo, workspace, policy
 from .executor import Executor
 from .state import Action, State, Write
+from .outbound import Passage
 
 INTENTS = ("question", "task", "capture", "plan", "remind", "schedule", "file",
            "undo", "organize", "ignore")
@@ -47,7 +48,10 @@ def watcher(state: State, *, brain=None) -> State:
                         (workspace.LESSONS, "lessons")):
         n = notes.find_note(workspace.FOLDER, title)
         if n and policy.current().system_role(n.id) == title and policy.current().readable(n):
-            setattr(state, attr, markup.to_text(notes.read_body(n.id)))
+            text = markup.to_text(notes.read_body(n.id))
+            setattr(state, attr, text)
+            origin = {"about": "standing", "memory": "memory", "lessons": "lesson"}[attr]
+            state.system_sources[attr] = Passage.from_note(text, n, origin)
     state.note("watcher", f"loaded {len(state.about)} chars of instructions")
     return state
 
@@ -108,7 +112,7 @@ def router(state: State, *, brain) -> State:
             state.note("router", "organize — said so in plain words, no model asked")
             return state
     try:
-        out = brain.ask_json(system=ROUTER_SYSTEM, user=state.request, tier="fast", max_tokens=400)
+        out = brain.ask_json(system=ROUTER_SYSTEM, user=[_request_passage(state)], purpose="route", tier="fast", max_tokens=400)
     except Exception as e:
         # A router that cannot classify must never stop Notron answering. Assume the
         # most useful intent and pay for the context.
@@ -118,13 +122,13 @@ def router(state: State, *, brain) -> State:
     state.intent = out.get("intent", "question")
     if state.intent not in INTENTS:
         state.intent = "question"
-    if state.intent in ("undo", "organize"):
+    if state.intent in ("file", "undo", "organize"):
         # Those two are settled above, in code, from the words themselves. The
         # router prompt never offers them — but a hallucinated one would reach a
         # node that expects a real note behind `state.reply_to`, so it is
         # refused here rather than defended against twice downstream.
         state.intent = "question"
-        state.note("router", "the model cannot choose undo or organize — answering instead")
+        state.note("router", "the model cannot choose file, undo or organize — answering instead")
     if state.intent == "ignore" and state.trigger in ("notes", "manual"):
         # Everything that reaches the router today was said *to* her — typed in
         # the Ask note, tagged #notron, or given on the command line. A router
@@ -157,20 +161,17 @@ def retriever(state: State, *, brain=None, limit: int = 12) -> State:
     from . import index
 
     if index.exists():
-        chunks = index.search(state.request, brain, limit=limit)
-        raw = [(c.title, f"### {c.title} ({c.folder})\n{c.text}") for c in chunks]
-        safe = privacy.filter_passages(state.request, raw)
-        state.context = [text for _, text in safe]
-        dropped = len(raw) - len(safe)
-        state.note("retriever", f"{len(safe)} passages (semantic)"
-                                + (f", {dropped} withheld as private" if dropped else ""))
+        chunks = index.search([_request_passage(state)], brain, limit=limit)
+        state.context = [Passage(f"### {c.title} ({c.folder})\n{c.text}", "note",
+                                 c.note_id, c.title, c.modified) for c in chunks]
+        state.note("retriever", f"{len(state.context)} passages (semantic)")
         return state
 
     from .retrieval import search
 
     hits = search(state.request, limit=limit)
-    raw = [(h.title, f"### {h.title} ({h.folder})\n{h.excerpt}") for h in hits]
-    state.context = [t for _, t in privacy.filter_passages(state.request, raw)]
+    state.context = [Passage(f"### {h.title} ({h.folder})\n{h.excerpt}", "note",
+                             h.note_id, h.title, h.modified) for h in hits]
     state.note("retriever", f"{len(hits)} notes (keyword — run `notron index`)")
     return state
 
@@ -189,7 +190,7 @@ def researcher(state: State, *, brain=None) -> State:
         return state
 
     try:
-        answer, findings = research.search(state.request, limit=8)
+        answer, findings = research.search([_request_passage(state)], limit=8)
     except Exception as e:
         # A failed search should cost the user an answer, not the whole reply.
         state.note("researcher", f"search failed ({type(e).__name__}) — answering without it")
@@ -271,7 +272,7 @@ def scheduler(state: State, *, brain) -> State:
     if state.intent not in ("remind", "schedule"):
         return state
     try:
-        out = brain.ask_json(system=SCHEDULER_SYSTEM, user=_prompt(state),
+        out = brain.ask_json(system=SCHEDULER_SYSTEM, user=_scheduling_prompt(state), purpose="schedule",
                              tier="fast", max_tokens=400)
     except Exception as e:
         state.note("scheduler", f"could not read that as a date ({type(e).__name__})")
@@ -279,6 +280,12 @@ def scheduler(state: State, *, brain) -> State:
                         "Say it as a day and a time and I'll set it.")
         return state
 
+    if (not isinstance(out, dict) or
+            (out.get("kind"), out.get("op", "create")) not in
+            (("reminder", "create"), ("reminder", "complete"), ("event", "create"))):
+        state.answer = "I couldn't turn that into a supported reminder or calendar action."
+        state.note("scheduler", "rejected unsupported operation")
+        return state
     action = Action(
         kind=out.get("kind") or ("event" if state.intent == "schedule" else "reminder"),
         op=out.get("op") or "create",
@@ -347,7 +354,9 @@ def filer(state: State, *, brain, dry_run: bool = False) -> State:
     items, bare = [], []
     if state.reply_to is not None and state.source.strip() and not filing.mentions_dump(state.request):
         title, folder, after = state.reply_to
-        items, bare = filing.items_from_turn(state.source, title=title, folder=folder, near=after)
+        items, bare = filing.items_from_turn(state.source, title=title, folder=folder, near=after,
+                                            note_id=state.source_note_id or policy.request_note_id(),
+                                            modified=state.source_modified)
 
     if items:
         out = filing.file_items(brain, items, bare=bare, dry_run=dry_run,
@@ -465,9 +474,8 @@ def organizer(state: State, *, brain) -> State:
     text = markup.to_text(body)
     cleaned = _without_tags(brain.ask(
         system=ORGANIZER_SYSTEM,
-        user=(f"# The note, exactly as it is now\n{text}\n\n"
-              f"# The user's standing instructions\n{state.about or '(none yet)'}\n\n"
-              f"# What they asked\n{state.request}"),
+        user=[Passage.from_note(text, note)] + _prompt(state),
+        purpose="organize",
         tier="smart",
         max_tokens=_budget_for(text),
     ))
@@ -662,7 +670,7 @@ def planner(state: State, *, brain) -> State:
         return state
     body = brain.ask(
         system=PLANNER_SYSTEM,
-        user=_prompt(state),
+        user=_prompt(state), purpose="write",
         tier="smart",
         max_tokens=1500,
     )
@@ -751,7 +759,7 @@ def writer(state: State, *, brain) -> State:
 
     else:
         state.answer = brain.ask(
-            system=WRITER_SYSTEM, user=_prompt(state), tier="smart", max_tokens=1200
+            system=WRITER_SYSTEM, user=_prompt(state), purpose="write", tier="smart", max_tokens=1200
         )
         _verify_links(state)
     state.writes.append(_reply(state))
@@ -782,7 +790,7 @@ def _verify_links(state: State) -> None:
         # CJK bracket read as part of the URL once made every real citation in
         # an answer look dead — the checker 404'd on `…/research】` four times.
         _URL = re.compile(r"https?://[!-~]+")
-    known = "\n".join(state.web + state.context) + state.here + state.request
+    known = "\n".join(state.web + [p.text for p in state.context]) + state.here + state.request
     seen: list[str] = []
     for match in _URL.findall(state.answer):
         url = match.rstrip(".,;:!?\"')]>")
@@ -845,23 +853,43 @@ def _is_weekly(request: str) -> bool:
     return any(w in request.lower() for w in ("week", "weekly", "next 7", "sunday"))
 
 
-def _prompt(state: State) -> str:
-    parts = [
-        f"# Today\n{datetime.now():%A %-d %B %Y}",
-        f"# The user's standing instructions\n{state.about or '(none yet)'}",
-    ]
-    if state.lessons.strip() and "Nothing learned yet" not in state.lessons:
-        parts.append("# Lessons you have taught yourself — follow them unless the "
-                     f"standing instructions above say otherwise\n{state.lessons}")
-    if state.memory.strip():
-        parts.append(f"# What you remember about them\n{state.memory}")
-    if state.web:
-        parts.append("# What you found on the web just now\n" + "\n\n".join(state.web))
+def _request_passage(state: State) -> Passage:
+    nid = state.source_note_id or policy.request_note_id()
+    if (state.trigger == "notes" or state.here or state.reply_to) and not nid:
+        raise policy.PolicyError('Note request requires its observed source ID.')
+    title = state.reply_to[0] if state.reply_to else ''
+    return Passage(state.request, "user_request", nid, title, state.source_modified)
+
+
+def _prompt(state: State) -> list[Passage]:
+    parts = [Passage(f"# Today\n{datetime.now():%A %-d %B %Y}", "diagnostic")]
+    for attr, heading in (
+        ("about", "The user's standing instructions"),
+        ("lessons", "Lessons you have taught yourself — subordinate to standing instructions"),
+        ("memory", "What you remember about them"),
+    ):
+        text = getattr(state, attr)
+        if not text.strip() or (attr == "lessons" and "Nothing learned yet" in text):
+            continue
+        source = state.system_sources.get(attr)
+        if source is None:
+            raise policy.PolicyError('Standing context requires its observed source ID.')
+        from dataclasses import replace
+        parts.append(replace(source, text=f"# {heading}\n{text}"))
+    parts.extend(Passage(w, "web") for w in state.web)
+    request = _request_passage(state)
     if state.here:
-        parts.append(f"# The note they tagged you in\n{state.here}")
-    if state.context:
-        parts.append("# Their other relevant notes\n" + "\n\n".join(state.context))
+        parts.append(Passage(state.here, "note", request.note_id, request.title, request.modified))
+    parts.extend(state.context)
     if state.agenda:
-        parts.append(f"# Their real day, from Calendar and Reminders\n{state.agenda}")
-    parts.append(f"# Their request\n{state.request}")
-    return "\n\n".join(parts)
+        parts.append(Passage(f"# Their real day, from Calendar and Reminders\n{state.agenda}", "agenda"))
+    from dataclasses import replace
+    parts.append(replace(request, text=f"# Their request\n{request.text}"))
+    return parts
+
+
+def _scheduling_prompt(state: State) -> list[Passage]:
+    # Retrieved instructions, lessons and model answers cannot originate an
+    # operation. The scheduler extracts only from the current user's request.
+    return [Passage(f"# Today\n{datetime.now():%A %-d %B %Y}", "diagnostic"),
+            _request_passage(state)]

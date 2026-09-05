@@ -13,6 +13,9 @@ import os
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
+from typing import Sequence
+
+from .outbound import Passage, Purpose, prepare_outbound
 
 USAGE_LOG = Path(__file__).resolve().parents[1] / ".notron" / "usage.json"
 
@@ -94,16 +97,15 @@ class Brain:
         """Ask the account what it can actually run — model ids drift."""
         return sorted(m.id for m in self._client.models.list().data)
 
-    def _call(self, tier: str, system: str, user: str, budget: int, json_mode: bool,
-              temperature: float):
-        from . import policy
-        policy.require_ready()
+    def _call(self, tier: str, system: str, user: Sequence[Passage], budget: int, json_mode: bool,
+              temperature: float, purpose: Purpose):
+        prepared = prepare_outbound(purpose, user)
         kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
         resp = self._client.chat.completions.create(
             model=self.model_for(tier),
             messages=[
                 {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "user", "content": "\n".join(prepared)},
             ],
             max_tokens=budget,
             temperature=temperature,
@@ -116,7 +118,8 @@ class Brain:
         self,
         *,
         system: str,
-        user: str,
+        user: Sequence[Passage],
+        purpose: Purpose,
         tier: str = "smart",
         json_mode: bool = False,
         max_tokens: int = 2000,
@@ -130,41 +133,40 @@ class Brain:
         model still thinks itself out of room, we give it one bigger try.
         """
         budget = max_tokens + REASONING_HEADROOM
-        msg = self._call(tier, system, user, budget, json_mode, temperature)
+        msg = self._call(tier, system, user, budget, json_mode, temperature, purpose)
         content = (msg.content or "").strip()
         if content:
             return content
 
         if getattr(msg, "reasoning", None):
-            msg = self._call(tier, system, user, budget * 2, json_mode, temperature)
+            msg = self._call(tier, system, user, budget * 2, json_mode, temperature, purpose)
             content = (msg.content or "").strip()
         return content
 
-    def embed(self, texts: list[str]) -> list[list[float]]:
+    def embed(self, passages: Sequence[Passage]) -> list[list[float]]:
         """Vectorise a batch of note chunks. Batches of ~64 keep requests small."""
-        from . import policy
-        policy.require_ready()
+        texts = prepare_outbound("embed", passages)
         import os as _os
 
         model = _os.environ.get("NOTRON_MODEL_EMBED", EMBED_MODEL)
         out: list[list[float]] = []
         for i in range(0, len(texts), 64):
-            resp = self._client.embeddings.create(model=model, input=texts[i : i + 64])
+            resp = self._client.embeddings.create(model=model, input=prepare_outbound("embed", passages[i : i + 64]))
             self._record("embed", getattr(resp, "usage", None))
             out.extend(d.embedding for d in sorted(resp.data, key=lambda d: d.index))
         return out
 
-    def ask_json(self, *, system: str, user: str, tier: str = "fast", **kw) -> dict:
+    def ask_json(self, *, system: str, user: Sequence[Passage], purpose: Purpose, tier: str = "fast", **kw) -> dict:
         """Parse a model's JSON, tolerating the three ways it usually goes wrong:
         prose wrapped around the object, a markdown fence, or a reply truncated
         mid-string by the token budget."""
-        raw = self.ask(system=system, user=user, tier=tier, json_mode=True, **kw)
+        raw = self.ask(system=system, user=user, tier=tier, purpose=purpose, json_mode=True, **kw)
         for candidate in _json_candidates(raw):
             try:
                 return json.loads(candidate)
             except json.JSONDecodeError:
                 continue
-        raise ValueError(f"model did not return usable JSON: {raw[:200]!r}")
+        raise ValueError("model did not return usable JSON")
 
 
 def _json_candidates(raw: str):

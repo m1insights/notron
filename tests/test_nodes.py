@@ -73,7 +73,7 @@ def no_such_note(monkeypatch):
 
 
 def _state(request="", after=3, **kw):
-    return State(request=request, reply_to=(NOTE, FOLDER, after), **kw)
+    return State(request=request, source_note_id="n1", reply_to=(NOTE, FOLDER, after), **kw)
 
 
 # ----------------------------------------------------------------- the router

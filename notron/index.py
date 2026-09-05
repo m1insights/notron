@@ -11,6 +11,9 @@ import json
 import pathlib
 from dataclasses import asdict, dataclass
 
+from .outbound import Passage, prepare_outbound
+from . import privacy
+
 CACHE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "index.json"
 VECTORS = CACHE.with_name("vectors.npy")
 CHUNK_CHARS = 1400
@@ -51,7 +54,13 @@ def split(text: str) -> list[str]:
 def _load() -> dict[str, list[dict]]:
     if not CACHE.exists():
         return {}
-    return json.loads(CACHE.read_text())
+    payload = json.loads(CACHE.read_text())
+    # Pre-provenance indexes are never reused, even when modified dates match.
+    if not isinstance(payload, dict) or payload.get("outbound_version") != 1:
+        return {}
+    data = payload.get("notes", {})
+    return {nid: rows for nid, chunks in data.items()
+            if (rows := _readable(chunks))}
 
 
 def _save(data: dict[str, list[dict]]) -> None:
@@ -60,6 +69,19 @@ def _save(data: dict[str, list[dict]]) -> None:
     import numpy as np
 
     CACHE.parent.mkdir(parents=True, exist_ok=True)
+    global _MMAP
+    _MMAP = None
+    # Recheck policy after embedding, before any persistent write.
+    safe_data = {}
+    for nid, chunks in data.items():
+        rows = _readable(chunks)
+        for c in rows:
+            c["text"] = prepare_outbound("embed", [_passage(c)])[0]
+            c["title"] = privacy.redact(c["title"])
+            c["folder"] = privacy.redact(c["folder"])
+        if rows:
+            safe_data[nid] = rows
+    data = safe_data
     vectors, row = [], 0
     for chunks in data.values():
         for c in chunks:
@@ -70,9 +92,16 @@ def _save(data: dict[str, list[dict]]) -> None:
             vectors.append(vec)
             c["row"] = row
             row += 1
-    CACHE.write_text(json.dumps(data))
-    if vectors:
-        np.save(VECTORS, np.asarray(vectors, dtype="float32"))
+    # Retain legacy bytes locally for the explicit Task 3 migration; never
+    # expose them to retrieval or transport. No private data is read here.
+    if CACHE.exists():
+        payload = json.loads(CACHE.read_text())
+        if not isinstance(payload, dict) or payload.get("outbound_version") != 1:
+            CACHE.replace(CACHE.with_name(CACHE.name + ".unprepared"))
+            if VECTORS.exists():
+                VECTORS.replace(VECTORS.with_name(VECTORS.name + ".unprepared"))
+    CACHE.write_text(json.dumps({"outbound_version": 1, "notes": data}))
+    np.save(VECTORS, np.asarray(vectors, dtype="float32"))
 
 
 def _vector_at(row: int | None):
@@ -111,10 +140,11 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
             fresh[n.id] = old
             reused += 1
             continue
-        text = markup.to_text(notes.read_body(n.id))
+        text = prepare_outbound("embed", [Passage.from_note(
+            markup.to_text(notes.read_body(n.id)), n)])[0]
         rows = []
         for piece in split(text):
-            c = Chunk(n.id, n.title, n.folder, n.modified, piece)
+            c = Chunk(n.id, privacy.redact(n.title), privacy.redact(n.folder), n.modified, piece)
             rows.append(asdict(c))
             pending.append((n.id, c))
         fresh[n.id] = rows
@@ -123,7 +153,7 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
         on_progress(f"{len(live)} notes · {reused} unchanged · {len(pending)} chunks to embed")
 
     if pending:
-        vectors = brain.embed([c.text for _, c in pending])
+        vectors = brain.embed([_passage(asdict(c)) for _, c in pending])
         by_id: dict[str, list[list[float]]] = {}
         for (nid, _), vec in zip(pending, vectors):
             by_id.setdefault(nid, []).append(vec)
@@ -135,9 +165,10 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
     return {"notes": len(live), "reused": reused, "embedded": len(pending)}
 
 
-def search(query: str, brain, *, limit: int = 8) -> list[Chunk]:
+def search(query: list[Passage], brain, *, limit: int = 8) -> list[Chunk]:
     import numpy as np
 
+    prepare_outbound("embed", query)
     data = _load()
     rows = _readable([r for chunks in data.values() for r in chunks if r.get("row") is not None])
     if not rows or not VECTORS.exists():
@@ -146,7 +177,7 @@ def search(query: str, brain, *, limit: int = 8) -> list[Chunk]:
     store = np.load(VECTORS, mmap_mode="r")
     matrix = np.asarray(store[[r["row"] for r in rows]], dtype="float32")
     matrix /= np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-9
-    q = np.array(brain.embed([query])[0], dtype="float32")
+    q = np.array(brain.embed(query)[0], dtype="float32")
     q /= np.linalg.norm(q) + 1e-9
 
     scores = matrix @ q
@@ -178,7 +209,7 @@ def _readable(rows: list[dict]) -> list[dict]:
 
 
 def exists() -> bool:
-    return CACHE.exists()
+    return bool(_load())
 
 
 def glimpses(chars: int = 100, *, keep_lines: bool = False) -> dict[str, str]:
@@ -203,3 +234,7 @@ def glimpses(chars: int = 100, *, keep_lines: bool = False) -> dict[str, str]:
     except (OSError, ValueError):
         pass
     return out
+
+
+def _passage(row: dict) -> Passage:
+    return Passage(row["text"], "note", row["note_id"], row["title"], row["modified"])

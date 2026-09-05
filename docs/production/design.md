@@ -23,14 +23,17 @@ from dataclasses import dataclass
 from typing import Literal, Sequence
 
 Purpose = Literal['route', 'write', 'schedule', 'organize', 'reflect', 'embed', 'search']
-Origin = Literal['user_request', 'note', 'standing', 'memory', 'lesson', 'web', 'history', 'agenda']
+Origin = Literal['user_request', 'note', 'standing', 'memory', 'lesson', 'web', 'history', 'agenda', 'model', 'diagnostic']
 
 @dataclass(frozen=True)
 class Passage:
     text: str
     origin: Origin
     note_id: str | None = None
+    title: str = ''
+    modified: str = ''
 
+# Defined in policy.py and imported by outbound.py.
 class PolicyError(RuntimeError):
     pass
 
@@ -88,6 +91,42 @@ The Mac selection screen sends JSON over stdin to `notron library save`, preserv
 system IDs and settings outside that screen. These changes do not implement cache
 encryption, outbound passage preparation, durable operations, or a cross-app
 transaction; those remain in their assigned tasks.
+
+### P01 Task 2 implemented outbound contract (2026-09-04)
+
+`outbound.Passage`, `Origin` and `Purpose` are implemented in Python. The existing
+`PolicySnapshot` and `PolicyError` remain owned by `policy.py`. Brain requires
+`ask(*, system, user: Sequence[Passage], purpose, ...)`, equivalent `ask_json`, and
+`embed(passages: Sequence[Passage])`; search requires `search(passages, ...)`.
+The runtime accepts lists/tuples of passages and rejects raw strings. `_call`
+prepares before every inference call/retry; embedding validates the entire batch
+and rechecks each transport batch; search prepares before HTTP. Static system
+instructions are separate from user-derived context.
+
+Note-backed passages carry stable IDs, original titles and modification dates.
+Missing IDs, ignored/unknown IDs, sensitive titles, failed cutoffs, unsupported
+provenance/purpose, and missing/corrupt policy are refused. Standing/memory/lesson
+origins must match registered system-note roles. The `model` origin identifies
+reflection proposals; `diagnostic` identifies locally measured facts, date and
+structural headings. These are data classifications, never permission grants.
+Current requests, retrieved passages, system context and history retain their
+sources through callers, including watcher and keyword retrieval.
+
+Full note bodies are redacted before chunking and persistent indexing. The index
+metadata wrapper is `{"outbound_version": 1, "notes": {...}}`. Unmarked legacy
+indexes cannot supply search results, glimpses or reused vectors. A rebuild keeps
+old files locally as `.unprepared` and writes sanitized metadata/vectors. This is
+exclusion from processing, not Task 3's encrypted migration or retention cleanup.
+Current policy still filters index results, and persistence rechecks read access.
+
+Filing preserves explicit line groups and maps unambiguous sanitized candidate
+names back to locally known destinations; ambiguous names cannot select another
+home through prefix matching. Scheduler accepts only supported operation pairs
+and receives only the current request/date. Model routing cannot initiate filing,
+undo, or organization. Retrieved text, lessons, and model replies cannot change
+policy or mint the watcher's reply capability. Guard/executor remain the final
+write authorities. See the [complete caller map](evidence/P01-outbound-map.md)
+and [Task 2 handoff](handoffs/2026-09-04-P01-task-2.md).
 
 ## 3. Request identity, time and operation safety
 

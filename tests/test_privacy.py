@@ -93,3 +93,18 @@ def test_a_key_dump_never_blocks_a_write():
     codes = "srv-d0f97eq4d50c73f7stjg\nsrv-d4s31224d50c73b7fva0\nsrv-cvepainnoe9s73eqp3lg"
     assert privacy.is_key_dump(codes)
     assert not privacy.contains_secret(codes)
+
+
+def test_supported_secret_patterns_are_removed_at_real_outbound_transports(outbound_transport):
+    import json
+    from notron.outbound import Passage
+    from notron import research
+    brain, calls = outbound_transport
+    secrets = ['synthetic-example-only', '008ace5e53445ae93462cdb7975dcddf',
+               'sk-abcdefghijklmnop1234', 'ghp_abcdefghijklmnop1234', 'xoxb-1234567890-abc']
+    passages = [Passage('password: ' + secrets[0] + '\n' + '\n'.join(secrets[1:]), 'user_request')]
+    brain.ask(system='Static instructions', user=passages, purpose='route')
+    brain.embed(passages)
+    research.search(passages)
+    transported = json.dumps([calls.chat, calls.embed, calls.search])
+    assert all(secret not in transported for secret in secrets)

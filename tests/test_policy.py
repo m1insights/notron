@@ -254,9 +254,9 @@ def test_embedding_and_inference_pause_without_policy(tmp_path, monkeypatch):
     monkeypatch.setattr(library, 'STATE', tmp_path / 'missing.json')
     brain = object.__new__(Brain)  # no client initialization or provider call
     with pytest.raises(policy.PolicyError):
-        brain._call('fast', 'static', 'synthetic', 100, False, 0)
+        brain._call('fast', 'static', [], 100, False, 0, 'route')
     with pytest.raises(policy.PolicyError):
-        brain.embed(['synthetic'])
+        brain.embed([])
 
 
 def test_read_only_organizer_does_not_promise_standing_rewrite(tmp_path, monkeypatch):
@@ -268,7 +268,7 @@ def test_read_only_organizer_does_not_promise_standing_rewrite(tmp_path, monkeyp
     configured(path)
     monkeypatch.setattr(notes, 'find_note', lambda *a: notes.Note('n1', 'Readable', 'Notes', ''))
     monkeypatch.setattr(notes, 'read_body', lambda *a: '<div>Readable</div><div>parking garages</div>')
-    state = State(intent='organize', request='clean this up', reply_to=('Readable', 'Notes', 1))
+    state = State(intent='organize', request='clean this up', source_note_id='n1', reply_to=('Readable', 'Notes', 1))
     nodes.organizer(state, brain=FakeBrain(answer='A cleaned copy of the parking garages'))
     assert nodes.ORGANIZE_ASK not in state.answer
     assert 'read only' in state.answer.lower()

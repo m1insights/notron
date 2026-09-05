@@ -32,6 +32,8 @@ import re
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 
+from .outbound import Passage, sanitized
+
 from . import conversation, index, layout, markup, notedoc, notes, privacy, workspace
 from .notedoc import FILED, RECEIPT
 
@@ -82,13 +84,16 @@ class Item:
     folder: str
     run: int = 0
     parts: tuple["Item", ...] = ()
+    note_id: str | None = None
+    modified: str = ""
 
     def digest(self) -> str:
         return hashlib.sha1(re.sub(r"\s+", " ", self.text.strip().lower()).encode()).hexdigest()
 
     def as_dict(self) -> dict:
         d = {"text": self.text, "anchor": self.anchor, "near": self.near,
-             "note_title": self.note_title, "folder": self.folder}
+             "note_title": self.note_title, "folder": self.folder,
+             "note_id": self.note_id, "modified": self.modified}
         if self.parts:
             d["parts"] = [p.as_dict() for p in self.parts]
         return d
@@ -96,7 +101,8 @@ class Item:
     @classmethod
     def from_dict(cls, d: dict) -> "Item":
         return cls(d["text"], d["anchor"], int(d.get("near", 0)), d["note_title"], d["folder"],
-                   parts=tuple(cls.from_dict(p) for p in d.get("parts", [])))
+                   parts=tuple(cls.from_dict(p) for p in d.get("parts", [])),
+                   note_id=d.get("note_id"), modified=d.get("modified", ""))
 
 
 @dataclass(frozen=True)
@@ -106,6 +112,7 @@ class Master:
     folder: str
     glimpse: str = ""
     note_id: str | None = None
+    modified: str = ""
 
 
 @dataclass
@@ -157,7 +164,7 @@ def _is_furniture(text: str, furniture: tuple[str, ...]) -> bool:
 
 
 def unfiled(body_html: str, *, note_title: str = workspace.DUMP,
-            folder: str = workspace.FOLDER,
+            folder: str = workspace.FOLDER, note_id: str | None = None, modified: str = "",
             furniture: tuple[str, ...] = FURNITURE) -> list[Item]:
     """Every line in the dump nobody has dealt with yet.
 
@@ -186,12 +193,13 @@ def unfiled(body_html: str, *, note_title: str = workspace.DUMP,
             run += 1
             continue
         clean = VERB.sub("", conversation.strip_tag(text)).strip()
-        out.append(Item(clean or text, text, ln.block, note_title, folder, run))
+        out.append(Item(clean or text, text, ln.block, note_title, folder, run, note_id=note_id, modified=modified))
     dense: dict[int, int] = {}
     return [replace(it, run=dense.setdefault(it.run, len(dense))) for it in out]
 
 
-def items_from_turn(source: str, *, title: str, folder: str, near: int) -> tuple[list[Item], list[str]]:
+def items_from_turn(source: str, *, title: str, folder: str, near: int,
+                    note_id: str | None = None, modified: str = "") -> tuple[list[Item], list[str]]:
     """What to file out of a turn she was tagged in, and the bare pointer lines
     ("@notron file these") that only said so.
 
@@ -212,9 +220,9 @@ def items_from_turn(source: str, *, title: str, folder: str, near: int) -> tuple
         if not text or DUMP_WORDS.search(text):
             bare.append(anchor)
         elif has_tag:
-            tagged.append(Item(text, anchor, near, title, folder))
+            tagged.append(Item(text, anchor, near, title, folder, note_id=note_id, modified=modified))
         else:
-            untagged.append(Item(text, anchor, near, title, folder))
+            untagged.append(Item(text, anchor, near, title, folder, note_id=note_id, modified=modified))
     return (tagged or untagged), bare
 
 
@@ -251,7 +259,7 @@ def masters(*, exclude: set[str] = frozenset()) -> list[Master]:
         seen.add(n.title)
         live.append(n)
     live.sort(key=lambda n: n.modified_at or datetime.min, reverse=True)
-    return [Master(n.title, n.folder, privacy.redact(glimpses.get(n.id, "")), n.id)
+    return [Master(n.title, n.folder, privacy.redact(glimpses.get(n.id, "")), n.id, n.modified)
             for n in live[:MAX_MASTERS]]
 
 
@@ -296,18 +304,23 @@ Rules:
 - Every line appears exactly once. Output nothing but the JSON object."""
 
 
-def _prompt(items: list[Item], candidates: list[Master]) -> str:
-    listing = "\n".join(
-        f'- "{m.title}"' + (f" — {m.glimpse}" if m.glimpse else "") for m in candidates
-    ) or "(they have no notes yet)"
-    numbered: list[str] = []
+def _prompt(items: list[Item], candidates: list[Master]) -> list[Passage]:
+    # Prepare each source before it is shortened/formatted, retaining its ID
+    # through the final Brain recheck. A candidate title is private input too.
+    sources = sanitized("organize", [
+        Passage(m.title + (f" — {m.glimpse}" if m.glimpse else ""),
+                "note", m.note_id, m.title, m.modified) for m in candidates])
+    listing = [replace(p, text=f'- "{p.text}"') for p in sources]
+    numbered = []
     previous_run = None
     for i, it in enumerate(items, start=1):
-        if previous_run is not None and it.run != previous_run:
-            numbered.append("")                      # the blank line they left, so the model sees it
-        numbered.append(f"{i}. {privacy.redact(it.text)}")
+        p = sanitized("organize", [Passage(it.text, "note", it.note_id,
+                                          it.note_title, it.modified)])[0]
+        gap = "\n" if previous_run is not None and it.run != previous_run else ""
+        numbered.append(replace(p, text=f"{gap}{i}. {p.text}"))
         previous_run = it.run
-    return f"# Their notes\n{listing}\n\n# Lines to file\n" + "\n".join(numbered)
+    return [Passage("# Their notes", "diagnostic"), *listing,
+            Passage("# Lines to file", "diagnostic"), *numbered]
 
 
 def _match(said: str, by_key: dict[str, str]) -> str | None:
@@ -338,12 +351,18 @@ def classify(brain, items: list[Item], candidates: list[Master]
     The model proposes; this validates. A title that is not on the list is
     treated as a proposal, never as a place to write. A part may only hang from
     an earlier line in the same run; a part of a part hangs from the lead."""
-    by_key = {m.title.casefold(): m.title for m in candidates}
+    # The model sees sanitized labels. Resolve those locally to the original
+    # destination; never mistake a redacted label for a request for a new note.
+    labels: dict[str, list[str]] = {}
+    for m in candidates:
+        labels.setdefault(privacy.redact(m.title).casefold(), []).append(m.title)
+    by_key = {key: titles[0] for key, titles in labels.items() if len(titles) == 1}
+    ambiguous = {key: key for key, titles in labels.items() if len(titles) > 1}
     verdicts: list[tuple[str, str] | None] = [None] * len(items)
     shapes: dict[str, str] = {}
     for start in range(0, len(items), MAX_LINES):
         batch = items[start:start + MAX_LINES]
-        out = brain.ask_json(system=FILER_SYSTEM, user=_prompt(batch, candidates),
+        out = brain.ask_json(system=FILER_SYSTEM, user=_prompt(batch, candidates), purpose="organize",
                              tier=TIER, max_tokens=min(240 + 40 * len(batch), 1600))
         parts: dict[int, int] = {}                   # batch index -> batch index it hangs from
         for row in out.get("filed") or []:
@@ -365,6 +384,10 @@ def classify(brain, items: list[Item], candidates: list[Master]
                 continue
             note = str(row.get("note") or "").strip()
             new = str(row.get("new") or "").strip()
+            # A shared redacted name cannot identify a home. In particular,
+            # never let its shorter prefix select a different destination.
+            if _match(note or new, ambiguous):
+                continue
             hit = _match(note, by_key) if note else None
             if hit:
                 verdicts[start + n - 1] = ("note", hit)
@@ -380,6 +403,8 @@ def classify(brain, items: list[Item], candidates: list[Master]
             for title, said in said_shapes_raw.items():
                 if isinstance(title, str) and title.strip():
                     named = title.strip()
+                    if _match(named, ambiguous):
+                        continue
                     # keyed by the master's real title, resolved the same way a
                     # verdict is — the model echoes titles in its own case
                     shapes[_match(named, by_key) or named] = str(said)
@@ -734,7 +759,7 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> Outcome:
         return out
     if policy.current().system_notes.get(workspace.DUMP) != dump.id or not policy.current().readable(dump):
         raise policy.PolicyError('Brain Dump requires setup or permission recovery.')
-    items = unfiled(notes.read_body(dump.id))
+    items = unfiled(notes.read_body(dump.id), note_id=dump.id, modified=dump.modified)
     if not items:
         say("nothing unfiled")
         return out
