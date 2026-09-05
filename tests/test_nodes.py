@@ -61,6 +61,8 @@ def note_in_notes(monkeypatch):
     read. Returns a dict so a test can change the body it will find."""
     live = {"body": markup.render(NOTE, BODY_MD)}
     monkeypatch.setattr(nodes.notes, "find_note", lambda folder, title: _note())
+    monkeypatch.setattr(nodes.notes, "get_note", lambda nid: _note() if nid == "n1" else None)
+    monkeypatch.setattr(nodes.notes, "list_notes", lambda folder: [_note()] if folder == FOLDER else [])
     monkeypatch.setattr(nodes.notes, "read_body", lambda note_id: live["body"])
     return live
 
@@ -68,6 +70,8 @@ def note_in_notes(monkeypatch):
 @pytest.fixture
 def no_such_note(monkeypatch):
     monkeypatch.setattr(nodes.notes, "find_note", lambda folder, title: None)
+    monkeypatch.setattr(nodes.notes, "get_note", lambda nid: None)
+    monkeypatch.setattr(nodes.notes, "list_notes", lambda folder: [])
     monkeypatch.setattr(nodes.notes, "read_body",
                         lambda note_id: pytest.fail("read a note that does not exist"))
 
@@ -473,21 +477,12 @@ class FakeExecutor:
     def __init__(self, dry_run=False):
         pass
 
-    def insert(self, title, md, *, after, folder, anchor=""):
-        FakeExecutor.applied.append(("insert", title, None))
-        return type("R", (), {"ok": True, "reason": "written"})()
-
-    def append(self, title, md, *, folder):
-        FakeExecutor.applied.append(("append", title, None))
-        return type("R", (), {"ok": True, "reason": "written"})()
-
-    def replace(self, title, md, *, folder, rewrite_allowed=False):
-        FakeExecutor.applied.append(("replace", title, rewrite_allowed))
-        return type("R", (), {"ok": True, "reason": "written"})()
-
-    def restore(self, title, body, *, folder):
-        FakeExecutor.applied.append(("restore", title, body))
-        return type("R", (), {"ok": True, "reason": "written"})()
+    def apply_write(self, write):
+        detail = write.markdown if write.mode == 'restore' else (
+            write.rewrite_allowed if write.mode == 'replace' else None)
+        FakeExecutor.applied.append((write.mode, write.title, detail))
+        from notron.executor import WriteResult
+        return WriteResult(True, 'written')
 
 
 @pytest.fixture

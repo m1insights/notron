@@ -555,3 +555,83 @@ other request groups entering or leaving the same note. Thus adding/removing a d
 request preserves an existing identical pair, while changing the size of that pair or
 reordering pending anchors still requires review. Historical uncertain rows cannot use
 the latest visible snapshot's offsets as positional proof.
+
+
+### P02 Task 2 implemented stable-write contract (2026-09-05)
+
+`state.Write` carries `note_id`, `expected_revision` and a locally generated
+`operation_id`, plus captured anchors and optional filing source checks.
+`executor.revision(body)` is the shared SHA-256 UTF-8 body digest.
+`capture_write(...)` binds ID/current metadata and the body revision **before**
+model input; a supplied body is the exact already-read snapshot. Organizer,
+planner, watcher/replies/Memory, care, reflection and filing use these snapshots.
+A missing/ambiguous binding remains unbound and is refused by
+`Executor.apply_write(write) -> WriteResult`; execution never reselects by title.
+`notes.get_note(id)` fetches only that ID's current metadata through a fixed
+AppleScript with argv. Current title/folder and restrictive registered system
+roles are validated. `create_approved` is a distinct explicit creation path;
+an existing title cannot absorb that operation. Setup remains explicit bootstrap.
+
+A reentrant thread lock plus a process file lock in the ledger directory encloses
+policy/target validation, durable operation preparation, candidate Guard checks,
+required encrypted undo save, final metadata/source/body/policy checks, the Notes
+mutation and its verification. Nested audit calls reuse the held lock. Final body
+changes after backup abort; local writes never run model inference under this lock.
+Notes write/create adapters set `retries=0`: a timed-out Apple mutation cannot
+bypass the revision checks through a hidden subprocess retry. Same-operation
+APPLIED/RECEIPTED calls do not repeat effects; APPLYING/NEEDS_REVIEW/CANCELLED
+operations never blindly apply. Failures after an uncertain write or unexpected
+post-write body become NEEDS_REVIEW. Verified success remains APPLIED pending
+Task 3 receipt reconciliation. Dry-run writes make no operation or undo records.
+
+Stale replace/restore refuses. Stale append needs its captured unique text anchor;
+stale insert and mark require exact unambiguous anchors and never fall back to
+nearest text or a stale index. A position can disambiguate only an unchanged
+original revision. Filing journal appends set `rebase_append=False` because the
+captured heading layout may no longer be valid. Filing captures candidate bodies
+once for both revisions/anchors and journal layout; source ID/readability and
+captured line anchors are checked under the write lock before copy and again at
+the final boundary. Deleted, edited or ambiguous sources do not copy. Duplicate
+case-insensitive master titles are excluded; cached title-only destinations must
+be reclassified and successful judgments retain the destination ID.
+
+`notedoc.supports_replacement` accepts only a conservative plain-formatting HTML
+subset. Attachments/images/objects/native checklist metadata, links, tables,
+unknown tags/attributes and malformed structures refuse replacement; a body-size
+comparison is not preservation evidence. Restore also validates its saved input.
+Organizer returns a separate plain-text result or refusal without any write to an
+unsupported rich source, including an empty model answer. `WriteResult` exposes
+`alternative_text`; no replacement note is automatically created. Guarded refusal
+or divergence replaces organizer/undo success wording; a planner draft is clearly
+unsaved. Existing append/insert HTML preservation checks do not prove native rich
+object fidelity.
+
+Operation schema is now **2**. The atomic supported v1→v2 migration adds nullable
+`operations.observed_revision`; existing request/operation identities, immutable
+payloads, authenticated history/generation markers and tombstones remain intact.
+`OperationStore.transition(..., observed_revision=...)` records final observed
+hashes without putting note text in SQLite. Unknown versions still refuse. Rollback
+must keep a matched ledger/payload backup and a schema-2-compatible reader: old
+schema-1 code deliberately pauses, and no destructive downgrade/reset is provided.
+
+Successful Notes writes and generic blocked/review-needed outcomes attempt the
+registered Log via the same serialized, revision-checked, verified write path with
+recursive logging disabled. An audit failure cannot erase verified primary
+success; Task 3 owns receipt/audit recovery. An approved creation's `add_home`
+policy change can conservatively purge the active request payload and mark it
+NEEDS_REVIEW. `RequestStore.finish` preserves that existing review tombstone,
+instead of throwing after creation or marking it completed; replay stays blocked.
+No relaxation of P01 revocation/purge behavior is made.
+
+**Residual limits:** Notes/editor/iCloud writers do not honor the local lock.
+Apple has no atomic compare-and-swap; a remote edit in the final read/write gap can
+still be overwritten undetectably. A synthetic test demonstrates this limitation;
+post-write divergence detects only an observable mismatch. Undo still pops before
+restore and a backup can replace the old undo slot before a later refusal: durable
+peek/verify/consume and snapshot provenance remain **Task 4**. Cross-effect/source
+receipt reconciliation remains **Task 3**; worker ownership, maintenance admission
+and legacy migration remain **Task 6**. Native metadata script behavior, Apple HTML
+normalization and multi-device execution remain unverified; P06 default startup
+pause is unchanged. No provider/model/dependency changed and no real data was used.
+
+Evidence: [Task 2 handoff](handoffs/2026-09-05-P02-task-2.md).

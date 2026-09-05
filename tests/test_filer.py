@@ -56,6 +56,13 @@ class Store:
                 return Note(nid, title, folder, r["modified"])
         return None
 
+    def get_note(self, nid):
+        row = self.rows.get(nid)
+        return Note(nid, row['title'], row['folder'], row['modified']) if row else None
+
+    def list_notes(self, folder):
+        return [n for n in self.list_all_notes() if n.folder == folder]
+
     def read_body(self, nid):
         return self.rows[nid]["body"]
 
@@ -116,7 +123,7 @@ SEED = workspace.SEEDS[workspace.DUMP]
 def store(monkeypatch, tmp_path):
     s = Store()
     from notron import notes, index, library
-    for name in ("find_note", "read_body", "write_body", "create_note", "list_all_notes"):
+    for name in ("get_note", "list_notes", "find_note", "read_body", "write_body", "create_note", "list_all_notes"):
         monkeypatch.setattr(notes, name, getattr(s, name))
     monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     monkeypatch.setattr(filer, "STATE", tmp_path / "filer.json")
@@ -249,7 +256,7 @@ def test_a_line_that_is_gone_is_left_alone_not_guessed_at(store):
     store.add("Book idea", "a lighthouse")
     r = ex_mod.Executor().mark("Book idea", [("something else", 1, " → X")], folder="Notes")
     assert not r.ok and "changed or gone" in r.reason
-    assert store.writes == []
+    assert all(title == workspace.LOG for title, body in store.writes)
 
 
 def test_a_mark_is_skipped_if_the_note_moved_between_read_and_write(monkeypatch):
@@ -636,9 +643,10 @@ def test_a_stale_judged_note_does_not_hide_an_unrelated_line_in_landed(store):
     out = filer.run(brain)
 
     assert out.created == ["Skincare Brand"]
-    assert "✓ vitamin C → Skincare Brand" in store.text(workspace.DUMP), \
-        "an unrelated line must not be silently dropped by a stale digest"
-    assert brain.calls == calls_before, "vitamin C resolves from memory, no model call"
+    assert "✓ vitamin C" not in store.text(workspace.DUMP), \
+        "a title-only cached decision cannot authorize a newly created title twin"
+    assert any(it.text == "vitamin C" for it, reason in out.left)
+    assert brain.calls == calls_before + 1, "a stale title-only decision must be classified again"
 
 
 def test_a_shape_reply_keyed_differently_from_the_canonical_title_still_resolves(store, monkeypatch):
@@ -900,3 +908,87 @@ def test_a_note_made_after_a_yes_joins_the_homes(store, monkeypatch):
     filer.run(brain)
     made = store.find_note(filer.FILING_FOLDER, "Skincare Brand").id
     assert made in library.load().homes
+
+
+def test_duplicate_master_titles_are_not_silently_selected(store):
+    store.add('Ideas', 'first', folder='Notes')
+    store.add('Ideas', 'second', folder='Work')
+    assert all(master.title != 'Ideas' for master in filer.masters())
+
+
+def test_master_rename_during_classification_keeps_bound_id(store):
+    dump(store, 'one thought')
+    nid = store.add('Ideas', 'old')
+    class EditingBrain(FilerBrain):
+        def ask_json(self, **kwargs):
+            answer = super().ask_json(**kwargs)
+            store.rows[nid]['title'] = 'Renamed'
+            store.rows[nid]['folder'] = 'Archive'
+            return answer
+    outcome = filer.run(EditingBrain({'one thought': {'note': 'Ideas'}}))
+    assert outcome.filed
+    assert 'one thought' in store.rows[nid]['body']
+    assert '✓ one thought' in store.text(workspace.DUMP)
+
+
+def test_duplicate_source_anchor_after_classification_is_not_ticked(store):
+    source = dump(store, 'one thought')
+    store.add('Ideas', 'old')
+    class EditingBrain(FilerBrain):
+        def ask_json(self, **kwargs):
+            answer = super().ask_json(**kwargs)
+            store.rows[source]['body'] += '<div>one thought</div>'
+            return answer
+    outcome = filer.run(EditingBrain({'one thought': {'note': 'Ideas'}}))
+    assert not outcome.filed
+    assert '✓ one thought' not in store.rows[source]['body']
+    assert any(line.startswith('✗') for line in outcome.results)
+
+
+def test_approved_creation_inside_request_job_has_deliberate_outcome(store):
+    from notron import requests
+    dump(store, 'one thought')
+    brain = FilerBrain({'one thought': {'new': 'Ideas'}})
+    filer.run(brain)
+    source = next(n for n in store.list_all_notes() if n.title == workspace.DUMP)
+    store.rows[source.id]['body'] += markup.to_html('yes')
+    envelope = requests.create('file', source='cli')
+    job = requests.run_job(envelope, lambda: filer.run(brain))
+    assert len([n for n in store.list_all_notes() if n.title == 'Ideas']) == 1
+    assert job.status in ('completed', 'needs_review')
+    from notron.operations import OperationConflict
+    with pytest.raises(OperationConflict, match='no replayable payload'):
+        requests.run_job(envelope, lambda: pytest.fail('creation must not replay'))
+
+
+def test_journal_layout_change_during_classification_refuses_stale_heading(store):
+    source = dump(store, 'one thought')
+    nid = store.add('Activities', 'previous day')
+    live = store.rows[nid]['body'] + markup.to_html('**Another day**\nuser entry')
+    class EditingBrain(FilerBrain):
+        def ask_json(self, **kwargs):
+            answer = super().ask_json(**kwargs)
+            store.rows[nid]['body'] = live
+            return answer
+    outcome = filer.run(EditingBrain({'one thought': {'note': 'Activities'}}, {'Activities': 'log'}))
+    assert not outcome.filed
+    assert store.rows[nid]['body'] == live
+    assert '✓ one thought' not in store.rows[source]['body']
+
+
+@pytest.mark.parametrize('change', ['delete', 'edit'])
+def test_source_deleted_or_edited_during_classification_is_not_copied(store, change):
+    source = dump(store, 'one thought')
+    nid = store.add('Ideas', 'old')
+    before = store.rows[nid]['body']
+    class EditingBrain(FilerBrain):
+        def ask_json(self, **kwargs):
+            answer = super().ask_json(**kwargs)
+            if change == 'delete':
+                del store.rows[source]
+            else:
+                store.rows[source]['body'] = store.rows[source]['body'].replace('one thought', 'edited thought')
+            return answer
+    outcome = filer.run(EditingBrain({'one thought': {'note': 'Ideas'}}))
+    assert not outcome.filed
+    assert store.rows[nid]['body'] == before

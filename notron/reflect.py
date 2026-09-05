@@ -159,10 +159,10 @@ def current_lessons() -> list[str]:
     return _read_lessons(workspace.readable_system_note(workspace.LESSONS))
 
 
-def _read_lessons(n) -> list[str]:
+def _read_lessons(n, body=None) -> list[str]:
     if not n:
         return []
-    text = markup.to_text(notes.read_body(n.id))
+    text = markup.to_text(notes.read_body(n.id) if body is None else body)
     return [l.strip("•- ").strip() for l in text.split("\n")
             if l.strip().startswith(("•", "-")) and len(l.strip()) > 3]
 
@@ -209,7 +209,12 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
         f"You ({m.why}): {m.followup}" for m in found[-8:]
     )
     lesson_note = workspace.readable_system_note(workspace.LESSONS)
-    known = _read_lessons(lesson_note)
+    from .executor import capture_write
+    from dataclasses import replace
+    lesson_body = notes.read_body(lesson_note.id) if lesson_note else None
+    target = capture_write(workspace.LESSONS, note_id=lesson_note.id if lesson_note else None,
+                           body=lesson_body, mode="replace")
+    known = _read_lessons(lesson_note, lesson_body)
     lesson_passages = ([Passage.from_note("\n".join(known), lesson_note, "lesson")]
                        if lesson_note else [])
     transcript_passage = sanitized("reflect", [Passage.from_note(transcript, ask, "history")])[0]
@@ -263,7 +268,7 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
         from .executor import Executor
         body_md = (workspace.SEEDS[workspace.LESSONS].split("\n")[0] + "\n\n"
                    + "\n".join(f"- {l}" for l in merged) + "\n")
-        r = Executor().replace(workspace.LESSONS, body_md)
+        r = Executor().apply_write(replace(target, markdown=body_md))
         out["written"] = r.ok
         say(f"learned: {'; '.join(kept)}")
     elif kept:

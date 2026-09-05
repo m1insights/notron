@@ -91,6 +91,7 @@ class Item:
     parts: tuple["Item", ...] = ()
     note_id: str | None = None
     modified: str = ""
+    expected_revision: str | None = None
 
     def digest(self) -> str:
         return hashlib.sha1(re.sub(r"\s+", " ", self.text.strip().lower()).encode()).hexdigest()
@@ -98,7 +99,8 @@ class Item:
     def as_dict(self) -> dict:
         d = {"text": self.text, "anchor": self.anchor, "near": self.near,
              "note_title": self.note_title, "folder": self.folder,
-             "note_id": self.note_id, "modified": self.modified}
+             "note_id": self.note_id, "modified": self.modified,
+             "expected_revision": self.expected_revision}
         if self.parts:
             d["parts"] = [p.as_dict() for p in self.parts]
         return d
@@ -107,7 +109,8 @@ class Item:
     def from_dict(cls, d: dict) -> "Item":
         return cls(d["text"], d["anchor"], int(d.get("near", 0)), d["note_title"], d["folder"],
                    parts=tuple(cls.from_dict(p) for p in d.get("parts", [])),
-                   note_id=d.get("note_id"), modified=d.get("modified", ""))
+                   note_id=d.get("note_id"), modified=d.get("modified", ""),
+                   expected_revision=d.get("expected_revision"))
 
 
 @dataclass(frozen=True)
@@ -178,6 +181,8 @@ def unfiled(body_html: str, *, note_title: str = workspace.DUMP,
     credential — a password dumped here must not be copied anywhere, or shown
     to a model.
     """
+    from .executor import revision
+    captured = revision(body_html)
     out: list[Item] = []
     in_turn = False
     run = 0
@@ -198,7 +203,7 @@ def unfiled(body_html: str, *, note_title: str = workspace.DUMP,
             run += 1
             continue
         clean = VERB.sub("", conversation.strip_tag(text)).strip()
-        out.append(Item(clean or text, text, ln.block, note_title, folder, run, note_id=note_id, modified=modified))
+        out.append(Item(clean or text, text, ln.block, note_title, folder, run, note_id=note_id, modified=modified, expected_revision=captured))
     dense: dict[int, int] = {}
     return [replace(it, run=dense.setdefault(it.run, len(dense))) for it in out]
 
@@ -247,7 +252,6 @@ def masters(*, exclude: set[str] = frozenset()) -> list[Master]:
     never candidates, and neither is anything that holds credentials or reads
     as private."""
     glimpses = index.glimpses(GLIMPSE_CHARS)
-    seen: set[str] = set()
     live = []
     from . import library
 
@@ -259,10 +263,10 @@ def masters(*, exclude: set[str] = frozenset()) -> list[Master]:
             continue
         if privacy.is_vault(n.title) or privacy.is_private(n.title):
             continue
-        if n.title in seen:
-            continue
-        seen.add(n.title)
         live.append(n)
+    from collections import Counter
+    counts = Counter(n.title.casefold() for n in live)
+    live = [n for n in live if counts[n.title.casefold()] == 1]
     live.sort(key=lambda n: n.modified_at or datetime.min, reverse=True)
     return [Master(n.title, n.folder, privacy.redact(glimpses.get(n.id, "")), n.id, n.modified)
             for n in live[:MAX_MASTERS]]
@@ -524,36 +528,41 @@ def _shape_for(title: str, said: dict[str, str], state: dict) -> str:
     return shapes[title]
 
 
-def _existing_text(folder: str, title: str) -> str:
-    note = notes.find_note(folder, title)
-    if note:
-        from . import policy
-        if not policy.current().readable(note):
-            raise policy.PolicyError('Filing note is not readable.')
-    return markup.to_text(notes.read_body(note.id)) if note else ""
-
-
-def _entry_markdown(group: list[Item], *, shape: str, folder: str, title: str) -> str:
+def _entry_markdown(group: list[Item], *, shape: str, existing: str = '') -> str:
     entries = [(it.text, [p.text for p in it.parts]) for it in group]
-    # Only a log cares what is already in the note — whether today's heading is
-    # the last one. A list never asks, so it never pays for the Notes read.
-    existing = _existing_text(folder, title) if shape == layout.LOG else ""
-    return layout.markdown(entries, shape=shape, existing_text=existing, day=_today())
+    return layout.markdown(entries, shape=shape, existing_text=markup.to_text(existing), day=_today())
 
 
-def _tick(ex, by_note: dict[tuple[str, str], list[tuple[str, int, str]]], out: Outcome) -> None:
-    """Tick lines note by note. A note that moved under her is skipped and the
-    lines stay unticked — next pass sees them unfiled and the judged cache
-    means no second model call."""
-    for (folder, title), marks in by_note.items():
-        r = ex.mark(title, marks, folder=folder)
+def _bind_items(items: list[Item]) -> list[Item]:
+    """Bind legacy/direct source items before classification, never during ticking."""
+    from .executor import capture_write
+    bound = []
+    for it in items:
+        if it.note_id and it.expected_revision:
+            bound.append(it)
+            continue
+        target = capture_write(it.note_title, folder=it.folder, note_id=it.note_id, mode='mark')
+        bound.append(replace(it, note_id=target.note_id, expected_revision=target.expected_revision,
+                             parts=tuple(_bind_items(list(it.parts)))))
+    return bound
+
+
+def _source_key(it: Item) -> tuple:
+    return (it.note_id, it.folder, it.note_title, it.expected_revision)
+
+
+def _tick(ex, by_note: dict[tuple, list[tuple[str, int, str]]], out: Outcome) -> None:
+    from .state import Write
+    for (note_id, folder, title, expected), marks in by_note.items():
+        r = ex.apply_write(Write(title=title, folder=folder, note_id=note_id,
+                                 expected_revision=expected, mode='mark', marks=marks, markdown=''))
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
         if r.ok:
             out.ticked.add((folder, title))
 
 
 def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
-          extra_marks: dict[tuple[str, str], list[tuple[str, int, str]]] | None = None,
+          extra_marks: dict[tuple, list[tuple[str, int, str]]] | None = None,
           on_step=None) -> None:
     """The shared core: judge, copy, tick, propose."""
     say = on_step or (lambda m: None)
@@ -561,8 +570,23 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     proposals: dict = state["proposals"]
     pending_titles = {t.casefold(): t for t in proposals}
 
+    from .executor import capture_write
+    items = _bind_items(items)
     candidates = masters(exclude={workspace.DUMP})
     known = {m.title: m for m in candidates}
+    targets, bodies = {}, {}
+    for master in candidates:
+        note = notes.get_note(master.note_id) if master.note_id else None
+        from . import policy
+        if note and policy.current().readable(note):
+            body = notes.read_body(note.id)
+            targets[master.title] = capture_write(master.title, folder=master.folder,
+                                                  note_id=master.note_id, body=body, mode='append')
+            bodies[master.title] = body
+        else:
+            from .state import Write
+            targets[master.title] = Write(title=master.title, folder=master.folder, markdown='', mode='append')
+    dump_target = capture_write(workspace.DUMP, mode='append')
 
     # 1. Verdicts — from memory where she already judged this exact line.
     #    A remembered part rejoins its lead if the lead is still here, in the
@@ -581,7 +605,8 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
                 ask.append(i)
         elif prior and prior.get("kind") == "declined":
             out.left.append((it, "you said no to a note for it"))
-        elif prior and prior.get("kind") == "note" and prior.get("title") in known:
+        elif (prior and prior.get("kind") == "note" and prior.get("title") in known
+              and prior.get("note_id") == known[prior["title"]].note_id):
             verdicts[i] = ("note", prior["title"])
         elif prior and prior.get("kind") == "new" and prior.get("title", "").casefold() in pending_titles:
             verdicts[i] = ("new", pending_titles[prior["title"].casefold()])
@@ -616,14 +641,17 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     for i, (kind, title) in verdicts.items():
         if kind == "note":
             by_master.setdefault(title, []).append(i)
-    marks: dict[tuple[str, str], list[tuple[str, int, str]]] = {
+    marks: dict[tuple, list[tuple[str, int, str]]] = {
         k: list(v) for k, v in (extra_marks or {}).items()}
     for title, idxs in by_master.items():
         master = known[title]
         group = [items[i] for i in idxs]
         shape = _shape_for(title, said_shapes, state)
-        r = ex.append(title, _entry_markdown(group, shape=shape, folder=master.folder, title=title),
-                      folder=master.folder, expected_note_id=master.note_id)
+        checks = [(it.note_id, it.expected_revision, it.anchor, it.near)
+                  for lead in group for it in (lead, *lead.parts)]
+        r = ex.apply_write(replace(targets[title], source_checks=checks,
+                                  rebase_append=shape != layout.LOG, markdown=
+            _entry_markdown(group, shape=shape, existing=bodies.get(title, ""))))
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
         if not r.ok:
             for it in group:
@@ -631,8 +659,8 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
             continue
         for it in group:
             out.filed.append((it, title))
-            judged[it.digest()] = {"kind": "note", "title": title}
-            marks.setdefault((it.folder, it.note_title), []).extend(_marks_for(it, f"{RECEIPT}{title}"))
+            judged[it.digest()] = {"kind": "note", "title": title, "note_id": master.note_id}
+            marks.setdefault(_source_key(it), []).extend(_marks_for(it, f"{RECEIPT}{title}"))
 
     # 3. Propose new notes — once per title. Later lines for the same title
     #    join the pending proposal quietly rather than asking again.
@@ -659,7 +687,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
             new_here.setdefault(canonical, []).append(it)
     if new_here:
         out.proposed.update(new_here)
-        r = ex.append(workspace.DUMP, _turn(_proposal_text(new_here)))
+        r = ex.apply_write(replace(dump_target, markdown=_turn(_proposal_text(new_here))))
         out.results.append(f"{'✓' if r.ok else '✗'} {workspace.DUMP} — {r.reason}")
         if r.ok:
             for title in new_here:
@@ -687,6 +715,7 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
     """Handle yes/no lines typed under a proposal. Returns the items that were
     not answers — the actual thoughts still to file."""
     say = on_step or (lambda m: None)
+    items = _bind_items(items)
     proposals: dict = state["proposals"]
     judged: dict = state["judged"]
     rest: list[Item] = []
@@ -713,7 +742,7 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
         receipts: list[str] = []
         for title in chosen:
             record = proposals.pop(title)
-            waiting = [Item.from_dict(d) for d in record.get("items", [])]
+            waiting = _bind_items([Item.from_dict(d) for d in record.get("items", [])])
             if word == "no":
                 for w in waiting:
                     judged[w.digest()] = {"kind": "declined", "title": title}
@@ -722,7 +751,7 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 continue
             say(f"making “{title}” with {len(waiting)} line(s)")
             shape = _shape_for(title, {}, state)
-            r = ex.create_approved(title, _entry_markdown(waiting, shape=shape, folder=FILING_FOLDER, title=title),
+            r = ex.create_approved(title, _entry_markdown(waiting, shape=shape),
                           folder=FILING_FOLDER)
             out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
             if not r.ok:
@@ -733,16 +762,16 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
             if r.note_id:
                 from . import library
                 library.add_home(r.note_id)
-            marks: dict[tuple[str, str], list[tuple[str, int, str]]] = {}
+            marks: dict[tuple, list[tuple[str, int, str]]] = {}
             for w in waiting:
                 out.filed.append((w, title))
-                judged[w.digest()] = {"kind": "note", "title": title}
-                marks.setdefault((w.folder, w.note_title), []).extend(_marks_for(w, f"{RECEIPT}{title}"))
+                judged[w.digest()] = {"kind": "note", "title": title, "note_id": r.note_id}
+                marks.setdefault(_source_key(w), []).extend(_marks_for(w, f"{RECEIPT}{title}"))
                 landed.add(w.digest())
                 landed.update(p.digest() for p in w.parts)   # its parts landed with it
             _tick(ex, marks, out)
             receipts.append(f"made “{title}”, {len(waiting)} filed")
-        _tick(ex, {(it.folder, it.note_title): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out)
+        _tick(ex, {_source_key(it): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out)
     return [it for it in rest if it.digest() not in landed]
 
 
@@ -790,12 +819,13 @@ def file_items(brain, items: list[Item], *, bare: list[str] = (), dry_run: bool 
     out = Outcome()
     if not items:
         return out
+    items = _bind_items(items)
     ex = Executor(dry_run=dry_run)
     state = _state()
     extra = {}
     if bare:
         first = items[0]
-        extra[(first.folder, first.note_title)] = [(b, first.near, "") for b in bare]
+        extra[_source_key(first)] = [(b, first.near, "") for b in bare]
     _file(ex, brain, items, state, out, extra_marks=extra, on_step=on_step)
     _save(state, dry_run=dry_run)
     return out

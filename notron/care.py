@@ -253,12 +253,14 @@ def _write_mood(severity: str, emoji: str, label: str) -> None:
 
 def run(brain=None, *, dry_run: bool = False):
     """Measure, compose, and write the care note."""
-    from .executor import Executor
+    from .executor import Executor, capture_write
+    from dataclasses import replace
 
+    target = capture_write(workspace.CARE, mode="replace")
     signals = check()
     severity, emoji, label = overall_mood(signals)
     body = compose(signals, brain)
     if not dry_run:
         _write_mood(severity, emoji, label)
-    result = Executor(dry_run=dry_run).replace(workspace.CARE, body)
+    result = Executor(dry_run=dry_run).apply_write(replace(target, markdown=body))
     return signals, body, result

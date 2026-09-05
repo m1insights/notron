@@ -141,3 +141,21 @@ def test_missing_ledger_still_fails_after_content_was_purged(loss):
     assert list(store.operations.payload_store.root.glob('operation-*.enc')) == []
     with pytest.raises(StorageError):
         operations.current()
+
+
+def test_v1_migration_preserves_operation_and_can_record_observation(tmp_path, payload_store):
+    from notron.operations import OperationStore, S
+    path = tmp_path / 'migrate.sqlite3'
+    store = OperationStore(path, payload_store)
+    store.prepare('request', 'operation', 'digest', target_id='nid', expected_revision='before')
+    with store.connection() as db:
+        columns = {row[1] for row in db.execute('PRAGMA table_info(operations)')}
+        if 'observed_revision' in columns:
+            db.execute('ALTER TABLE operations DROP COLUMN observed_revision')
+        db.execute('PRAGMA user_version=1')
+    reopened = OperationStore(path, payload_store)
+    assert reopened.get('operation').expected_revision == 'before'
+    reopened.transition('operation', S.PREPARED, S.APPLYING)
+    result = reopened.transition('operation', S.APPLYING, S.APPLIED, observed_revision='after')
+    assert result.observed_revision == 'after'
+    assert OperationStore(path, payload_store).get('operation').observed_revision == 'after'

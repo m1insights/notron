@@ -56,9 +56,14 @@ this document must name it and the response process before public release.
   been verified for the intended account configuration. Do not promise zero
   provider retention. Approved content leaves the Mac when those services are used.
 - **User edit loss:** Apple Notes writes replace a whole body and are non-atomic.
-  Existing append/insert/mark rechecks reduce some stale writes; replace/restore,
-  multi-device races, retry ambiguity and undo recovery need P02. Notron cannot
-  promise lossless rich-content preservation or exactly-once external writes.
+  P02 Task 2 binds IDs/revisions before inference, serializes local writes, checks
+  policy and revision immediately before mutation, and verifies afterward. Stale
+  destructive writes and unsupported rich replacement input are refused. Notes
+  mutation timeouts never automatically retry; uncertain outcomes require review.
+  Remote iCloud/editor writers do not honor the local lock, so the final read/write
+  race remains, including undetectable overwritten remote edits. Task 3 operation
+  reconciliation, Task 4 undo lifecycle and Task 6 worker ownership remain pending.
+  Notron cannot promise rich-content fidelity or exactly-once external writes.
 - **Supply chain and updates:** locked Python versions and a dated advisory audit
   are partial evidence. Signed builds, notarization, secure update/rollback and
   revocation remain P06/P07 gates. A clean advisory result does not rule out

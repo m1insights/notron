@@ -13,9 +13,10 @@ from .policy import PolicyError
 
 import re
 from datetime import datetime
+from dataclasses import replace
 
 from . import conversation, markup, notedoc, notes, privacy, rewrite, undo, workspace, policy
-from .executor import Executor
+from .executor import Executor, capture_write, revision
 from .state import Action, State, Write
 from .outbound import Passage
 
@@ -52,10 +53,13 @@ def watcher(state: State, *, brain=None) -> State:
                         (workspace.LESSONS, "lessons")):
         n = notes.find_note(workspace.FOLDER, title)
         if n and policy.current().system_role(n.id) == title and policy.current().readable(n):
-            text = markup.to_text(notes.read_body(n.id))
+            body = notes.read_body(n.id)
+            text = markup.to_text(body)
+            state.write_targets[title] = capture_write(title, note_id=n.id, body=body, mode="append")
             setattr(state, attr, text)
             origin = {"about": "standing", "memory": "memory", "lessons": "lesson"}[attr]
             state.system_sources[attr] = Passage.from_note(text, n, origin)
+    _bind_reply(state)
     state.note("watcher", f"loaded {len(state.about)} chars of instructions")
     return state
 
@@ -455,7 +459,8 @@ def organizer(state: State, *, brain) -> State:
     if state.intent != "organize" or state.reply_to is None:
         return state
     title, folder, after = state.reply_to
-    note = notes.find_note(folder, title)
+    nid = state.source_note_id or policy.request_note_id()
+    note = notes.get_note(nid) if nid else notes.unique_note(folder, title)
     if note is None:
         state.answer = "I can't find that note any more."
         state.note("organizer", "no such note")
@@ -464,8 +469,14 @@ def organizer(state: State, *, brain) -> State:
             (policy.request_note_id() is not None and policy.request_note_id() != note.id)):
         raise policy.PolicyError('Request note is not readable or its identity changed.')
     body = notes.read_body(note.id)
+    target = capture_write(title, folder=folder, note_id=note.id, body=body, mode='replace')
+    _bind_reply(state)
 
+    supported = notedoc.supports_replacement(body)
     if CONFIRM_WORDS.fullmatch(state.request.strip()):
+        if not supported:
+            state.answer = "This note contains unsupported rich content. Keep the original and use a separate plain-text result."
+            return state
         if not _offer_precedes(body, after):
             # A bare `yes` is consent to rewrite a note only directly under the
             # offer to rewrite it — not just anywhere in the note. A later,
@@ -505,8 +516,16 @@ def organizer(state: State, *, brain) -> State:
     # answer and a wiped note.
     if not cleaned.strip() or len(cleaned) < 0.5 * len(_without_tags(text)):
         state.answer = "I couldn't tidy that safely, so I left it alone."
-        state.writes.append(_reply(state))
+        if supported:
+            state.writes.append(_reply(state))
         state.note("organizer", "model's answer was empty or too short — refused to write it")
+        return state
+
+    if not supported:
+        state.answer = (cleaned + "\n\nThis note contains unsupported rich content. "
+                        "I kept the original untouched. You can use this separate plain-text result "
+                        "in a new note.")
+        state.note("organizer", "unsupported rich content; separate result only")
         return state
 
     if rewrite.allowed(note.id):
@@ -515,8 +534,7 @@ def organizer(state: State, *, brain) -> State:
         # straight after this one would overwrite it with the *cleaned* body,
         # and "undo that" would hand back her own version instead of theirs.
         # So her turn rides along inside the rewrite.
-        state.writes.append(Write(title=title, folder=folder, mode="replace",
-                                  rewrite_allowed=True,
+        state.writes.append(replace(target, rewrite_allowed=True,
                                   markdown=f"{cleaned}\n\n{conversation.turn(CLEANED)}"))
         state.answer = CLEANED
         state.note("organizer", f"rewrote {title} in place ({len(cleaned)} chars)")
@@ -590,7 +608,8 @@ def undoer(state: State, *, brain=None) -> State:
         state.writes.append(_reply(state))
         state.note("undoer", "asked in the Ask note — no note named")
         return state
-    note = notes.find_note(folder, title)
+    nid = state.source_note_id or policy.request_note_id()
+    note = notes.get_note(nid) if nid else notes.unique_note(folder, title)
     if note is None:
         # No note means nothing to put back — and nowhere to say so either,
         # since `_reply` anchors inside this very note. Popping the slot here
@@ -599,6 +618,10 @@ def undoer(state: State, *, brain=None) -> State:
         state.note("undoer", "no such note")
         return state
 
+    if not policy.current().readable(note):
+        raise policy.PolicyError('Undo target is no longer readable.')
+    target = capture_write(title, folder=folder, note_id=note.id, mode='restore')
+    _bind_reply(state)
     old = undo.pop(note.id)
     if old:
         state.answer = "Done — put it back the way it was."
@@ -647,8 +670,7 @@ def undoer(state: State, *, brain=None) -> State:
                 if conversation.TAG.search(line)
             ]
             old, _ = notedoc.mark_lines(old, marks)
-        state.writes.append(Write(
-            title=title, folder=folder, mode="restore",
+        state.writes.append(replace(target,
             markdown=old + markup.to_html(conversation.turn(state.answer)),
         ))
     else:
@@ -685,6 +707,8 @@ Rules:
 def planner(state: State, *, brain) -> State:
     if state.intent != "plan":
         return state
+    title = workspace.WEEK if _is_weekly(state.request) else workspace.TODAY
+    target = capture_write(title, mode="replace")
     body = brain.ask(
         system=PLANNER_SYSTEM,
         user=_prompt(state), purpose="write",
@@ -694,7 +718,7 @@ def planner(state: State, *, brain) -> State:
     title = workspace.WEEK if _is_weekly(state.request) else workspace.TODAY
     state.answer = body
     _verify_links(state)
-    state.writes.append(Write(title=title, markdown=state.answer, mode="replace"))
+    state.writes.append(replace(target, markdown=state.answer))
     state.note("planner", f"drafted {title}")
     return state
 
@@ -751,6 +775,7 @@ def writer(state: State, *, brain) -> State:
         # The planner, the filer, the undoer and the organizer have each already
         # said their piece, where it was asked. A second reply would double up.
         return state
+    _bind_reply(state)
     if state.intent in ("remind", "schedule"):
         # The doer already said exactly what happened. Paying a smart model to
         # rephrase a fact would only give it room to get the fact wrong.
@@ -767,7 +792,8 @@ def writer(state: State, *, brain) -> State:
             state.note("writer", "capture skipped — already in memory")
         else:
             state.writes.append(
-                Write(title=workspace.MEMORY, markdown=f"\n- {fact}\n", mode="append")
+                replace(state.write_targets.get(workspace.MEMORY) or
+                        capture_write(workspace.MEMORY, mode="append"), markdown=f"\n- {fact}\n")
             )
             state.answer = "Noted — I'll remember that."
             state.note("writer", "captured to memory")
@@ -817,17 +843,27 @@ def _verify_links(state: State) -> None:
         state.note('writer', f'{len(unsupported)} unsupported links removed')
 
 
-def _reply(state: State) -> Write:
-    """Her turn, set as a different voice — see `conversation.turn`."""
-    body = conversation.turn(state.answer)
+def _bind_reply(state: State) -> None:
+    if 'reply' in state.write_targets:
+        return
     if state.reply_to is None:
-        return Write(title=workspace.ASK, mode="append", markdown=f"\n{body}\n")
+        state.write_targets['reply'] = capture_write(workspace.ASK, mode='append')
+        return
     title, folder, after = state.reply_to
-    # The last line of the request is the block the reply sits under; the index
-    # is only a hint, because the user may still be typing above it.
-    anchor = state.request.strip().split("\n")[-1].strip()
-    return Write(title=title, folder=folder, mode="insert", after=after,
-                 anchor=anchor, markdown=body)
+    anchor = (state.source or state.request).strip().split("\n")[-1].strip()
+    target = capture_write(title, folder=folder,
+                           note_id=state.source_note_id or policy.request_note_id(),
+                           mode='insert', after=after, anchor=anchor)
+    if state.source_revision:
+        target.expected_revision = state.source_revision
+    state.write_targets['reply'] = target
+
+
+def _reply(state: State) -> Write:
+    """Use the target captured before inference; never choose a title here."""
+    _bind_reply(state)
+    body = conversation.turn(state.answer)
+    return replace(state.write_targets['reply'], markdown=body)
 
 
 # ---------------------------------------------------------------- Executor
@@ -836,18 +872,14 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
     """Guard runs inside Executor.apply — no write reaches Notes unjudged."""
     ex = Executor(dry_run=dry_run)
     for w in state.writes:
-        folder = w.folder or workspace.FOLDER
-        if w.mode == "insert":
-            r = ex.insert(w.title, w.markdown, after=w.after or 0, folder=folder,
-                          anchor=w.anchor)
-        elif w.mode == "append":
-            r = ex.append(w.title, w.markdown, folder=folder)
-        elif w.mode == "restore":
-            # Already the note's own HTML, saved before she wrote over it.
-            r = ex.restore(w.title, w.markdown, folder=folder)
-        else:
-            r = ex.replace(w.title, w.markdown, folder=folder,
-                           rewrite_allowed=w.rewrite_allowed)
+        r = ex.apply_write(w)
+        if r.alternative_text:
+            state.answer = r.alternative_text + "\n\n" + r.reason
+        elif not r.ok:
+            draft = state.answer if state.intent == "plan" else ""
+            state.answer = "I could not verify this change: " + r.reason
+            if draft:
+                state.answer += "\n\nUnsaved draft:\n" + draft
         state.results.append(f"{'✓' if r.ok else '✗'} {w.title} — {r.reason}")
     state.note("executor", f"{len(state.writes)} writes")
     return state

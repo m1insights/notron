@@ -166,7 +166,14 @@ def test_model_reply_is_prose_and_cannot_change_policy_or_write_target(outbound_
     calls.replies.append(answer)
     note = notes.Note('n1', 'Synthetic', 'Notes', '')
     monkeypatch.setattr(notes, 'find_note', lambda *args: note)
-    monkeypatch.setattr(notes, 'read_body', lambda nid: '<div>Synthetic</div>')
+    monkeypatch.setattr(notes, 'get_note', lambda nid: note if nid == note.id else None)
+    body = {'value': '<div>Synthetic</div><div>Explain this synthetic text</div>'}
+    monkeypatch.setattr(notes, 'read_body', lambda nid: body['value'])
+    native_write = notes.write_body
+    def write_body(nid, value):
+        native_write(nid, value)
+        body['value'] = value
+    monkeypatch.setattr(notes, 'write_body', write_body)
     state = State(request='Explain this synthetic text', intent='question',
                   reply_to=('Synthetic', 'Notes', 0), source_note_id='n1')
     nodes.writer(state, brain=brain)
@@ -174,7 +181,7 @@ def test_model_reply_is_prose_and_cannot_change_policy_or_write_target(outbound_
     write = state.writes[0]
     assert write.title == 'Synthetic' and write.mode == 'insert'
     assert not write.rewrite_allowed
-    assert Executor(audit=False).insert(write.title, write.markdown, folder='Notes', after=0).ok
+    assert Executor(audit=False).apply_write(write).ok
     argv, kw = process_calls.pop()
     assert 'operations' in argv[-1]  # answer actually reaches the Notes adapter as data
     assert 'operations' not in kw['input']

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 if TYPE_CHECKING:
     from .requests import RequestEnvelope
@@ -26,6 +27,12 @@ class Write:
     after: int | None = None    # insert mode: put the reply after this block
     anchor: str = ""            # insert mode: the text the reply belongs under,
                                 # so it can be found again if the note moved
+    note_id: str | None = None
+    expected_revision: str | None = None
+    operation_id: str = field(default_factory=lambda: uuid4().hex)
+    source_checks: list[tuple[str, str, str, int]] = field(default_factory=list)
+    rebase_append: bool = True  # False when layout depends on the captured body
+    marks: list[tuple[str, int, str]] = field(default_factory=list)
     rewrite_allowed: bool = False   # replace mode: the user has opted this one
                                     # note into being rewritten in place
 
@@ -63,6 +70,7 @@ class State:
     reply_to: tuple | None = None    # (title, folder, block index) to answer under
     source_note_id: str | None = None
     source_modified: str = ""
+    write_targets: dict[str, Write] = field(default_factory=dict)
     system_sources: dict[str, Passage] = field(default_factory=dict)
     context: list[Passage] = field(default_factory=list)
     web: list[str] = field(default_factory=list)

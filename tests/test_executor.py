@@ -1,223 +1,109 @@
-"""Guarding against overwriting text the user is still typing.
-
-`Executor._apply` builds the new body from a body it read a moment ago. Between
-that read and the write, several seconds of model latency sit in the way, and
-Notes is not locked — the user can keep typing in the very note being answered.
-Writing that stale body back with `set body of note to ...` replaces the whole
-document, silently eating or mangling whatever they typed in the gap. This is
-the "sentence gets cut off and Notron is confused" bug: her reply lands on top
-of half-typed text, the note comes out garbled, and she reads the garble back
-as a new question next pass.
-
-The fix re-reads immediately before writing and refuses to write if the note
-moved underneath it, leaving the retry to the watcher's normal next pass
-instead of a caller ever seeing a torn note.
-"""
-
-from __future__ import annotations
-
-from notron import executor as ex_mod
+"""Executor integration against a mutable synthetic Notes body and real policy."""
+from notron import executor as ex_mod, library, workspace, rewrite
 from notron.notes import Note
-from notron import library, workspace, rewrite
 
-def authorize_system(title):
+
+def in_note(monkeypatch, title=workspace.ASK, folder=workspace.FOLDER, body=None):
+    note = Note('n1', title, folder, 'observed')
+    live = {'body': body or f'<div>{title}</div><div>original question</div>', 'writes': []}
     lib = library.load()
-    lib.system_notes[title] = "n1"
+    if folder == workspace.FOLDER:
+        lib.system_notes[title] = note.id
+    else:
+        lib.homes.add(note.id)
     library.save(lib)
-
-
-
-def _note(id: str = "n1") -> Note:
-    return Note(id=id, title="📥 Ask Notron", folder="🤖 NOTRON", modified="x")
+    monkeypatch.setattr(ex_mod.notes, 'get_note', lambda nid: note if nid == note.id else None)
+    monkeypatch.setattr(ex_mod.notes, 'list_notes', lambda f: [note] if f == folder else [])
+    monkeypatch.setattr(ex_mod.notes, 'find_note', lambda f, t: note if (f, t) == (folder, title) else None)
+    monkeypatch.setattr(ex_mod.notes, 'read_body', lambda nid: live['body'])
+    def write(nid, body):
+        live['body'] = body
+        live['writes'].append(body)
+    monkeypatch.setattr(ex_mod.notes, 'write_body', write)
+    return live
 
 
 def test_a_write_is_skipped_if_the_note_changed_since_it_was_read(monkeypatch):
-    authorize_system(workspace.ASK)
-    old_body = "<div>📥 Ask Notron</div><div>How does</div>"
-    # The user kept typing while she was thinking.
-    live_body = "<div>📥 Ask Notron</div><div>How does the moon landing footage hold up</div>"
-
-    reads = [old_body, live_body]
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
-    monkeypatch.setattr(ex_mod.notes, "read_body", lambda note_id: reads.pop(0))
-    written = []
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, body: written.append(body))
-
-    ex = ex_mod.Executor()
-    result = ex.insert("📥 Ask Notron", "an answer", after=1, anchor="How does")
-
-    assert not result.ok
-    assert "changed" in result.reason
-    assert written == []
+    live = in_note(monkeypatch)
+    target = ex_mod.capture_write(workspace.ASK, mode='insert', anchor='original question', after=1)
+    target.markdown = 'answer'
+    live['body'] = '<div>Ask</div><div>question changed</div>'
+    result = ex_mod.Executor(audit=False).apply_write(target)
+    assert not result.ok and 'changed' in result.reason
+    assert live['writes'] == []
 
 
 def test_a_write_proceeds_when_the_note_is_unchanged(monkeypatch):
-    authorize_system(workspace.ASK)
-    body = "<div>📥 Ask Notron</div><div>How does this work</div>"
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
-    monkeypatch.setattr(ex_mod.notes, "read_body", lambda note_id: body)
-    written = []
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: written.append(b))
-
-    ex = ex_mod.Executor()
-    result = ex.insert("📥 Ask Notron", "an answer", after=1, anchor="How does this work")
-
-    assert result.ok
-    assert written and "an answer" in written[0]
+    live = in_note(monkeypatch)
+    result = ex_mod.Executor(audit=False).insert(workspace.ASK, 'answer', after=1, anchor='original question')
+    assert result.ok and 'answer' in live['body']
 
 
-def test_replace_mode_is_not_slowed_by_the_extra_read(monkeypatch):
-    authorize_system(workspace.TODAY)
-    """Replace builds new_body from the model's output, not from old_body, so a
-    concurrent edit to old_body can't corrupt it — no need to pay for a second read."""
+def test_replace_reads_again_before_commit_and_verifies_afterward(monkeypatch):
+    live = in_note(monkeypatch, workspace.TODAY)
     reads = []
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
-
-    def read_body(note_id):
-        reads.append(note_id)
-        return "<div>☀️ Today</div><div>old plan</div>"
-
-    monkeypatch.setattr(ex_mod.notes, "read_body", read_body)
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: None)
-
-    ex = ex_mod.Executor(audit=False)  # isolate the body write from the separate log-note read
-    result = ex.replace("☀️ Today", "new plan")
-
+    monkeypatch.setattr(ex_mod.notes, 'read_body', lambda nid: reads.append(live['body']) or live['body'])
+    result = ex_mod.Executor(audit=False).replace(workspace.TODAY, 'new plan')
     assert result.ok
-    assert len(reads) == 1
+    assert len(reads) >= 3 and reads[-1] == live['body']
+    assert reads[-2] != reads[-1]
 
 
 def test_a_write_to_an_existing_note_saves_its_old_body(monkeypatch):
-    """One step back, per note: whatever it held before she wrote is kept so
-    "undo that" can put it back."""
-    body = "<div>Some Note</div><div>a line the user wrote</div>"
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
-    monkeypatch.setattr(ex_mod.notes, "read_body", lambda note_id: body)
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: None)
-    saved = {}
-    monkeypatch.setattr(ex_mod.undo, "save", lambda nid, old: saved.setdefault(nid, old))
-
-    ex = ex_mod.Executor(audit=False)
-    result = ex.append("Some Note", "more text", folder="Notes")
-
+    live = in_note(monkeypatch, 'Some Note', 'Notes')
+    before = live['body']
+    result = ex_mod.Executor(audit=False).append('Some Note', 'more text', folder='Notes')
     assert result.ok
-    assert saved == {"n1": body}
+    assert ex_mod.undo._load() == {'n1': before}
 
 
 def test_a_refused_write_saves_no_undo(monkeypatch):
-    authorize_system(workspace.ASK)
-    """A slot saved for a write that never happened would undo to the wrong
-    moment — so the save sits after the Guard and after the changed-note check."""
-    old_body = "<div>📥 Ask Notron</div><div>How does</div>"
-    live_body = "<div>📥 Ask Notron</div><div>How does the moon landing footage hold up</div>"
+    live = in_note(monkeypatch, 'Recipes', 'Notes')
+    assert not ex_mod.Executor(audit=False).replace('Recipes', 'rewrite', folder='Notes').ok
+    assert ex_mod.undo._load() == {} and live['writes'] == []
 
-    reads = [old_body, live_body]
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
-    monkeypatch.setattr(ex_mod.notes, "read_body",
-                        lambda note_id: reads.pop(0) if reads else live_body)
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: None)
-    saved = {}
-    monkeypatch.setattr(ex_mod.undo, "save", lambda nid, old: saved.setdefault(nid, old))
 
+def test_restore_writes_the_body_back_verbatim(monkeypatch):
+    live = in_note(monkeypatch, workspace.TODAY)
+    original = '<div>Today</div><div>*original* — her words, not markdown</div>'
+    result = ex_mod.Executor(audit=False).restore(workspace.TODAY, original)
+    assert result.ok and live['writes'] == [original]
+
+
+def test_replace_outside_her_folder_needs_the_opt_in(monkeypatch):
+    live = in_note(monkeypatch, 'Recipes', 'Notes')
     ex = ex_mod.Executor(audit=False)
-    changed = ex.insert("📥 Ask Notron", "an answer", after=1, anchor="How does")
-    blocked = ex.replace("Recipes", "a rewrite", folder="Notes")
-
-    assert not changed.ok and not blocked.ok
-    assert saved == {}
-
-
-def test_restore_writes_the_body_back_verbatim(monkeypatch, tmp_path):
-    authorize_system(workspace.TODAY)
-    """`raw_html_body` is already-rendered HTML — what `undo.save` captured —
-    so it has to land byte for byte, never through `markup.render` a second time."""
-    monkeypatch.setattr(ex_mod.undo, "STATE", tmp_path / "undo.json")
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
-    monkeypatch.setattr(ex_mod.notes, "read_body",
-                        lambda note_id: "<div>☀️ Today</div><div>what she wrote over it</div>")
-    written = []
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: written.append(b))
-
-    original = "<div>☀️ Today</div><div>*original* — her words, not markdown</div>"
-    result = ex_mod.Executor(audit=False).restore("☀️ Today", original)
-
-    assert result.ok
-    assert written == [original]
-
-
-def test_replace_outside_her_folder_needs_the_opt_in(monkeypatch, tmp_path):
-    """`rewrite_allowed` reaches the Guard from `replace`, and only from it."""
-    monkeypatch.setattr(ex_mod.undo, "STATE", tmp_path / "undo.json")
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
-    monkeypatch.setattr(ex_mod.notes, "read_body", lambda note_id: "<div>Recipes</div><div>old</div>")
-    written = []
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: written.append(b))
-
-    ex = ex_mod.Executor(audit=False)
-    assert not ex.replace("Recipes", "a rewrite", folder="Notes").ok
-    rewrite.allow("n1")
-    assert ex.replace("Recipes", "a rewrite", folder="Notes", rewrite_allowed=True).ok
-    assert len(written) == 1
+    assert not ex.replace('Recipes', 'rewrite', folder='Notes').ok
+    rewrite.allow('n1')
+    assert ex.replace('Recipes', 'rewrite', folder='Notes', rewrite_allowed=True).ok
+    assert len(live['writes']) == 1
 
 
 def test_a_restore_saves_no_undo_slot(monkeypatch):
-    authorize_system(workspace.TODAY)
-    """Design decision 4 lists append/insert/mark/replace as the modes that
-    save — not restore. Saving here too would let a second `@notron undo` pop
-    a slot holding Notron's own overwritten body and write it right back: an
-    undo/redo loop the mention scanner would keep re-triggering forever."""
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
-    monkeypatch.setattr(ex_mod.notes, "read_body",
-                        lambda note_id: "<div>☀️ Today</div><div>what she wrote over it</div>")
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: None)
-    saved = {}
-    monkeypatch.setattr(ex_mod.undo, "save", lambda nid, old: saved.setdefault(nid, old))
-
-    result = ex_mod.Executor(audit=False).restore("☀️ Today", "<div>original</div>")
-
-    assert result.ok
-    assert saved == {}
+    in_note(monkeypatch, workspace.TODAY)
+    assert ex_mod.Executor(audit=False).restore(workspace.TODAY, '<div>original</div>').ok
+    assert ex_mod.undo._load() == {}
 
 
 def test_restoring_a_note_that_no_longer_exists_is_refused(monkeypatch):
-    """'Put this note back' has no meaning without a note — the same posture
-    `mark` and `insert` already take on a missing note."""
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: None)
-    written = []
-    monkeypatch.setattr(ex_mod.notes, "write_body", lambda note_id, b: written.append(b))
-    created = []
-    monkeypatch.setattr(ex_mod.notes, "create_note",
-                        lambda folder, body: created.append(body) or "new-id")
-
-    result = ex_mod.Executor(audit=False).restore("Gone Note", "<div>original</div>")
-
-    assert not result.ok
-    assert written == [] and created == []
+    monkeypatch.setattr(ex_mod.notes, 'list_notes', lambda folder: [])
+    monkeypatch.setattr(ex_mod.notes, 'get_note', lambda nid: None)
+    monkeypatch.setattr(ex_mod.notes, 'create_note', lambda *args: __import__('pytest').fail('must not create'))
+    assert not ex_mod.Executor(audit=False).restore('Gone Note', '<div>original</div>').ok
 
 
 def test_a_deleted_log_requires_setup_to_register_a_replacement(monkeypatch):
-    monkeypatch.setattr(ex_mod.notes, 'find_note', lambda *a: None)
+    monkeypatch.setattr(ex_mod.notes, 'get_note', lambda nid: None)
     created = []
-    monkeypatch.setattr(ex_mod.notes, 'create_note', lambda *a: created.append(a))
+    monkeypatch.setattr(ex_mod.notes, 'create_note', lambda *args: created.append(args))
     ex_mod.Executor()._log('synthetic operation')
     assert created == []
 
 
 def test_a_folder_she_cannot_see_never_multiplies_the_log_note(monkeypatch):
-    """The self-heal above is right when the note was deleted and wrong when
-    the *folder* read failed: a missing 📊 Log then means "look somewhere
-    else", not "make another one". On 2026-09-03 a shifted folder index made
-    every read of 🤖 NOTRON return Recently Deleted, and this branch fired on
-    each write — fourteen duplicate 📊 Log notes in two minutes. So the folder
-    is confirmed to be readable, from a freshly asked list, before anything is
-    created (see tests/test_notes.py)."""
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: None)
-    monkeypatch.setattr(ex_mod.notes, "folder_exists", lambda folder: False)
+    monkeypatch.setattr(ex_mod.notes, 'get_note', lambda nid: None)
     created = []
-    monkeypatch.setattr(ex_mod.notes, "create_note",
-                         lambda folder, body: created.append(folder) or "new-id")
-
+    monkeypatch.setattr(ex_mod.notes, 'create_note', lambda *args: created.append(args))
     for _ in range(14):
-        ex_mod.Executor()._log("insert on *Parking Garages* (462 chars)")
-
-    assert created == [], "she invented a new 📊 Log instead of finding hers"
+        ex_mod.Executor()._log('synthetic operation')
+    assert created == []

@@ -101,6 +101,14 @@ class FakeNotesApp:
                 (notes.US.join(ids), notes.US.join(titles), notes.US.join(dates)))
             return f"{name}{notes.RS}{rest}"
 
+        if script is notes._METADATA:
+            self.calls.append('metadata')
+            for folder, titles in self.folders:
+                for title in titles:
+                    if args[0] == f'{folder}/{title}':
+                        return notes.RS.join((args[0], title, folder, 'observed'))
+            return ''
+
         if script is notes._BODY:
             self.calls.append("body")
             return self.bodies.get(args[0], f"<div>{args[0].split('/')[-1]}</div>")

@@ -19,7 +19,7 @@ from .securestore import EncryptedStore, StorageError, private_directory
 from .paths import DATA_DIR
 
 PATH = DATA_DIR / 'operations.sqlite3'
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 class OperationConflict(RuntimeError):
@@ -73,6 +73,7 @@ class Operation:
     expected_revision: str | None
     external_id: str | None
     failure_code: str | None
+    observed_revision: str | None
 
 
 class OperationStore:
@@ -92,7 +93,7 @@ class OperationStore:
         os.chmod(self.path, 0o600)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, SCHEMA_VERSION):
+            if version not in (0, 1, SCHEMA_VERSION):
                 raise StorageError('Operation schema requires explicit migration.')
             if version == 0:
                 if history_exists:
@@ -140,6 +141,16 @@ class OperationStore:
                     PRAGMA user_version=1;
                     COMMIT;
                 ''')
+            # The v1 -> v2 additive migration is atomic and preserves identities.
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                if db.execute('PRAGMA user_version').fetchone()[0] == 1:
+                    db.execute('ALTER TABLE operations ADD COLUMN observed_revision TEXT')
+                    db.execute('PRAGMA user_version=2')
+                db.commit()
+            except BaseException:
+                db.rollback()
+                raise
         if not marker_path.exists():
             self.payload_store.write(marker, b'notron-operation-ledger-v1')
         # Persist directory entries as well as the SQLite transaction contents.
@@ -219,7 +230,7 @@ class OperationStore:
             return self._record(db.execute('SELECT * FROM operations WHERE operation_id=?', (operation_id,)).fetchone())
 
     def transition(self, operation_id: str, expected: S, target: S, external_id: str | None = None,
-                   *, failure_code: str | None = None) -> Operation:
+                   *, failure_code: str | None = None, observed_revision: str | None = None) -> Operation:
         expected, target = S(expected), S(target)
         if target not in _EDGES[expected]:
             raise OperationConflict('Invalid operation transition.')
@@ -231,9 +242,10 @@ class OperationStore:
                 raise OperationConflict('Operation state changed; processing paused.')
             if row['external_id'] and external_id not in (None, row['external_id']):
                 raise OperationConflict('External identity cannot be replaced.')
-            db.execute('UPDATE operations SET status=?,updated_at=?,external_id=COALESCE(?,external_id),failure_code=? '
+            db.execute('UPDATE operations SET status=?,updated_at=?,external_id=COALESCE(?,external_id),failure_code=?, '
+                       'observed_revision=COALESCE(?,observed_revision) '
                        'WHERE operation_id=? AND status=?',
-                       (target, now(), external_id, failure_code, operation_id, expected))
+                       (target, now(), external_id, failure_code, observed_revision, operation_id, expected))
             return self._record(db.execute('SELECT * FROM operations WHERE operation_id=?', (operation_id,)).fetchone())
 
     def get(self, operation_id: str) -> Operation | None:

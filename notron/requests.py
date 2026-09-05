@@ -188,6 +188,11 @@ class RequestStore:
                                ('needs_review' if needs_review else 'completed', now(),
                                 'unknown_outcome' if needs_review else None, request_id)).rowcount
             if not count:
+                # A policy update (including explicit new-home creation) may have
+                # already purged this running request. Preserve its review tombstone.
+                row = db.execute('SELECT status FROM requests WHERE request_id=?', (request_id,)).fetchone()
+                if row and row['status'] == 'needs_review':
+                    return
                 raise OperationConflict('Request state changed; processing paused.')
 
     def observe(self, note_id, body, questions, *, source, title, folder, modified='') -> list[RequestEnvelope]:

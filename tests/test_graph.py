@@ -131,17 +131,10 @@ def test_a_reply_meant_for_a_spot_in_a_note_is_actually_inserted_there():
         def __init__(self, dry_run=False):
             pass
 
-        def insert(self, title, md, *, after, folder, anchor=""):
-            applied.append(("insert", title, after))
-            return type("R", (), {"ok": True, "reason": "written"})()
-
-        def append(self, title, md, *, folder):
-            applied.append(("append", title, None))
-            return type("R", (), {"ok": True, "reason": "written"})()
-
-        def replace(self, title, md, *, folder):
-            applied.append(("replace", title, None))
-            return type("R", (), {"ok": True, "reason": "written"})()
+        def apply_write(self, write):
+            applied.append((write.mode, write.title, write.after))
+            from notron.executor import WriteResult
+            return WriteResult(True, 'written')
 
     nodes.Executor = FakeExecutor
     try:
@@ -265,6 +258,7 @@ def _a_note_of_theirs(monkeypatch, body="<div>Parking Garages</div><div>12 Trini
                         lambda folder, title: Note(id="n1", title=title, folder=folder,
                                                    modified="x"))
     monkeypatch.setattr(nodes.notes, "read_body", lambda note_id: body)
+    monkeypatch.setattr(nodes.notes, "get_note", lambda nid: Note(nid, "Parking Garages", "Notes", "x") if nid == "n1" else None)
 
 
 def test_undo_walks_the_whole_graph_without_ever_asking_the_model(monkeypatch):

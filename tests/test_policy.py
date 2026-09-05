@@ -82,19 +82,24 @@ def test_executor_rechecks_policy_and_reply_scope(tmp_path, monkeypatch):
     configured(path, decided=['n1', 'n2'])
     live = notes.Note('n1', 'Readable', 'Notes', '')
     monkeypatch.setattr(notes, 'find_note', lambda *a: live)
+    monkeypatch.setattr(notes, 'get_note', lambda nid: live if nid == live.id else None)
     reads, writes = [], []
-    monkeypatch.setattr(notes, 'read_body', lambda nid: reads.append(nid) or '<div>Readable</div><div>@notron hi</div>')
-    monkeypatch.setattr(notes, 'write_body', lambda nid, body: writes.append(nid))
+    body = {'value': '<div>Readable</div><div>@notron hi</div>'}
+    monkeypatch.setattr(notes, 'read_body', lambda nid: reads.append(nid) or body['value'])
+    def write(nid, value):
+        writes.append(nid)
+        body['value'] = value
+    monkeypatch.setattr(notes, 'write_body', write)
     ex = executor.Executor(audit=False)
     assert not ex.append('Readable', 'automatic', folder='Notes').ok
     assert reads == []
     with policy.explicit_reply('n1'):
-        assert ex.insert('Readable', 'answer', folder='Notes', after=1).ok
+        assert ex.insert('Readable', 'answer', folder='Notes', after=1, anchor='@notron hi').ok
         assert not ex.insert('Readable', 'another answer', folder='Notes', after=1).ok
     assert writes == ['n1']
     with policy.explicit_reply('n1'):
         configured(path, ignore=['n1'])
-        assert not ex.insert('Readable', 'answer', folder='Notes', after=1).ok
+        assert not ex.insert('Readable', 'answer', folder='Notes', after=1, anchor='@notron hi').ok
     assert writes == ['n1']
 
 
@@ -178,6 +183,7 @@ def test_watcher_tag_reply_in_read_only_note_end_to_end(tmp_path, monkeypatch):
     body = {'value': '<div>Readable</div><div>@notron explain gravity</div>'}
     monkeypatch.setattr(notes, 'list_all_notes', lambda: [n])
     monkeypatch.setattr(notes, 'find_note', lambda folder, title: n if (folder, title) == ('Notes', 'Readable') else None)
+    monkeypatch.setattr(notes, 'get_note', lambda nid: n if nid == n.id else None)
     monkeypatch.setattr(notes, 'read_body', lambda nid: body['value'])
     monkeypatch.setattr(notes, 'write_body', lambda nid, text: body.update(value=text))
     brain = FakeBrain(answer='Gravity attracts objects.')
@@ -268,6 +274,7 @@ def test_read_only_organizer_does_not_promise_standing_rewrite(tmp_path, monkeyp
     monkeypatch.setattr(library, 'STATE', path)
     configured(path)
     monkeypatch.setattr(notes, 'find_note', lambda *a: notes.Note('n1', 'Readable', 'Notes', ''))
+    monkeypatch.setattr(notes, 'get_note', lambda nid: notes.Note('n1', 'Readable', 'Notes', '') if nid == 'n1' else None)
     monkeypatch.setattr(notes, 'read_body', lambda *a: '<div>Readable</div><div>parking garages</div>')
     state = State(intent='organize', request='clean this up', source_note_id='n1', reply_to=('Readable', 'Notes', 1))
     nodes.organizer(state, brain=FakeBrain(answer='A cleaned copy of the parking garages'))

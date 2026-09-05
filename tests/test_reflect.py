@@ -83,6 +83,7 @@ def in_notes(monkeypatch, tmp_path):
     bodies = {
         workspace.ASK: ask_note(CHAT),
         workspace.ABOUT: markup.render(workspace.ABOUT, "Keep it short."),
+        workspace.LESSONS: markup.render(workspace.LESSONS, "No lessons yet."),
     }
     from notron import library
     lib = library.load()
@@ -95,19 +96,19 @@ def in_notes(monkeypatch, tmp_path):
             self.id = id
             self.title = id
             self.modified = ""
+            self.folder = workspace.FOLDER
 
     monkeypatch.setattr(reflect.notes, "find_note",
                         lambda folder, title: N(title) if title in bodies else None)
     monkeypatch.setattr(reflect.notes, "read_body", lambda id: bodies[id])
+    monkeypatch.setattr(reflect.notes, "get_note", lambda nid: N(nid) if nid in bodies else None)
+    monkeypatch.setattr(reflect.notes, "list_all_notes", lambda: [N(nid) for nid in bodies])
     monkeypatch.setattr(reflect, "STATE", tmp_path / "reflect.json")
 
-    from notron import executor
-
-    def replace(self, title, md, *, folder=workspace.FOLDER):
-        written[title] = md
-        return type("R", (), {"ok": True, "reason": "written"})()
-
-    monkeypatch.setattr(executor.Executor, "replace", replace)
+    def write(nid, body):
+        bodies[nid] = body
+        written[nid] = body
+    monkeypatch.setattr(reflect.notes, 'write_body', write)
     return written
 
 

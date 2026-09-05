@@ -127,7 +127,8 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
    `Executor`.
 4. **Write receipts are best effort** in the registered, readable `📊 Log`.
    Successful writes log afterward; inaccessible logs and crashes can leave gaps.
-   P02 owns durable operation records.
+   P02 Task 2 records Notes operations and observed revisions in the encrypted-payload ledger;
+   asynchronous receipt reconciliation remains Task 3.
 5. **Policy exclusions precede outbound redaction.** Every model/search/embedding
    input uses `outbound.py`; supported secret patterns are filtered by `privacy.py`.
    Redaction cannot recognize every secret. See `SECURITY.md` for limits.
@@ -224,13 +225,17 @@ closes a 700× gap — use `notron/eventkit.py`.
   must be verified in P06; Python tests do not establish native permission safety.
 - A dated reminder needs an explicit `EKAlarm`. A due date alone shows in the app
   but does not notify, and a reminder that does not buzz is a note with a circle.
-- **Apple Notes writes replace a whole body and are non-atomic.** Append/insert/mark
-  reread immediately before writing and skip changed bodies, reducing the stale
-  body risk after `_apply` begins. Organizer inference occurs before `_apply`,
-  so that check does not cover the entire model interval. Replace/restore lack
-  that final revision check and can lose intervening edits. P02 owns revision-aware
-  writes, rich-content checks and recovery; even those cannot eliminate the final
-  multi-device read/write race.
+- **Apple Notes writes replace a whole body and are non-atomic.** P02 Task 2
+  binds each proposed write to a note ID and SHA-256 revision captured before
+  inference. The executor serializes local transactions, saves encrypted undo,
+  checks policy/revision immediately before mutation and verifies the observed
+  body afterward. Stale replace/restore refuses; stale append/insert/mark needs
+  unambiguous captured anchors, and journal appends refuse stale layout. Rich
+  replacement input is conservatively refused; organizer returns separate text
+  without touching the rich original. Notes mutations have no automatic timeout
+  retry. Remote iCloud/editor writers do not honor the local lock: the final
+  read/write gap remains a race, including undetectable overwritten remote text.
+  Reconciliation, undo snapshot lifecycle and worker ownership remain Tasks 3/4/6.
 
 ## The Brain Dump (`filer.py`)
 
@@ -307,7 +312,7 @@ user's own words outright refuses to write rather than risk it.
 bare "undo" in 📥 Ask Notron asks which note rather than guessing) puts a note
 back to what it held before Notron's immediately-prior write, one level,
 consumed on use. Every successful write except `restore` itself saves the
-prior body (`Executor._apply`); `restore` is exempt from the outside-folder
+prior body (`Executor.apply_write`); `restore` is exempt from the outside-folder
 block and the append-preserve/secret-scan checks (`guard.py`) because it puts
 back words that were already live in that exact note a moment ago — not new,
 AI-authored content. The receipt rides inside the single `restore` write

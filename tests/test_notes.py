@@ -182,3 +182,22 @@ def test_creating_a_folder_refreshes_the_index_immediately(monkeypatch):
     assert fake.calls.count("folders") == 2, "a new folder shifts every index after it"
     assert "Shared" in notes.folders()
     assert fake.calls.count("folders") == 2, "and the refreshed list is the cached one"
+
+
+def test_id_lookup_reads_only_selected_metadata(monkeypatch):
+    calls = []
+    def run(script, *args, **kwargs):
+        calls.append((script, args))
+        return notes.RS.join(('stable-id', 'Renamed', 'Archive', 'today'))
+    monkeypatch.setattr(notes, 'run', run)
+    assert notes.get_note('stable-id') == notes.Note('stable-id', 'Renamed', 'Archive', 'today')
+    assert len(calls) == 1 and calls[0][1] == ('stable-id',)
+
+
+def test_mutation_adapters_never_retry_uncertain_write(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notes, 'resolve', lambda folder: (2, []))
+    monkeypatch.setattr(notes, 'run', lambda script, *args, **kwargs: calls.append(kwargs) or 'new-id')
+    notes.write_body('nid', '<div>body</div>')
+    notes.create_note('Notes', '<div>body</div>')
+    assert [kw.get('retries') for kw in calls] == [0, 0]

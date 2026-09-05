@@ -70,6 +70,16 @@ on run argv
 end run
 """
 
+_METADATA = f"""
+on run argv
+  tell application "Notes"
+    if not (exists note id (item 1 of argv)) then return ""
+    set n to note id (item 1 of argv)
+    return (id of n) & "{RS}" & (name of n) & "{RS}" & (name of container of n) & "{RS}" & (modification date of n as text)
+  end tell
+end run
+"""
+
 _SET_BODY = """
 on run argv
   tell application "Notes" to set body of note id (item 1 of argv) to (item 2 of argv)
@@ -272,7 +282,7 @@ def read_body(note_id: str) -> str:
 
 
 def write_body(note_id: str, body: str) -> None:
-    run(_SET_BODY, note_id, body)
+    run(_SET_BODY, note_id, body, retries=0)
 
 
 def show_note(note_id: str) -> None:
@@ -284,7 +294,7 @@ def show_note(note_id: str) -> None:
 def create_note(folder: str, body: str) -> str:
     """Add a note to an existing folder. Never creates the folder itself."""
     index, _ = resolve(folder)
-    return run(_CREATE_AT_INDEX, str(index), body)
+    return run(_CREATE_AT_INDEX, str(index), body, retries=0)
 
 
 def find_note(folder: str, title: str) -> Note | None:
@@ -292,3 +302,21 @@ def find_note(folder: str, title: str) -> Note | None:
         if n.title == title:
             return n
     return None
+
+
+def get_note(note_id: str) -> Note | None:
+    """Resolve current metadata by exact ID, without reading any other body."""
+    raw = run(_METADATA, note_id)
+    if not raw:
+        return None
+    fields = raw.split(RS)
+    if len(fields) != 4 or fields[0] != note_id:
+        raise AppleScriptError('Invalid note metadata response.')
+    note = Note(*fields)
+    return None if note.folder in SKIP_FOLDERS else note
+
+
+def unique_note(folder: str, title: str) -> Note | None:
+    """Title lookup is only a capture convenience; ambiguous titles never bind."""
+    matches = [n for n in list_notes(folder) if n.title == title]
+    return matches[0] if len(matches) == 1 else None

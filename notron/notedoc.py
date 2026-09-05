@@ -261,3 +261,86 @@ def _boundaries(html: str) -> list[int]:
     if running != len(html):          # split lost something; trust nothing
         return [0, len(html)]
     return offsets
+
+
+def locate_unique(body: str, anchor: str, *, near: int, unchanged: bool = False) -> int | None:
+    """A captured position disambiguates only the exact original revision."""
+    want = anchor.strip()
+    hits = [i for i, text in enumerate(texts(body)) if want and text.strip() == want]
+    if unchanged and near in hits:
+        return near
+    return hits[0] if len(hits) == 1 else None
+
+
+def mark_unique(body: str, marks: list[tuple[str, int, str]], *, unchanged: bool = False) -> tuple[str, int]:
+    """Never select the nearest duplicate or apply only part of a batch."""
+    result = body
+    for anchor, near, receipt in marks:
+        hits = [line for line in lines(result) if line.text.strip() == anchor.strip()]
+        positioned = [line for line in hits if line.block == near]
+        if unchanged and len(positioned) == 1:
+            line = positioned[0]
+        elif len(hits) == 1:
+            line = hits[0]
+        else:
+            return body, 0
+        updated = mark(result, line, suffix=receipt)
+        if updated == result or line.text.startswith(FILED):
+            return body, 0
+        result = updated
+    return result, len(marks)
+
+
+def supports_replacement(body: str) -> bool:
+    """Conservative plain formatting subset; never infer object safety from size.
+
+    Unknown tags/attributes, malformed nesting, links, tables and native checklist
+    metadata refuse. This validates supported input, not Apple's native fidelity.
+    """
+    from html.parser import HTMLParser
+
+    class Supported(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.stack = []
+            self.ok = True
+
+        def handle_starttag(self, tag, attrs):
+            if tag not in {'div', 'p', 'br', 'b', 'strong', 'i', 'em', 'u', 's',
+                           'strike', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4',
+                           'h5', 'h6', 'blockquote', 'pre', 'code'} or attrs:
+                self.ok = False
+            if tag != 'br':
+                self.stack.append(tag)
+
+        def handle_startendtag(self, tag, attrs):
+            if tag != 'br' or attrs:
+                self.ok = False
+
+        def handle_endtag(self, tag):
+            if not self.stack or self.stack.pop() != tag:
+                self.ok = False
+
+        def handle_comment(self, data):
+            self.ok = False
+
+        def handle_decl(self, decl):
+            self.ok = False
+
+        def handle_pi(self, data):
+            self.ok = False
+
+        def unknown_decl(self, data):
+            self.ok = False
+
+        def handle_data(self, data):
+            if '<' in data or '>' in data:
+                self.ok = False
+
+    parser = Supported()
+    try:
+        parser.feed(body)
+        parser.close()
+    except Exception:
+        return False
+    return parser.ok and not parser.stack

@@ -224,6 +224,7 @@ def test_organizer_redacts_the_actual_note_at_inference(outbound_policy, outboun
     from notron import nodes
     from notron.state import State
     monkeypatch.setattr(notes, 'find_note', lambda *a: notes.Note('approved', 'Shopping', 'Notes', '1'))
+    monkeypatch.setattr(notes, 'get_note', lambda nid: notes.Note('approved', 'Shopping', 'Notes', '1') if nid == 'approved' else None)
     monkeypatch.setattr(notes, 'read_body', lambda _: f'<div>Shopping password: {SECRET}</div>')
     brain, calls = outbound_transport
     state = State(request='clean this up', intent='organize', source_note_id='approved',
