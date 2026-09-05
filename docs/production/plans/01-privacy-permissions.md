@@ -18,11 +18,13 @@
 
 ## Task 1 — Explicit policy state and zero-home semantics
 
+**Status:** Complete, 2026-09-04. Implementation commit `2b3914d`; [verification and handoff](../handoffs/2026-09-04-P01-task-1.md). Required boundary integrations also touch the executor, watcher, graph, setup, CLI, Brain/search readiness gates, system-note readers, and Mac save transport; no Task 2 passage preparation is implemented.
+
 **Files:** Modify `notron/library.py`, `notron/filer.py`, `notron/index.py`, `notron/mentions.py`, `notron/rewrite.py`, `tests/test_library.py`, `tests/test_filer.py`; Create `notron/policy.py`, `notron/persistence.py`, `tests/test_policy.py`, `tests/test_persistence.py`.
 **Consumes:** Existing Library JSON with homes/ignore/decided/chosen_at.
 **Produces:** `load_policy(path: Path) -> PolicySnapshot`, `PolicySnapshot.status` in `unconfigured|ready|corrupt`, `can_read(note_id: str) -> bool`, `can_file(note_id: str) -> bool`, `can_reply(note_id: str, explicit_request_id: str | None) -> bool`, `atomic_write_json(path, payload) -> None`. Missing and malformed files remain distinguishable. `can_reply` checks that the request belongs to that readable note; arbitrary model-produced IDs are not authorization.
 
-- [ ] Add explicit regression tests. Seed current valid legacy JSON, zero-home configured JSON, malformed/truncated JSON, and a note newly discovered after setup. Default newly discovered notes to read-only only when the user's validated policy explicitly enables it; default that setting off for the pilot.
+- [x] Add explicit regression tests. Seed current valid legacy JSON, zero-home configured JSON, malformed/truncated JSON, and a note newly discovered after setup. Default newly discovered notes to read-only only when the user's validated policy explicitly enables it; default that setting off for the pilot.
 
 ```python
 import json
@@ -46,10 +48,10 @@ def test_corrupt_policy_is_not_a_fresh_install(tmp_path):
     assert not policy.can_file('n1')
 ```
 
-- [ ] Run `.venv/bin/python -m pytest tests/test_policy.py tests/test_library.py tests/test_filer.py -q`; confirm the new cases fail for the intended policy behavior.
-- [ ] Implement a versioned policy wrapper while preserving recognized legacy choices. Empty homes never widens scope. Unknown notes are denied unless the explicit new-note setting applies. Sensitive-title exclusions remain additional restrictions. Have readers and the final executor call the same policy object. Test a direct tagged reply in a read-only note, refused automatic filing into the same note, and refused tagged access in an ignored note. Until P02 supplies durable request records, inject an explicit request capability from the current watcher call; never accept a model-supplied capability.
-- [ ] Implement atomic persistence: write a user-only temporary file in the same directory, flush/fsync, `os.replace`, fsync directory; retain a last validated backup. A restore from backup requires a visible recovery operation. Never silently restore a more permissive policy.
-- [ ] Add interrupted-write and invalid-version tests; run targeted suite. Update comments/copy describing the previous all-readable fallback. Commit task-owned files and record evidence.
+- [x] Run `.venv/bin/python -m pytest tests/test_policy.py tests/test_library.py tests/test_filer.py -q`; confirm the new cases fail for the intended policy behavior.
+- [x] Implement a versioned policy wrapper while preserving recognized legacy choices. Empty homes never widens scope. Unknown notes are denied unless the explicit new-note setting applies. Sensitive-title exclusions remain additional restrictions. Have readers and the final executor call the same policy object. Test a direct tagged reply in a read-only note, refused automatic filing into the same note, and refused tagged access in an ignored note. Until P02 supplies durable request records, inject an explicit request capability from the current watcher call; never accept a model-supplied capability.
+- [x] Implement atomic persistence: write a user-only temporary file in the same directory, flush/fsync, `os.replace`, fsync directory; retain a last validated backup. A restore from backup requires a visible recovery operation. Never silently restore a more permissive policy.
+- [x] Add interrupted-write and invalid-version tests; run targeted suite. Update comments/copy describing the previous all-readable fallback. Commit task-owned files and record evidence.
 
 ## Task 2 — All model/search inputs carry provenance
 

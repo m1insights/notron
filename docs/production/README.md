@@ -1,6 +1,7 @@
 # Notron production roadmap
 
-Status: **planning complete; implementation not started**. Created 2026-09-04.
+Status: **implementation in progress; P01 Task 1 complete**. Updated 2026-09-04.
+Evidence: [P01 Task 1 session handoff](handoffs/2026-09-04-P01-task-1.md).
 Audience: the owner and an engineer starting a fresh coding session.
 
 ## Outcome and scope
@@ -15,7 +16,7 @@ Read the [shared design and contracts](design.md) before any plan. Findings are 
 
 | ID | Plan | Prerequisite | Exit deliverable | Status |
 |---|---|---|---|---|
-| P01 | [Privacy and permissions](plans/01-privacy-permissions.md) | Shared design | Private inputs, credentials, permissions and network destinations have enforced boundaries | Planned |
+| P01 | [Privacy and permissions](plans/01-privacy-permissions.md) | Shared design | Private inputs, credentials, permissions and network destinations have enforced boundaries | In progress — Task 1 complete; Task 2 next |
 | P02 | [Reliable execution and recovery](plans/02-reliable-execution.md) | P01 policy APIs | Durable operations, guarded writes, safe retries and stale-request handling | Planned |
 | P03 | [Ask conversation](plans/03-ask-conversation.md) | P01; P02 request contracts | Bounded contextual follow-ups and clarification | Planned |
 | P04 | [Mobile Shortcut feasibility](plans/04-shortcut-prototype.md) | Local experiment can start immediately; hosted test requires P01 and P02 contracts | Real-iPhone evidence and explicit continue/stop decision | Planned |
@@ -122,6 +123,6 @@ Task plans show representative executable contract tests plus the full behaviora
 
 This approved roadmap supersedes older product assumptions where they conflict: mandatory Calendar/Reminders during onboarding, starting before note selection, paid-only safe installation, guaranteed ten-second replies, and automatic phone capture without an awake Mac. Earlier commercialization/OpenClaw market claims are historical research, not release evidence. Existing design tokens still apply; P06 updates obsolete onboarding copy rather than inventing a parallel design system.
 
-## First implementation session
+## Next implementation session
 
-Start with **P01 Task 1: explicit, fail-closed note permissions**. Finish zero-home and corrupt-state regressions before touching cloud deployment. P04 Task 1 can be scheduled as an independent device experiment when an iPhone is available.
+Continue with **P01 Task 2: all model/search inputs carry provenance**. Task 1 is committed: zero-home, corrupt-state, scoped reply, and atomic recovery regressions pass. The P01 exit gate and M1 remain open until their remaining tasks are verified. P04 Task 1 can be scheduled as an independent device experiment when an iPhone is available.
