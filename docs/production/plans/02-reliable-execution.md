@@ -17,6 +17,9 @@
 
 ## Task 1 — Request envelopes and durable operation state
 
+**Status:** Complete; independent spec and quality review approved. Implementation
+`ebcca8d`, fixes `dea6adb` / `08d2a6d`; [batch handoff](../handoffs/2026-09-05-P02-tasks-1-2.md).
+
 **Files:** Create `notron/requests.py`, `notron/operations.py`, `tests/test_requests.py`, `tests/test_operations.py`; Modify `notron/state.py`, `notron/graph.py`, `notron/watch.py`, `notron/mentions.py`, `notron/cli.py`, `tests/conftest.py`.
 **Consumes:** Shared RequestEnvelope and OperationStatus; P01 EncryptedStore.
 **Produces:** `OperationStore(path, payload_store)`, `.prepare(request_id, operation_id, payload_hash)`, `.transition(operation_id, expected, target, external_id=None)`, `.get(operation_id)`, `.pending()`; `run_request(envelope, *, brain, dry_run=False)` in graph, preserving `graph.run` as a compatibility wrapper.
@@ -42,11 +45,14 @@ def test_operation_identity_cannot_be_reused_for_different_work(tmp_path, payloa
 
 ## Task 2 — Stable targets and revision-aware writes
 
+**Status:** Complete; independent spec and quality review approved. Implementation
+`1487fff`, fixes `a09883d` / `6c6492c` / `9d9b720`; [batch handoff](../handoffs/2026-09-05-P02-tasks-1-2.md).
+
 **Files:** Modify `notron/state.py`, `notron/notes.py`, `notron/executor.py`, `notron/nodes.py`, `notron/filer.py`, `notron/notedoc.py`, `tests/test_executor.py`, `tests/test_notes.py`, `tests/test_rewrite.py`; Create `tests/test_write_races.py`.
 **Consumes:** Request/operation IDs and P01 final-write policy.
 **Produces:** Write fields `note_id`, `expected_revision`, `operation_id`; `revision(body: str) -> str`; `Executor.apply_write(write) -> WriteResult` targeting IDs, not reselecting by title. New-note creation is a separate explicit operation.
 
-- [ ] Add tests for duplicate titles in different folders, renaming/moving the target after classification, source deletion, and user edits while organizer inference runs.
+- [x] Add tests for duplicate titles in different folders, renaming/moving the target after classification, source deletion, and user edits while organizer inference runs.
 
 ```python
 from notron.executor import revision
@@ -63,10 +69,10 @@ def test_replace_rejects_newer_user_text(fake_note_store, safe_executor, make_wr
 
 The three fixtures above belong in `tests/test_write_races.py`: `fake_note_store` is an in-memory ID/body map; `safe_executor` injects that store, ready policy, temporary ledger and encrypted undo; `make_write` constructs the production Write with a unique operation ID. They must not suppress policy or revision checks.
 
-- [ ] Capture revision before model input, not when the executor starts. Validate policy and expected revision immediately before each write, under one local transaction lock. Abort stale replace/restore; rebase append/insert only when anchor matching is unambiguous. Re-read after writing, recording observed revision and unexpected divergence.
-- [ ] Reject in-place rewrite of unsupported attachment/checklist/rich-object bodies. Offer a separate plain-text result without replacing the original. Do not infer attachment preservation from an HTML character-count check.
-- [ ] Add final-read/final-write and post-write divergence cases. Document that remote iCloud writers do not honor the local lock and safe revision checks reduce but cannot eliminate the final race.
-- [ ] Run executor/notes/rewrite/write-race suites and commit.
+- [x] Capture revision before model input, not when the executor starts. Validate policy and expected revision immediately before each write, under one local transaction lock. Abort stale replace/restore; rebase append/insert only when anchor matching is unambiguous. Re-read after writing, recording observed revision and unexpected divergence.
+- [x] Reject in-place rewrite of unsupported attachment/checklist/rich-object bodies. Offer a separate plain-text result without replacing the original. Do not infer attachment preservation from an HTML character-count check.
+- [x] Add final-read/final-write and post-write divergence cases. Document that remote iCloud writers do not honor the local lock and safe revision checks reduce but cannot eliminate the final race.
+- [x] Run executor/notes/rewrite/write-race suites and commit.
 
 ## Task 3 — Side effects and receipts recover independently
 
