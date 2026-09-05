@@ -22,8 +22,9 @@ def note(id, title="Supps", folder="Notes", days_ago=1) -> Note:
 
 @pytest.fixture
 def state(monkeypatch, tmp_path):
-    monkeypatch.setattr(library, "STATE", tmp_path / "library.json")
-    return tmp_path / "library.json"
+    path = tmp_path / "selection.json"
+    monkeypatch.setattr(library, "STATE", path)
+    return path
 
 
 def test_choices_survive_a_round_trip(state):
@@ -39,17 +40,17 @@ def test_choices_survive_a_round_trip(state):
 def test_no_file_means_nothing_is_configured(state):
     lib = library.load()
     assert not lib.configured
-    assert lib.state_of(note("n1")) == library.READ
+    assert lib.state_of(note("n1")) == library.IGNORE
 
 
 def test_an_ignored_note_is_ignored_by_id_whatever_its_name_is(state):
     lib = library.Library(ignore={"n2"})
     assert lib.is_ignored(note("n2", title="Groceries"))
-    assert not lib.is_ignored(note("n1", title="Passwords")), "the list is the rule, not the title"
+    assert lib.is_ignored(note("n1", title="Passwords")), "sensitive titles further restrict access"
 
 
 def test_start_from_hides_old_notes_the_user_never_looked_at():
-    lib = library.Library(start_from=datetime(2026, 1, 1))
+    lib = library.Library(start_from=datetime(2026, 1, 1), chosen_at="2026-09-04T12:00", allow_new_notes=True)
     old = Note("n9", "2019 experiments", "Notes", "Monday, 4 March 2019 at 09:00:00")
     assert lib.is_ignored(old)
     assert not lib.is_ignored(note("n1", days_ago=1))
@@ -64,9 +65,9 @@ def test_a_note_the_user_decided_on_is_never_hidden_by_the_year():
     assert not lib.is_ignored(old)
 
 
-def test_an_unreadable_date_is_read_not_hidden():
-    lib = library.Library(start_from=datetime(2026, 1, 1))
-    assert not lib.is_ignored(Note("n1", "x", "Notes", "???"))
+def test_an_unreadable_date_cannot_bypass_the_cutoff():
+    lib = library.Library(start_from=datetime(2026, 1, 1), chosen_at="2026-09-04T12:00", allow_new_notes=True)
+    assert lib.is_ignored(Note("n1", "x", "Notes", "???"))
 
 
 def test_user_notes_drops_her_own_folder_and_everything_ignored(monkeypatch, state):
@@ -74,7 +75,7 @@ def test_user_notes_drops_her_own_folder_and_everything_ignored(monkeypatch, sta
     monkeypatch.setattr(notes, "list_all_notes", lambda: [
         note("n1"), note("n2", title="Old", days_ago=900),
         note("n3", folder=workspace.FOLDER), note("n4")])
-    library.save(library.Library(ignore={"n4"}, start_from=datetime.now() - timedelta(days=400)))
+    library.save(library.Library(ignore={"n4"}, decided={"n1"}, start_from=datetime.now() - timedelta(days=400)))
     assert [n.id for n in library.user_notes()] == ["n1"]
 
 
@@ -142,20 +143,21 @@ def test_scan_reports_the_users_choices_once_made(monkeypatch, state):
     monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     library.save(library.Library(homes={"n1"}, decided={"n1", "n2"}))
     rows = {r["id"]: r for r in library.scan()["notes"]}
-    assert rows["n1"]["state"] == "home", "the user's choice, even against the guess"
+    assert rows["n1"]["state"] == "ignore", "sensitive-title restriction remains in force"
     assert rows["n1"]["suggested"] == "ignore", "the guess is still shown"
 
 
-def test_a_note_she_made_after_a_yes_becomes_a_home_only_if_homes_exist(state):
-    library.add_home("new")
-    assert not library.load().homes, "no setup yet — adding one home would shut every other note out"
-    library.save(library.Library(homes={"n1"}))
-    library.add_home("new")
-    assert library.load().homes == {"n1", "new"}
+def test_a_note_approved_after_yes_becomes_a_home_even_from_zero(state):
+    from notron.policy import PolicyError
+    with pytest.raises(PolicyError):
+        library.add_home('new')
+    library.save(library.Library())
+    library.add_home('new')
+    assert library.load().homes == {'new'}
 
 
 def _ignoring(monkeypatch, state, *ids):
-    library.save(library.Library(ignore=set(ids)))
+    library.save(library.Library(ignore=set(ids), decided={"n1"}))
 
 
 def test_the_keyword_search_never_opens_an_ignored_note(monkeypatch, state):
@@ -188,7 +190,7 @@ def test_a_stale_index_still_hides_an_ignored_note_at_search_time(state):
     """The user ignores a note; the index was built last week. It must not surface."""
     from notron import index
     rows = [{"note_id": "n1", "modified": stamp(1)}, {"note_id": "n2", "modified": stamp(1)}]
-    library.save(library.Library(ignore={"n2"}))
+    library.save(library.Library(ignore={"n2"}, decided={"n1"}))
     assert [r["note_id"] for r in index._readable(rows)] == ["n1"]
 
 
@@ -342,10 +344,25 @@ def test_the_pre_fill_gets_note_shape_not_a_flattened_line(monkeypatch, state):
     its lines — so shape scored zero for every note and nothing ever cleared
     HOME_SCORE. The pre-fill the whole screen rests on could not fire."""
     from notron import index, notes
+    library.save(library.Library(decided={"n1"}))
     listy = "\n".join(f"item {i}" for i in range(8))
     monkeypatch.setattr(index, "_load", lambda: {"n1": [{"text": listy}]})
     assert "\n" in index.glimpses(1400, keep_lines=True)["n1"]
     assert "\n" not in index.glimpses(1400)["n1"], "prompts still get the flat one"
 
     monkeypatch.setattr(notes, "list_all_notes", lambda: [note("n1", "Groceries")])
-    assert library.scan()["counts"]["home"] == 1, "scan has to ask for the shape"
+    assert library.scan()["notes"][0]["suggested"] == "home", "scan has to ask for the shape"
+
+
+def test_zero_homes_has_no_master_candidates(monkeypatch, state):
+    from notron import filer, notes, index
+    library.save(library.Library(decided={'n1'}))
+    monkeypatch.setattr(notes, 'list_all_notes', lambda: [note('n1')])
+    monkeypatch.setattr(index, 'glimpses', lambda *a, **k: {})
+    assert filer.masters() == []
+
+
+def test_missing_policy_does_not_read_notes(monkeypatch, state):
+    from notron import notes
+    monkeypatch.setattr(notes, 'list_all_notes', lambda: [note('n1')])
+    assert library.user_notes() == []

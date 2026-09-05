@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import calendar, guard, markup, notedoc, notes, reminders, undo, workspace
+from . import calendar, guard, markup, notedoc, notes, reminders, undo, workspace, policy, rewrite
 
 
 @dataclass(frozen=True)
@@ -35,15 +35,17 @@ class Executor:
         return self._apply(folder, title, body_markdown, mode="replace",
                            rewrite_allowed=rewrite_allowed)
 
-    def append(self, title: str, body_markdown: str, *, folder: str = workspace.FOLDER) -> WriteResult:
+    def append(self, title: str, body_markdown: str, *, folder: str = workspace.FOLDER,
+               expected_note_id: str | None = None) -> WriteResult:
         """Add to the end of a note without touching what is already there."""
-        return self._apply(folder, title, body_markdown, mode="append")
+        return self._apply(folder, title, body_markdown, mode="append",
+                           expected_note_id=expected_note_id)
 
     def insert(self, title: str, body_markdown: str, *, after: int,
                folder: str = workspace.FOLDER, anchor: str = "") -> WriteResult:
         """Answer directly underneath the block someone wrote, wherever it sits."""
         return self._apply(folder, title, body_markdown, mode="insert", after=after,
-                           anchor=anchor)
+                           anchor=anchor, expected_note_id=policy.request_note_id())
 
     def mark(self, title: str, marks: list[tuple[str, int, str]], *,
              folder: str = workspace.FOLDER) -> WriteResult:
@@ -58,13 +60,52 @@ class Executor:
         Refused on a note that no longer exists — there is nothing to put back."""
         return self._apply(folder, title, raw_html_body, mode="restore")
 
+    def create_approved(self, title: str, body_markdown: str, *, folder: str) -> WriteResult:
+        """Only the plain-code proposal confirmation path calls this method.
+
+        Never append into a pre-existing same-name note on a creation approval.
+        """
+        return self._apply(folder, title, body_markdown, mode='append', approved_creation=True)
+
+    def _permitted(self, note, folder, title, mode, rewrite_allowed=False,
+                   approved_creation=False, expected_note_id=None) -> bool:
+        snap = policy.current()
+        if snap.status != 'ready':
+            return False
+        if note is None:
+            return approved_creation and mode == 'append' and folder != workspace.FOLDER
+        if approved_creation or (expected_note_id is not None and note.id != expected_note_id):
+            return False
+        if not snap.readable(note):
+            return False
+        role = snap.system_role(note.id)
+        if folder == workspace.FOLDER:
+            return role == title and role != workspace.ABOUT
+        if role is not None:  # moving a system note does not turn it into a home
+            return False
+        if mode in ('replace', 'restore'):
+            return snap.can_file(note.id) and (mode == 'restore' or
+                                               (rewrite_allowed and rewrite.allowed(note.id)))
+        if mode == 'mark':
+            return snap.can_file(note.id) or policy.can_mark_source(note.id)
+        return snap.can_file(note.id) or snap.can_reply(note.id, policy.request_id())
+
     # -- internals -------------------------------------------------------
 
     def _apply(self, folder: str, title: str, body_markdown: str, *, mode: str,
                after: int | None = None, anchor: str = "",
                marks: list[tuple[str, int, str]] | None = None,
-               rewrite_allowed: bool = False) -> WriteResult:
+               rewrite_allowed: bool = False, approved_creation: bool = False,
+               expected_note_id: str | None = None) -> WriteResult:
         note = notes.find_note(folder, title)
+        def permitted():
+            return self._permitted(note, folder, title, mode, rewrite_allowed,
+                                   approved_creation, expected_note_id)
+        if not permitted():
+            self._log(f'**BLOCKED** {mode} — note policy denied access')
+            return WriteResult(False, 'note policy denied access', note.id if note else None)
+        reply_exception = bool(note and folder != workspace.FOLDER and mode in ('append', 'insert')
+                               and not policy.current().can_file(note.id))
         old_body = notes.read_body(note.id) if note else ""
 
         if mode == "mark":
@@ -130,18 +171,27 @@ class Executor:
             # slot holding Notron's own overwritten body, tag line and all,
             # and write it right back: an undo/redo loop the mention scanner
             # would keep re-triggering forever, with no receipt to break it.
+            if not permitted():
+                self._log(f'**BLOCKED** {mode} — note policy changed')
+                return WriteResult(False, 'note policy changed', note.id)
             if mode != "restore":
                 undo.save(note.id, old_body)
             notes.write_body(note.id, new_body)
             note_id = note.id
         else:
+            if not permitted():
+                return WriteResult(False, 'note policy changed')
             note_id = notes.create_note(folder, new_body)
+        if reply_exception:
+            policy.consume_reply()
 
         self._log(f"{mode} on *{title}* ({len(new_body)} chars)")
         return WriteResult(True, "written", note_id)
 
     def do(self, action, *, about: str = "", request: str = "") -> WriteResult:
         """Apply one thing outside Notes. Still no model anywhere in this path."""
+        if policy.current().status != 'ready':
+            return WriteResult(False, 'note policy not ready; actions paused')
         verdict = guard.check_action(action, about=about, request=request)
         if not verdict:
             self._log(f"**BLOCKED** {action.op} {action.kind} *{action.title}* — {verdict.reason}")
@@ -196,22 +246,10 @@ class Executor:
             return
         entry = f"{datetime.now():%Y-%m-%d %H:%M} — {line}"
         log = notes.find_note(workspace.FOLDER, workspace.LOG)
-        if log:
+        snap = policy.current()
+        if (log and snap.system_role(log.id) == workspace.LOG and snap.readable(log)):
             body = notes.read_body(log.id)
-            notes.write_body(log.id, body + markup.to_html(entry))
-        elif notes.folder_exists(workspace.FOLDER):
-            # Every write is supposed to land here (invariant #4). If the note
-            # itself got deleted, recreate it from its seed instead of
-            # silently losing the audit trail from here on — the same
-            # self-heal 📖 Lessons already gets from `replace` recreating it
-            # the next time there's something to write.
-            #
-            # But only once the folder itself has answered. A missing 📊 Log
-            # can also mean the *folder* read went astray, and then the honest
-            # move is to wait, not to build a replacement: on 2026-09-03 a
-            # shifted folder index made every read of 🤖 NOTRON return
-            # Recently Deleted, and this branch fired on each write — fourteen
-            # duplicate 📊 Log notes in two minutes. `folder_exists` asks Notes
-            # again rather than trusting the cached folder list.
-            seed = markup.render(workspace.LOG, workspace.SEEDS[workspace.LOG])
-            notes.create_note(workspace.FOLDER, seed + markup.to_html(entry))
+            if policy.current().can_read(log.id):
+                notes.write_body(log.id, body + markup.to_html(entry))
+        # No title-based self-heal: setup must explicitly register a replacement
+        # system note ID. A missing/denied log cannot authorize reading a twin.

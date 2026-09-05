@@ -6,8 +6,8 @@ two ways: the user types `yes` under the real before/after `organizer` shows
 them on that note (decision 2), or the note is brand new and the global
 default for new notes is "always" (decision 3). Either way the choice lives
 here, in its own file — this is a different question from `library.py`'s
-home/read-only/ignore, and a Home, a Read-only or an Ignore-adjacent note can
-each independently answer it.
+home/read-only/ignore. Only a Home can exercise a rewrite grant; Read only and
+Ignore always restrict it. Malformed state never grants permission.
 
 See docs/plans/2026-09-03-rewrite-permission-and-undo-design.md.
 """
@@ -18,39 +18,61 @@ import json
 import pathlib
 from datetime import datetime
 
+from . import policy
+from .persistence import atomic_write_json, atomic_write_bytes
+
 STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "rewrite.json"
 
 DEFAULTS = ("ask", "always", "never")
 
 
+def _decode(raw) -> dict:
+    if (not isinstance(raw, dict)
+            or ('version' in raw and (type(raw['version']) is not int or raw['version'] != 1))
+            or not isinstance(raw.get('allow', []), list)
+            or any(not isinstance(n, str) or not n for n in raw.get('allow', []))
+            or raw.get('default_new', 'ask') not in DEFAULTS
+            or any(not isinstance(raw.get(k, ''), str)
+                   for k in ('chosen_at', 'default_chosen_at'))):
+        raise ValueError('invalid rewrite permissions')
+    return dict(version=1, allow=raw.get('allow', []),
+                default_new=raw.get('default_new', 'ask'),
+                chosen_at=raw.get('chosen_at', ''),
+                default_chosen_at=raw.get('default_chosen_at', ''))
+
+
 def _load() -> dict:
     try:
-        raw = json.loads(STATE.read_text())
+        return _decode(json.loads(STATE.read_text()))
     except (OSError, ValueError):
-        raw = {}
-    return {
-        "allow": list(raw.get("allow") or []),
-        "default_new": raw.get("default_new") or "ask",
-        "chosen_at": raw.get("chosen_at") or "",
-        # Its own field, deliberately not "chosen_at" — that one is stamped by
-        # allow() for a per-note yes, a different question from "has the user
-        # ever picked the global default." Sharing one field meant the Mac
-        # app's onboarding sheet (gated on this) would never show for a user
-        # who'd already said `@notron yes` on a single note.
-        "default_chosen_at": raw.get("default_chosen_at") or "",
-    }
+        return _decode({})
 
 
 def _write(data: dict) -> None:
+    data = _decode(data)
+    if STATE.exists():
+        try:
+            previous = STATE.read_bytes()
+            _decode(json.loads(previous))
+        except (OSError, ValueError) as exc:
+            raise policy.PolicyError('Rewrite policy corrupt; use notron rewrite --recover.') from exc
+        atomic_write_bytes(STATE.with_name(STATE.name + '.bak'), previous)
+    atomic_write_json(STATE, data)
+
+
+def restore_permissions() -> None:
     try:
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps(data, indent=1))
-    except OSError:
-        pass
+        previous = STATE.with_name(STATE.name + '.bak').read_bytes()
+        _decode(json.loads(previous))
+    except (OSError, ValueError) as exc:
+        raise policy.PolicyError('No validated rewrite backup available.') from exc
+    if STATE.exists():
+        atomic_write_bytes(STATE.with_name(STATE.name + '.corrupt'), STATE.read_bytes())
+    atomic_write_bytes(STATE, previous)
 
 
 def allowed(note_id: str) -> bool:
-    return note_id in _load()["allow"]
+    return policy.current().can_file(note_id) and note_id in _load()["allow"]
 
 
 def allow(note_id: str) -> None:
@@ -62,7 +84,7 @@ def allow(note_id: str) -> None:
 
 
 def default_for_new_notes() -> str:
-    return _load()["default_new"]
+    return _load()['default_new'] if policy.current().status == 'ready' else 'ask'
 
 
 def default_chosen() -> bool:

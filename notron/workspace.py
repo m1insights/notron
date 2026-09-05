@@ -83,15 +83,34 @@ She hasn't checked herself over yet.
 
 def bootstrap() -> dict[str, str]:
     """Create the NOTRON folder and any missing system notes. Never overwrites."""
-    from . import markup, notes
+    from . import markup, notes, library, policy
+
+    lib = library.load()
+    if lib.status == "corrupt":
+        raise policy.PolicyError("Recover or reset note policy before setup.")
 
     notes.ensure_folder(FOLDER)
-    existing = {n.title: n for n in notes.list_notes(FOLDER)}
+    listed = notes.list_notes(FOLDER)
+    existing = {n.title: n for n in listed}
+    if any(sum(n.title == title for n in listed) > 1 for title in SYSTEM_NOTES):
+        raise policy.PolicyError('Duplicate system notes; resolve their identity before setup.')
     result: dict[str, str] = {}
     for title in SYSTEM_NOTES:
         if title in existing:
+            lib.system_notes[title] = existing[title].id
             result[title] = "kept"
             continue
-        notes.create_note(FOLDER, markup.render(title, SEEDS[title]))
+        lib.system_notes[title] = notes.create_note(FOLDER, markup.render(title, SEEDS[title]))
         result[title] = "created"
+    policy.save_policy(library.STATE, lib.payload())
     return result
+
+
+def readable_system_note(title: str):
+    """Only setup-registered IDs can supply standing/system note content."""
+    from . import notes, policy
+    snap = policy.current()
+    if snap.status != 'ready':
+        return None
+    note = notes.find_note(FOLDER, title)
+    return note if note and snap.system_notes.get(title) == note.id and snap.readable(note) else None

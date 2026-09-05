@@ -48,6 +48,47 @@ Read-only and ignore permissions are enforced on execution by stable note ID, no
 
 Store `Passage`/origin definitions in `notron/outbound.py`, importing policy decisions from `notron/policy.py`; do not create competing types. Track Notron's system notes by validated IDs from setup. A folder name or pasted signature is not sufficient to bypass policy, and About Me remains user-write-only.
 
+### P01 Task 1 implemented policy contract (2026-09-04)
+
+`notron.policy.load_policy(path)` returns a `PolicySnapshot` with `status` equal to
+`unconfigured`, `ready`, or `corrupt`. `PolicyError` is defined in `policy.py`;
+Task 2 should import/re-export it from `outbound.py`, rather than define another
+exception type. Read permission does not imply filing permission.
+
+The on-disk wrapper keeps the legacy top-level `homes`, `ignore`, `decided`,
+`chosen_at`, and optional `start_from` fields. Python saves add `version: 1`,
+`allow_new_notes: false` by default, and `system_notes` (system title to stable
+Notes ID). Valid recognized legacy selections load without rewriting their file;
+unknown notes remain denied unless `allow_new_notes` is explicitly true. A cutoff
+further restricts newly discovered notes; an unreadable date cannot defeat it.
+Sensitive-title restrictions and Ignore still win over other grants. Empty homes
+never enables automatic filing. A new note created after an explicit proposal
+approval becomes a Home even when there were zero homes beforehand.
+
+Setup registers system IDs and refuses duplicate system titles. Running setup on
+a fresh install records those IDs without enabling AI; a saved selection is still
+required. Existing installations must run explicit setup to register missing system
+IDs. Missing/deleted system notes cannot self-authorize a replacement by title.
+
+The watcher calls `policy.explicit_reply(note_id)` around the current graph call.
+Its opaque request ID exists only in that Python call context; `can_reply` requires
+the same readable note and the current unconsumed capability. A successful read-only
+reply consumes it; exiting the call invalidates it. Source filing ticks use the same
+observed-note context. Reply and filing destinations are checked by stable ID at
+execution. No capability is accepted from model output or policy JSON. P02 replaces
+this temporary request identity with durable request records.
+
+`atomic_write_json` uses a same-directory 0600 temporary file, flush/fsync,
+`os.replace`, and directory fsync. Policy writers keep the previous validated
+version at `.bak`, never restore it on load, and propagate failures. `notron library
+recover` explicitly restores a validated backup and preserves the displaced file at
+`.corrupt`; `notron library --reset` explicitly clears all note grants. Rewrite
+permissions use the same atomic writer and explicit `notron rewrite --recover`.
+The Mac selection screen sends JSON over stdin to `notron library save`, preserving
+system IDs and settings outside that screen. These changes do not implement cache
+encryption, outbound passage preparation, durable operations, or a cross-app
+transaction; those remain in their assigned tasks.
+
 ## 3. Request identity, time and operation safety
 
 Proposed `notron/requests.py`:

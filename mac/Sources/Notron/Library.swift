@@ -213,9 +213,9 @@ final class LibraryModel: ObservableObject {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try FileManager.default.createDirectory(at: Self.file.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
-        try encoder.encode(file).write(to: Self.file, options: .atomic)
+        // The Python writer validates, fsyncs and retains the last validated
+        // backup, preserving setup IDs/settings this screen does not edit.
+        _ = try Core.run(["library", "save"], input: encoder.encode(file))
     }
 
     /// Apple Notes dates read "Tuesday, 1 September 2026 at 16:03:12" (or the

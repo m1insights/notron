@@ -213,7 +213,16 @@ def cmd_library(args):
     import json
     from datetime import datetime
 
-    from . import library, notes
+    from . import library, notes, policy
+
+    if args.action == "save":
+        library.save_selection(json.load(sys.stdin))
+        print(json.dumps({"ok": True, "status": "ready"}))
+        return
+    if args.action == "recover":
+        policy.restore_policy(library.STATE)
+        print("Policy restored from validated backup. Review permissions with notron library.")
+        return
 
     if args.action == "scan":
         print(json.dumps(library.scan()))
@@ -234,8 +243,8 @@ def cmd_library(args):
         return
 
     if args.reset:
-        library.save(library.Library())
-        print("\n  Forgotten — every note is read only again, and the Filer may use any of them.\n")
+        library.save(library.Library(), reset=True)
+        print("\n  Reset — no notes are readable and no filing homes are selected. Run setup and select notes again.\n")
         return
 
     lib = library.load()
@@ -261,11 +270,11 @@ def cmd_library(args):
 
     changed = False
     for ref in args.home:
-        nid = resolve(ref); lib.homes.add(nid); lib.ignore.discard(nid); changed = True
+        nid = resolve(ref); lib.decided.add(nid); lib.homes.add(nid); lib.ignore.discard(nid); changed = True
     for ref in args.ignore:
-        nid = resolve(ref); lib.ignore.add(nid); lib.homes.discard(nid); changed = True
+        nid = resolve(ref); lib.decided.add(nid); lib.ignore.add(nid); lib.homes.discard(nid); changed = True
     for ref in args.read:
-        nid = resolve(ref); lib.homes.discard(nid); lib.ignore.discard(nid); changed = True
+        nid = resolve(ref); lib.decided.add(nid); lib.homes.discard(nid); lib.ignore.discard(nid); changed = True
     if args.start_from:
         try:
             lib.start_from = library.parse_start(args.start_from)
@@ -280,7 +289,9 @@ def cmd_library(args):
     c = out["counts"]
     since = f" · start from {out['start_from']}" if out["start_from"] else ""
     print(f"\n  {c['home']} homes · {c['read']} read only · {c['ignore']} ignored{since}")
-    if not out["configured"]:
+    if out["status"] == "corrupt":
+        print("  Policy corrupt — AI paused. Use notron library recover or --reset.")
+    elif not out["configured"]:
         print("  (nothing chosen yet — these are her guesses; open the app or pass --home/--ignore)")
     print()
     for row in out["notes"]:
@@ -291,6 +302,10 @@ def cmd_library(args):
 
 def cmd_rewrite(args):
     """Where a brand-new note starts: ask each time, always clean up in place, or never."""
+    if args.recover:
+        rewrite.restore_permissions()
+        print("Rewrite permissions restored from validated backup.")
+        return
     rewrite.set_default_for_new_notes(args.default)
     print(f"\n  New notes will default to: {args.default}\n")
 
@@ -356,7 +371,7 @@ def main(argv=None):
     ix.set_defaults(fn=cmd_index)
 
     lb = sub.add_parser("library", help="which notes she may file into, and which she never reads")
-    lb.add_argument("action", nargs="?", choices=["show", "scan", "peek", "open"], default="show",
+    lb.add_argument("action", nargs="?", choices=["show", "scan", "peek", "open", "save", "recover"], default="show",
                     help="scan = JSON for the Mac app; peek = one note's text; open = show it in Notes")
     lb.add_argument("note", nargs="?", metavar="NOTE_ID", help="the note peek/open acts on")
     lb.add_argument("--home", action="append", default=[], metavar="TITLE_OR_ID",
@@ -364,15 +379,17 @@ def main(argv=None):
     lb.add_argument("--ignore", action="append", default=[], metavar="TITLE_OR_ID",
                     help="a note she must never read (repeatable)")
     lb.add_argument("--read", action="append", default=[], metavar="TITLE_OR_ID",
-                    help="back to the default: readable, never filed into")
+                    help="readable; explicit tagged replies allowed, never automatic filing")
     lb.add_argument("--start-from", metavar="YEAR", help="ignore notes last edited before this, e.g. 2026")
     lb.add_argument("--reveal", action="store_true",
                     help="with peek: show a note even if its body looks like credentials")
-    lb.add_argument("--reset", action="store_true", help="forget every choice")
+    lb.add_argument("--reset", action="store_true", help="explicitly clear permissions; zero readable notes and zero homes")
     lb.set_defaults(fn=cmd_library)
 
     rw = sub.add_parser("rewrite", help="how new notes handle 'clean this up' by default")
-    rw.add_argument("--default", choices=rewrite.DEFAULTS, required=True,
+    rw_choice = rw.add_mutually_exclusive_group(required=True)
+    rw_choice.add_argument("--recover", action="store_true", help="explicitly restore validated rewrite backup")
+    rw_choice.add_argument("--default", choices=rewrite.DEFAULTS,
                     help="ask each time / always clean it up in place / never")
     rw.set_defaults(fn=cmd_rewrite)
 

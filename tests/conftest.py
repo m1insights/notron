@@ -17,7 +17,7 @@ rather than whatever the person running the suite happens to have written down
 
 import pytest
 
-from notron import applescript, mentions, notes, rewrite, undo
+from notron import applescript, mentions, notes, rewrite, undo, library, workspace
 
 
 @pytest.fixture(autouse=True)
@@ -136,3 +136,17 @@ def _notes_is_never_the_real_one(monkeypatch):
     monkeypatch.setattr(notes, "_folders_cache", None)
     yield app
     notes._folders_cache = None
+
+
+@pytest.fixture(autouse=True)
+def _policy_is_disposable(monkeypatch, tmp_path):
+    """Existing feature tests explicitly select their synthetic notes.
+
+    Permission regression tests override STATE or save their own selection.
+    Never inspect the developer's library.json, even for a read-only test.
+    """
+    monkeypatch.setattr(library, 'STATE', tmp_path / 'test-policy' / 'library.json')
+    library.save(library.Library(
+        homes={'n1', 'note-1'}, decided={'n1', 'note-1'},
+        allow_new_notes=True,
+        system_notes={title: f'{workspace.FOLDER}/{title}' for title in workspace.SYSTEM_NOTES}))

@@ -73,6 +73,10 @@ def test_the_listener_survives_notes_going_away(monkeypatch):
 
 
 def test_check_ask_forgets_a_deleted_note_and_looks_again(monkeypatch):
+    from notron import library, workspace
+    lib = library.load()
+    lib.system_notes[workspace.ASK] = 'stale-id'
+    library.save(lib)
     """A cached note id that has been deleted out from under the listener must
     not be retried forever. The old code never reset it, so a deleted-then-
     recreated Ask note was never found again without a restart."""
@@ -86,6 +90,10 @@ def test_check_ask_forgets_a_deleted_note_and_looks_again(monkeypatch):
 
 
 def test_check_ask_keeps_the_id_when_notes_is_only_busy(monkeypatch):
+    from notron import library, workspace
+    lib = library.load()
+    lib.system_notes[workspace.ASK] = 'n1'
+    library.save(lib)
     """A timeout isn't a deletion — don't pay for a fresh lookup over a hiccup,
     and let the caller's normal retry-the-whole-loop handling deal with it."""
     w = watch.Watcher(brain=None)
@@ -98,6 +106,10 @@ def test_check_ask_keeps_the_id_when_notes_is_only_busy(monkeypatch):
 
 
 def test_check_dump_forgets_a_deleted_note_and_looks_again(monkeypatch):
+    from notron import library, workspace
+    lib = library.load()
+    lib.system_notes[workspace.DUMP] = 'stale-id'
+    library.save(lib)
     w = watch.Watcher(brain=None)
     w._dump_id = "stale-id"
     monkeypatch.setattr(watch.notes, "read_body",

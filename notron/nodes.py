@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 
-from . import conversation, markup, notedoc, notes, privacy, rewrite, undo, workspace
+from . import conversation, markup, notedoc, notes, privacy, rewrite, undo, workspace, policy
 from .executor import Executor
 from .state import Action, State, Write
 
@@ -46,7 +46,7 @@ def watcher(state: State, *, brain=None) -> State:
     for title, attr in ((workspace.ABOUT, "about"), (workspace.MEMORY, "memory"),
                         (workspace.LESSONS, "lessons")):
         n = notes.find_note(workspace.FOLDER, title)
-        if n:
+        if n and policy.current().system_role(n.id) == title and policy.current().readable(n):
             setattr(state, attr, markup.to_text(notes.read_body(n.id)))
     state.note("watcher", f"loaded {len(state.about)} chars of instructions")
     return state
@@ -434,6 +434,9 @@ def organizer(state: State, *, brain) -> State:
         state.answer = "I can't find that note any more."
         state.note("organizer", "no such note")
         return state
+    if (not policy.current().readable(note) or
+            (policy.request_note_id() is not None and policy.request_note_id() != note.id)):
+        raise policy.PolicyError('Request note is not readable or its identity changed.')
     body = notes.read_body(note.id)
 
     if CONFIRM_WORDS.fullmatch(state.request.strip()):
@@ -448,6 +451,10 @@ def organizer(state: State, *, brain) -> State:
             # meaning, unless it's the *right* word in the *right* place.
             state.intent = "question"
             state.note("organizer", "a yes, but not to my offer — answering it normally")
+            return state
+        if not policy.current().can_file(note.id):
+            state.answer = 'This note is Read only. Select it as a Home before enabling in-place cleanup.'
+            state.writes.append(_reply(state))
             return state
         rewrite.allow(note.id)
         state.answer = "Got it — from now on I'll keep this note clean in place."
@@ -489,7 +496,9 @@ def organizer(state: State, *, brain) -> State:
         state.answer = CLEANED
         state.note("organizer", f"rewrote {title} in place ({len(cleaned)} chars)")
     else:
-        state.answer = f"{cleaned}\n\n{ORGANIZE_ASK}"
+        permission_help = (ORGANIZE_ASK if policy.current().can_file(note.id) else
+                           'This note is Read only, so I added a separate cleaned copy.')
+        state.answer = f"{cleaned}\n\n{permission_help}"
         state.writes.append(_reply(state))
         state.note("organizer", f"added a cleaned copy below and asked ({len(cleaned)} chars)")
     return state

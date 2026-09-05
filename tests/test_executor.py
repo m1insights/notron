@@ -18,6 +18,13 @@ from __future__ import annotations
 
 from notron import executor as ex_mod
 from notron.notes import Note
+from notron import library, workspace, rewrite
+
+def authorize_system(title):
+    lib = library.load()
+    lib.system_notes[title] = "n1"
+    library.save(lib)
+
 
 
 def _note(id: str = "n1") -> Note:
@@ -25,6 +32,7 @@ def _note(id: str = "n1") -> Note:
 
 
 def test_a_write_is_skipped_if_the_note_changed_since_it_was_read(monkeypatch):
+    authorize_system(workspace.ASK)
     old_body = "<div>📥 Ask Notron</div><div>How does</div>"
     # The user kept typing while she was thinking.
     live_body = "<div>📥 Ask Notron</div><div>How does the moon landing footage hold up</div>"
@@ -44,6 +52,7 @@ def test_a_write_is_skipped_if_the_note_changed_since_it_was_read(monkeypatch):
 
 
 def test_a_write_proceeds_when_the_note_is_unchanged(monkeypatch):
+    authorize_system(workspace.ASK)
     body = "<div>📥 Ask Notron</div><div>How does this work</div>"
     monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: _note())
     monkeypatch.setattr(ex_mod.notes, "read_body", lambda note_id: body)
@@ -58,6 +67,7 @@ def test_a_write_proceeds_when_the_note_is_unchanged(monkeypatch):
 
 
 def test_replace_mode_is_not_slowed_by_the_extra_read(monkeypatch):
+    authorize_system(workspace.TODAY)
     """Replace builds new_body from the model's output, not from old_body, so a
     concurrent edit to old_body can't corrupt it — no need to pay for a second read."""
     reads = []
@@ -95,6 +105,7 @@ def test_a_write_to_an_existing_note_saves_its_old_body(monkeypatch):
 
 
 def test_a_refused_write_saves_no_undo(monkeypatch):
+    authorize_system(workspace.ASK)
     """A slot saved for a write that never happened would undo to the wrong
     moment — so the save sits after the Guard and after the changed-note check."""
     old_body = "<div>📥 Ask Notron</div><div>How does</div>"
@@ -117,6 +128,7 @@ def test_a_refused_write_saves_no_undo(monkeypatch):
 
 
 def test_restore_writes_the_body_back_verbatim(monkeypatch, tmp_path):
+    authorize_system(workspace.TODAY)
     """`raw_html_body` is already-rendered HTML — what `undo.save` captured —
     so it has to land byte for byte, never through `markup.render` a second time."""
     monkeypatch.setattr(ex_mod.undo, "STATE", tmp_path / "undo.json")
@@ -143,11 +155,13 @@ def test_replace_outside_her_folder_needs_the_opt_in(monkeypatch, tmp_path):
 
     ex = ex_mod.Executor(audit=False)
     assert not ex.replace("Recipes", "a rewrite", folder="Notes").ok
+    rewrite.allow("n1")
     assert ex.replace("Recipes", "a rewrite", folder="Notes", rewrite_allowed=True).ok
     assert len(written) == 1
 
 
 def test_a_restore_saves_no_undo_slot(monkeypatch):
+    authorize_system(workspace.TODAY)
     """Design decision 4 lists append/insert/mark/replace as the modes that
     save — not restore. Saving here too would let a second `@notron undo` pop
     a slot holding Notron's own overwritten body and write it right back: an
@@ -181,23 +195,12 @@ def test_restoring_a_note_that_no_longer_exists_is_refused(monkeypatch):
     assert written == [] and created == []
 
 
-def test_the_log_recreates_itself_if_it_was_deleted(monkeypatch):
-    """Every write is supposed to land in 📊 Log (invariant #4). If the note
-    itself got deleted, the old code just returned — every future write still
-    reported success while the audit trail was silently gone for good."""
-    monkeypatch.setattr(ex_mod.notes, "find_note", lambda folder, title: None)
-    monkeypatch.setattr(ex_mod.notes, "folder_exists", lambda folder: True)
+def test_a_deleted_log_requires_setup_to_register_a_replacement(monkeypatch):
+    monkeypatch.setattr(ex_mod.notes, 'find_note', lambda *a: None)
     created = []
-    monkeypatch.setattr(ex_mod.notes, "create_note",
-                         lambda folder, body: created.append((folder, body)) or "new-id")
-
-    ex_mod.Executor()._log("did a thing")
-
-    assert len(created) == 1
-    folder, body = created[0]
-    assert folder == ex_mod.workspace.FOLDER
-    assert "did a thing" in body
-    assert ex_mod.workspace.LOG in body  # the seed's title heading survives
+    monkeypatch.setattr(ex_mod.notes, 'create_note', lambda *a: created.append(a))
+    ex_mod.Executor()._log('synthetic operation')
+    assert created == []
 
 
 def test_a_folder_she_cannot_see_never_multiplies_the_log_note(monkeypatch):

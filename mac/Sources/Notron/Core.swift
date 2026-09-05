@@ -19,7 +19,7 @@ enum Core {
 
     /// Runs `python -m notron <args>` and returns what it printed. If it printed
     /// nothing, whatever it wrote to stderr becomes the error.
-    static func run(_ args: [String]) throws -> String {
+    static func run(_ args: [String], input: Data? = nil) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: python)
         process.arguments = ["-m", "notron"] + args
@@ -30,12 +30,18 @@ enum Core {
         process.standardOutput = out
         process.standardError = err
 
+        let stdin = Pipe()
+        if input != nil { process.standardInput = stdin }
         try process.run()
+        if let input {
+            stdin.fileHandleForWriting.write(input)
+            try stdin.fileHandleForWriting.close()
+        }
         process.waitUntilExit()
 
         let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if text.isEmpty {
+        if text.isEmpty || process.terminationStatus != 0 {
             let problem = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             throw Failure(description: problem.isEmpty ? "Notron said nothing." : problem)

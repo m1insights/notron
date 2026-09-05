@@ -7,23 +7,22 @@ Store listing whose title said "supplements"), and she reads something that was
 never meant for a model. So the user tells her, once, per note:
 
   home     a note she may file lines into — the Filer's only destinations
-  read     the default: she may read it to answer questions, never file into it
+  read     explicit permission to retrieve and answer tags, never auto-file
   ignore   she never reads it — not for filing, not for questions, not even a
            tag inside it
 
 Choices live in `.notron/library.json`, keyed by note id, so a rename changes
-nothing. The Mac app writes the file; every reader in the core lists notes
+nothing. The Mac app saves through the validated Python writer; every reader in the core lists notes
 through `user_notes()` here, so "never reads it" is one rule in one place.
 """
 
 from __future__ import annotations
 
-import json
 import pathlib
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from . import notes, workspace
+from . import notes, workspace, policy
 
 STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "library.json"
 
@@ -39,23 +38,30 @@ class Library:
     decided: set[str] = field(default_factory=set)
     start_from: datetime | None = None
     chosen_at: str = ""
+    allow_new_notes: bool = False
+    system_notes: dict[str, str] = field(default_factory=dict)
+    status: str = "unconfigured"
 
     @property
     def configured(self) -> bool:
-        return bool(self.homes or self.ignore or self.decided or self.start_from)
+        return self.snapshot().status == 'ready'
+
+    def snapshot(self) -> policy.PolicySnapshot:
+        if self.status == 'corrupt':
+            return policy.PolicySnapshot('corrupt')
+        return policy.decode_policy(self.payload())
+
+    def payload(self) -> dict:
+        return dict(version=1, homes=sorted(self.homes), ignore=sorted(self.ignore),
+                    decided=sorted(self.decided), chosen_at=self.chosen_at,
+                    start_from=self.start_from.strftime('%Y-%m-%d') if self.start_from else None,
+                    allow_new_notes=self.allow_new_notes, system_notes=dict(self.system_notes))
 
     def hides(self, note_id: str, modified: str) -> bool:
-        """The one rule. Explicit choices first, the year only for notes the
-        user never looked at, and an unreadable date is read rather than hidden."""
-        if note_id in self.ignore:
-            return True
-        if note_id in self.homes or note_id in self.decided or self.start_from is None:
-            return False
-        at = notes.Note(note_id, "", "", modified).modified_at
-        return at is not None and at < self.start_from
+        return not self.snapshot().readable(notes.Note(note_id, '', '', modified))
 
     def is_ignored(self, note: notes.Note) -> bool:
-        return self.hides(note.id, note.modified)
+        return not self.snapshot().readable(note)
 
     def state_of(self, note: notes.Note) -> str:
         if self.is_ignored(note):
@@ -75,40 +81,25 @@ def parse_start(text: str) -> datetime:
 
 
 def load() -> Library:
-    try:
-        raw = json.loads(STATE.read_text())
-    except (OSError, json.JSONDecodeError):
-        return Library()
-    start = raw.get("start_from")
-    try:
-        start_at = parse_start(start) if start else None
-    except ValueError:
-        start_at = None
-    return Library(
-        homes=set(raw.get("homes") or []),
-        ignore=set(raw.get("ignore") or []),
-        decided=set(raw.get("decided") or []),
-        start_from=start_at,
-        chosen_at=raw.get("chosen_at") or "",
-    )
+    snap = policy.load_policy(STATE)
+    return Library(homes=set(snap.homes), ignore=set(snap.ignore), decided=set(snap.decided),
+                   start_from=snap.start_from, chosen_at=snap.chosen_at,
+                   allow_new_notes=snap.allow_new_notes, system_notes=dict(snap.system_notes),
+                   status=snap.status)
 
 
-def save(lib: Library) -> None:
-    lib.chosen_at = lib.chosen_at or datetime.now().isoformat(timespec="minutes")
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps({
-        "homes": sorted(lib.homes),
-        "ignore": sorted(lib.ignore),
-        "decided": sorted(lib.decided),
-        "start_from": lib.start_from.strftime("%Y-%m-%d") if lib.start_from else None,
-        "chosen_at": lib.chosen_at,
-    }, indent=1))
+def save(lib: Library, *, reset: bool = False) -> None:
+    lib.chosen_at = lib.chosen_at or datetime.now().isoformat(timespec='minutes')
+    policy.save_policy(STATE, lib.payload(), reset=reset)
+    lib.status = 'ready'
 
 
 def user_notes(lib: Library | None = None) -> list[notes.Note]:
     """Every note of theirs she is allowed to read. The only way the core
     should ever list the user's notes."""
     lib = lib or load()
+    if not lib.configured:
+        return []
     return [n for n in notes.list_all_notes()
             if n.folder != workspace.FOLDER and not lib.is_ignored(n)]
 
@@ -185,7 +176,7 @@ def suggest(all_notes: list[notes.Note], texts: dict[str, str], *,
                                         ("list-shaped", _list_shaped(texts.get(n.id, "")) > 0)) if on)
         scored.append((score, n, why))
 
-    scored.sort(key=lambda s: (-s[0], -(s[1].modified_at or datetime.min).timestamp()))
+    scored.sort(key=lambda s: (-s[0], -(s[1].modified_at.timestamp() if s[1].modified_at else 0)))
     homes = 0
     for score, n, why in scored:
         if score >= HOME_SCORE and homes < MAX_HOMES:
@@ -230,6 +221,7 @@ def scan(lib: Library | None = None) -> dict:
         "duplicates": {t: ids for t, ids in by_title.items() if len(ids) > 1},
         "start_from": lib.start_from.strftime("%Y-%m-%d") if lib.start_from else None,
         "configured": lib.configured,
+        "status": lib.snapshot().status,
         "counts": counts,
     }
 
@@ -274,12 +266,25 @@ def _stamp(modified: str) -> float:
 
 
 def add_home(note_id: str) -> None:
-    """A note Notron created after a `yes` in the Brain Dump is a home from
-    then on — but only once the user has chosen homes at all. With none
-    chosen, every readable note is a destination, and adding one would
-    silently shut the rest out."""
+    """A newly created note explicitly approved with yes becomes a filing home."""
     lib = load()
-    if not lib.homes or note_id in lib.homes:
-        return
+    if not lib.configured:
+        raise policy.PolicyError('Configure note permissions before adding a home.')
     lib.homes.add(note_id)
+    lib.decided.add(note_id)
+    lib.ignore.discard(note_id)
+    save(lib)
+
+
+def save_selection(raw: dict) -> None:
+    """Mac selection transport. Preserve setup IDs and settings absent in its UI."""
+    selected = policy.decode_policy(raw)
+    lib = load()
+    if lib.status == 'corrupt':
+        raise policy.PolicyError('Policy corrupt; use notron library recover or --reset.')
+    lib.homes = set(selected.homes)
+    lib.ignore = set(selected.ignore)
+    lib.decided = set(selected.decided)
+    lib.start_from = selected.start_from
+    lib.chosen_at = selected.chosen_at
     save(lib)

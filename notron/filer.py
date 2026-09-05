@@ -105,6 +105,7 @@ class Master:
     title: str
     folder: str
     glimpse: str = ""
+    note_id: str | None = None
 
 
 @dataclass
@@ -228,8 +229,7 @@ def _said(text: str) -> str:
 # ----------------------------------------------------------------- masters
 
 def masters(*, exclude: set[str] = frozenset()) -> list[Master]:
-    """The notes lines may be filed into: the user's chosen homes, or — before
-    any are chosen — every note of theirs she may read, newest first, with a
+    """The notes lines may be filed into: only the user's chosen homes, newest first, with a
     glimpse of each from the index when there is one. Notron's own notes are
     never candidates, and neither is anything that holds credentials or reads
     as private."""
@@ -240,7 +240,7 @@ def masters(*, exclude: set[str] = frozenset()) -> list[Master]:
 
     lib = library.load()
     for n in library.user_notes(lib):
-        if lib.homes and n.id not in lib.homes:
+        if not lib.snapshot().can_file(n.id):
             continue                       # the user said where things go
         if not n.title.strip() or n.title in exclude:
             continue
@@ -251,7 +251,7 @@ def masters(*, exclude: set[str] = frozenset()) -> list[Master]:
         seen.add(n.title)
         live.append(n)
     live.sort(key=lambda n: n.modified_at or datetime.min, reverse=True)
-    return [Master(n.title, n.folder, privacy.redact(glimpses.get(n.id, "")))
+    return [Master(n.title, n.folder, privacy.redact(glimpses.get(n.id, "")), n.id)
             for n in live[:MAX_MASTERS]]
 
 
@@ -501,6 +501,10 @@ def _shape_for(title: str, said: dict[str, str], state: dict) -> str:
 
 def _existing_text(folder: str, title: str) -> str:
     note = notes.find_note(folder, title)
+    if note:
+        from . import policy
+        if not policy.current().readable(note):
+            raise policy.PolicyError('Filing note is not readable.')
     return markup.to_text(notes.read_body(note.id)) if note else ""
 
 
@@ -592,7 +596,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         group = [items[i] for i in idxs]
         shape = _shape_for(title, said_shapes, state)
         r = ex.append(title, _entry_markdown(group, shape=shape, folder=master.folder, title=title),
-                      folder=master.folder)
+                      folder=master.folder, expected_note_id=master.note_id)
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
         if not r.ok:
             for it in group:
@@ -691,7 +695,7 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 continue
             say(f"making “{title}” with {len(waiting)} line(s)")
             shape = _shape_for(title, {}, state)
-            r = ex.append(title, _entry_markdown(waiting, shape=shape, folder=FILING_FOLDER, title=title),
+            r = ex.create_approved(title, _entry_markdown(waiting, shape=shape, folder=FILING_FOLDER, title=title),
                           folder=FILING_FOLDER)
             out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
             if not r.ok:
@@ -718,6 +722,8 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
 def run(brain, *, dry_run: bool = False, on_step=None) -> Outcome:
     """File the whole dump: answers to proposals first, then every unfiled line."""
     from .executor import Executor
+    from . import policy
+    policy.require_ready()
 
     say = on_step or (lambda m: None)
     out = Outcome()
@@ -726,6 +732,8 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> Outcome:
         say(f"no {workspace.DUMP} note — run `notron setup`")
         out.results.append(f"✗ {workspace.DUMP} — missing; run notron setup")
         return out
+    if policy.current().system_notes.get(workspace.DUMP) != dump.id or not policy.current().readable(dump):
+        raise policy.PolicyError('Brain Dump requires setup or permission recovery.')
     items = unfiled(notes.read_body(dump.id))
     if not items:
         say("nothing unfiled")
@@ -745,6 +753,8 @@ def file_items(brain, items: list[Item], *, bare: list[str] = (), dry_run: bool 
     """File lines tagged in some other note. A bare "@notron file this" line
     above them is ticked too, without a receipt, once anything under it landed."""
     from .executor import Executor
+    from . import policy
+    policy.require_ready()
 
     out = Outcome()
     if not items:

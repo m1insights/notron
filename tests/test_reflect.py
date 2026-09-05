@@ -83,11 +83,16 @@ def in_notes(monkeypatch, tmp_path):
         workspace.ASK: ask_note(CHAT),
         workspace.ABOUT: markup.render(workspace.ABOUT, "Keep it short."),
     }
+    from notron import library
+    lib = library.load()
+    lib.system_notes = {title: title for title in workspace.SYSTEM_NOTES}
+    library.save(lib)
     written = {}
 
     class N:
         def __init__(self, id):
             self.id = id
+            self.title = id
 
     monkeypatch.setattr(reflect.notes, "find_note",
                         lambda folder, title: N(title) if title in bodies else None)

@@ -31,6 +31,15 @@ class Store:
         nid = f"n{len(self.rows) + 1}"
         self.rows[nid] = {"title": title, "folder": folder,
                           "body": markup.render(title, md), "modified": "1"}
+        # Adding a fixture is explicit setup, unlike discovering a live note.
+        from notron import library
+        lib = library.load()
+        if folder == workspace.FOLDER and title in workspace.SYSTEM_NOTES:
+            lib.system_notes[title] = nid
+        else:
+            lib.homes.add(nid)
+            lib.decided.add(nid)
+        library.save(lib)
         return nid
 
     def body(self, title):
@@ -110,6 +119,7 @@ def store(monkeypatch, tmp_path):
     monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {})
     monkeypatch.setattr(filer, "STATE", tmp_path / "filer.json")
     monkeypatch.setattr(library, "STATE", tmp_path / "library.json")   # never the developer's own choices
+    library.save(library.Library())
     s.add(workspace.LOG, "Everything Notron did.\n\n———\n", folder=workspace.FOLDER)
     return s
 
@@ -343,6 +353,7 @@ def test_secret_looking_lines_never_reach_the_model_and_glimpses_are_redacted(mo
         Note("n1", "Supplements", "Notes", "x"), Note("n2", "Passwords", "Notes", "x"),
         Note("n3", "Journal", "Notes", "x"), Note("n4", workspace.ASK, workspace.FOLDER, "x")])
     monkeypatch.setattr(index, "glimpses", lambda chars=100, **kw: {"n1": "api key sk-abcdefghijklmnopqrstuvwxyz1234 daily"})
+    library.save(library.Library(homes={"n1", "n2", "n3"}))
     ms = filer.masters()
     assert [m.title for m in ms] == ["Supplements"]
     assert "sk-abc" not in ms[0].glimpse and "[redacted]" in ms[0].glimpse
@@ -866,12 +877,15 @@ def test_with_homes_chosen_only_homes_are_destinations(store, monkeypatch):
     assert titles == ["Supps"], "the listing note is readable, but never a place to file"
 
 
-def test_with_no_homes_chosen_every_readable_note_is_still_a_candidate(store, monkeypatch):
+def test_with_no_homes_chosen_no_note_is_a_candidate(store, monkeypatch):
     from notron import library
     monkeypatch.setattr(library, "STATE", filer.STATE.parent / "library.json")
     store.add("Supps", "-")
     store.add("Groceries", "-")
-    assert sorted(m.title for m in filer.masters()) == ["Groceries", "Supps"]
+    lib = library.load()
+    lib.homes.clear()
+    library.save(lib)
+    assert filer.masters() == []
 
 
 def test_a_note_made_after_a_yes_joins_the_homes(store, monkeypatch):

@@ -19,7 +19,7 @@ import json
 import pathlib
 from dataclasses import dataclass, field
 
-from . import conversation, notes, workspace
+from . import conversation, notes, workspace, policy
 
 STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "seen.json"
 
@@ -31,6 +31,7 @@ class Mention:
     folder: str
     question: str
     after: int
+    modified: str = ""
     raw: str = ""        # the whole turn, tags intact — what the Filer ticks
 
 
@@ -105,6 +106,8 @@ class Scanner:
         """Every unanswered `#notron` in a note that changed since the last look."""
         found: list[Mention] = []
         for n in self.changed():
+            if not policy.current().readable(n):
+                continue
             try:
                 body = notes.read_body(n.id)
             except Exception:
@@ -124,7 +127,7 @@ class Scanner:
                     note_id=n.id, title=n.title, folder=n.folder,
                     question=conversation.strip_tag(conversation.tagged_lines(q.text)),
                     after=q.after,
-                    raw=q.text,
+                    raw=q.text, modified=n.modified,
                 ))
 
         # Save *after* working out what is still owed. Saving inside `changed()`

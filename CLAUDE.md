@@ -243,9 +243,13 @@ Once per note the user says **home** (the Filer may file into it), **read only**
 tag). Choices live in `.notron/library.json` keyed by note id; the Mac app's "Your
 notes" window writes it (it lists notes via `notron library scan`), `notron library`
 edits it from the terminal. A "start from [year]" cutoff applies only to notes the
-user never looked at (`decided`); a row they flipped wins. With no homes chosen the
-Filer keeps every readable note as a candidate; a note Notron creates after a `yes`
-joins the homes only when homes exist. The pre-fill (`library.suggest`) is plain
+user never looked at (`decided`); a row they flipped wins. Zero homes means zero
+automatic filing destinations. Unknown notes are denied unless validated policy
+explicitly enables new-note reads (off by default). Missing/corrupt policy pauses
+AI processing; `notron library recover` explicitly restores a validated backup.
+A note created after an explicit `yes` becomes a home, including from zero homes.
+Read only permits a one-request tagged reply in that readable note; Ignore still
+excludes tagged notes. Setup registers system note IDs; names alone grant nothing. The pre-fill (`library.suggest`) is plain
 code: recency + list-shaped body + short title, `privacy.py` seeds the ignores,
 duplicate titles keep only the newest as a home.
 

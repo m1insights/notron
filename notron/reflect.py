@@ -150,7 +150,7 @@ Reject a candidate that:
 
 
 def current_lessons() -> list[str]:
-    n = notes.find_note(workspace.FOLDER, workspace.LESSONS)
+    n = workspace.readable_system_note(workspace.LESSONS)
     if not n:
         return []
     text = markup.to_text(notes.read_body(n.id))
@@ -165,11 +165,13 @@ def _grounded(evidence: str, transcript: str) -> bool:
 
 def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
     """One turn of the loop: measure, propose, verify, apply, record."""
+    from . import policy
+    policy.require_ready()
     say = on_step or (lambda m: None)
     out: dict[str, object] = {"at": datetime.now().isoformat(timespec="minutes"),
                               "misses": 0, "proposed": 0, "kept": [], "skipped": ""}
 
-    ask = notes.find_note(workspace.FOLDER, workspace.ASK)
+    ask = workspace.readable_system_note(workspace.ASK)
     if not ask:
         out["skipped"] = "no Ask note"
         return out
@@ -218,7 +220,7 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
         return out
 
     about = ""
-    about_note = notes.find_note(workspace.FOLDER, workspace.ABOUT)
+    about_note = workspace.readable_system_note(workspace.ABOUT)
     if about_note:
         about = markup.to_text(notes.read_body(about_note.id))
     try:

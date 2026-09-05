@@ -94,8 +94,9 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
     from . import markup, notes, workspace
 
     cached = {} if force else _load()
-    from . import library
+    from . import library, policy
 
+    policy.require_ready()
     live = library.user_notes()
 
     fresh: dict[str, list[dict]] = {}
@@ -171,7 +172,9 @@ def _readable(rows: list[dict]) -> list[dict]:
     from . import library
 
     lib = library.load()
-    return [r for r in rows if not lib.hides(r["note_id"], r.get("modified", ""))]
+    from .notes import Note
+    return [r for r in rows if not lib.is_ignored(
+        Note(r["note_id"], r.get("title", ""), r.get("folder", ""), r.get("modified", "")))]
 
 
 def exists() -> bool:
@@ -190,7 +193,7 @@ def glimpses(chars: int = 100, *, keep_lines: bool = False) -> dict[str, str]:
     out: dict[str, str] = {}
     try:
         for note_id, chunks in _load().items():
-            if chunks and chunks[0].get("text"):
+            if chunks and _readable([dict(chunks[0], note_id=note_id)]) and chunks[0].get("text"):
                 text = chunks[0]["text"]
                 if keep_lines:
                     text = "\n".join(" ".join(l.split()) for l in text.split("\n"))

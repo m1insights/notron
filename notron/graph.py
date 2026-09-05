@@ -79,6 +79,8 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
     `source` is the exact turn she was tagged in, tags intact — what the Filer
     copies and ticks.
     """
+    from . import policy
+    policy.require_ready()
     state = State(request=request, trigger=trigger, reply_to=reply_to, here=here,
                   source=source)
     for name in ORDER:

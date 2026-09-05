@@ -96,6 +96,8 @@ class Brain:
 
     def _call(self, tier: str, system: str, user: str, budget: int, json_mode: bool,
               temperature: float):
+        from . import policy
+        policy.require_ready()
         kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
         resp = self._client.chat.completions.create(
             model=self.model_for(tier),
@@ -140,6 +142,8 @@ class Brain:
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Vectorise a batch of note chunks. Batches of ~64 keep requests small."""
+        from . import policy
+        policy.require_ready()
         import os as _os
 
         model = _os.environ.get("NOTRON_MODEL_EMBED", EMBED_MODEL)

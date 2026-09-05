@@ -62,6 +62,8 @@ def check_url(url: str, *, timeout: int = 5) -> bool:
 
 def search(query: str, *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
     """Return Tavily's own summary answer plus the sources behind it."""
+    from . import policy
+    policy.require_ready()
     key = os.environ.get("TAVILY_API_KEY", "").strip()
     if not key:
         raise NoSearchKey("TAVILY_API_KEY is not set")

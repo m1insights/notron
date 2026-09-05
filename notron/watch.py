@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from . import conversation, filer, graph, mentions, notes, workspace
+from . import conversation, filer, graph, mentions, notes, workspace, policy
 from .applescript import AppleScriptError, NotesBusy
 
 ASK_POLL = 5           # seconds between checks of the Ask note
@@ -78,12 +78,15 @@ class Watcher:
     # --------------------------------------------------------------- answering
 
     def _answer(self, question: str, *, title: str, folder: str, after: int,
-                here: str = "", source: str = "") -> bool:
+                here: str = "", source: str = "", note_id: str | None = None) -> bool:
         self._say(f"\n> [{title}] {question}")
-        state = graph.run(
-            question, brain=self.brain, trigger="notes",
-            reply_to=(title, folder, after), here=here, source=source,
-        )
+        if note_id is None:
+            raise policy.PolicyError('Reply requires the observed note ID.')
+        with policy.explicit_reply(note_id):
+            state = graph.run(
+                question, brain=self.brain, trigger="notes",
+                reply_to=(title, folder, after), here=here, source=source,
+            )
         for line in state.trace:
             self._say(f"  {line}")
         for result in state.results:
@@ -119,6 +122,7 @@ class Watcher:
     # ------------------------------------------------------------- the two jobs
 
     def check_ask(self) -> None:
+        policy.require_ready()
         # A note's id is stable, so look it up once rather than listing the
         # folder every few seconds — each listing is a request Notes must serve.
         if self._ask_id is None:
@@ -126,6 +130,8 @@ class Watcher:
             if not note:
                 return
             self._ask_id = note.id
+        if policy.current().system_notes.get(workspace.ASK) != self._ask_id or not policy.current().can_read(self._ask_id):
+            raise policy.PolicyError('Ask note requires setup or permission recovery.')
         try:
             body = notes.read_body(self._ask_id)
         except NotesBusy:
@@ -147,7 +153,7 @@ class Watcher:
             if not self._settled(key, q.text):
                 continue
             wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
-                                 after=q.after, source=q.text)
+                                 after=q.after, source=q.text, note_id=self._ask_id)
             self._attempted(key, wrote)
             # Only the Ask note moved underneath us; a tag elsewhere is still
             # settling on its own clock and keeps its timer.
@@ -165,10 +171,12 @@ class Watcher:
                 continue
             if not self._settled(key, m.question):
                 continue
+            if not policy.current().readable(notes.Note(m.note_id, m.title, m.folder, m.modified)):
+                continue
             body = notes.read_body(m.note_id)
             from .markup import to_text
             wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                                 here=to_text(body)[:4000], source=m.raw)
+                                 here=to_text(body)[:4000], source=m.raw, note_id=m.note_id)
             self._attempted(key, wrote)
             self._pending.pop(key, None)
             return
@@ -182,11 +190,14 @@ class Watcher:
         on a yes) do not count, so a dump that is only waiting on the user
         never wakes the model.
         """
+        policy.require_ready()
         if self._dump_id is None:
             note = notes.find_note(workspace.FOLDER, workspace.DUMP)
             if not note:
                 return
             self._dump_id = note.id
+        if policy.current().system_notes.get(workspace.DUMP) != self._dump_id or not policy.current().can_read(self._dump_id):
+            raise policy.PolicyError('Brain Dump requires setup or permission recovery.')
         try:
             body = notes.read_body(self._dump_id)
         except NotesBusy:

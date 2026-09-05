@@ -47,7 +47,7 @@ class Signal:
 
 
 def _note_text(title: str) -> str:
-    n = notes.find_note(workspace.FOLDER, title)
+    n = workspace.readable_system_note(title)
     return markup.to_text(notes.read_body(n.id)) if n else ""
 
 
@@ -73,7 +73,7 @@ def check() -> list[Signal]:
     out: list[Signal] = []
 
     # 1. The instruction note. She re-reads it on every run, so its size is a tax.
-    about_note = notes.find_note(workspace.FOLDER, workspace.ABOUT)
+    about_note = workspace.readable_system_note(workspace.ABOUT)
     about = markup.to_text(notes.read_body(about_note.id)) if about_note else ""
     n = len(about)
     if about_note is None:
