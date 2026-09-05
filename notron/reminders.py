@@ -172,3 +172,39 @@ def find_open(phrase: str, *, caller=None) -> Reminder | None:
     words = [w for w in needle.split() if len(w) > 2]
     hits = [r for r in items if words and all(w in r.title.lower() for w in words)]
     return min(hits, key=lambda r: len(r.title)) if hits else None
+
+
+_FIND_OPERATION = """
+var store = $.EKEventStore.alloc.init;
+var pred = store.predicateForRemindersInCalendars($());
+var out = null;
+store.fetchRemindersMatchingPredicateCompletion(pred, function(arr) {
+  var ids = [];
+  for (var i = 0; i < arr.count; i++) {
+    var r = arr.objectAtIndex(i);
+    var text = r.notes.isNil() ? '' : ObjC.unwrap(r.notes);
+    if (text.split('\\n').indexOf(input.reference) >= 0)
+      ids.push(ObjC.unwrap(r.calendarItemIdentifier));
+  }
+  out = ids;
+});
+awaitDone(function() { return out !== null; }, 15);
+if (out === null) throw new Error('reconciliation unavailable');
+return JSON.stringify(out);
+"""
+
+_COMPLETED = """
+var store = $.EKEventStore.alloc.init;
+var item = store.calendarItemWithIdentifier(input.id);
+return JSON.stringify(!item.isNil() && Boolean(item.completed));
+"""
+
+
+def find_by_operation(operation_id: str, *, caller=None) -> list[str]:
+    """Exact opaque reference, including reminders completed after creation."""
+    from .recovery import reference
+    return (caller or eventkit.run)(_FIND_OPERATION, data={'reference': reference(operation_id)})
+
+
+def is_completed(reminder_id: str, *, caller=None) -> bool:
+    return (caller or eventkit.run)(_COMPLETED, data={'id': reminder_id}) is True

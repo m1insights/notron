@@ -595,7 +595,7 @@ def test_a_note_she_makes_starts_in_shape_with_the_whole_thought(store, monkeypa
     out = filer.run(brain)
 
     assert out.created == ["Recipes"]
-    assert store.text("Recipes") == "Recipes\n\nPasta that worked:\n• tomatoes\n• basil"
+    assert store.text("Recipes").split("\n\nnotron-operation:")[0] == "Recipes\n\nPasta that worked:\n• tomatoes\n• basil"
     d = store.text(workspace.DUMP)
     assert "✓ Pasta that worked: → Recipes\n✓ tomatoes\n✓ basil" in d
     assert "✓ yes → made “Recipes”, 1 filed" in d
@@ -1084,8 +1084,16 @@ def test_proposal_receipts_retain_all_known_contributors(store, answer, removed)
     outcome = filer.run(brain)
     assert bool(outcome.created) == (answer == 'yes')
     marks = _retained_marks(source)
-    assert len(marks) == (2 if answer == 'yes' else 1)
     ledger = operations.current()
+    if answer == 'yes':
+        # Registration now follows both verified marks. Its policy change purges
+        # their payloads immediately; no new-note text is read to compose them.
+        assert marks == []
+        assert '✓ one thought' in store.text(workspace.DUMP)
+        assert '✓ yes' in store.text(workspace.DUMP)
+        assert any(op.target_id == source and op.payload_ref is None for op in ledger.pending())
+    else:
+        assert len(marks) == 1
     assert all(b'Ideas' in ledger.payload(mark.operation_id) for mark in marks)
     destination = next((n.id for n in store.list_all_notes() if n.title == 'Ideas'), None)
     del store.rows[destination if removed == 'destination' else context]

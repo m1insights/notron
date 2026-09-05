@@ -432,20 +432,21 @@ class JobResult:
     message: str = ''
 
 
-def run_job(envelope: RequestEnvelope, job, *, dry_run=False) -> JobResult:
+def _run_job(envelope: RequestEnvelope, job, *, dry_run=False) -> JobResult:
     """Admit a non-graph filing batch. Uncertain jobs require review, never replay."""
-    from . import policy, retention
+    from . import policy, retention, recovery
     policy.require_ready()
     retention.reconcile()
     store = current()
     envelope = store.capture(envelope)
     record = store.get(envelope.request_id)
-    if record.status != 'prepared':
+    resuming = recovery.available(record)
+    if record.status != 'prepared' and not resuming:
         return JobResult(envelope.request_id, record.status,
                          message='This request was already completed or needs review.')
-    if not store.validate_source(envelope):
+    if not resuming and not store.validate_source(envelope):
         return JobResult(envelope.request_id, 'prepared', message='Source changed; waiting for a fresh observation.')
-    if not dry_run and not store.claim(envelope.request_id):
+    if not dry_run and not (recovery.claim(record) if resuming else store.claim(envelope.request_id)):
         return JobResult(envelope.request_id, 'needs_review', message='This request is active or needs review.')
     try:
         with execution(envelope):
@@ -457,3 +458,9 @@ def run_job(envelope: RequestEnvelope, job, *, dry_run=False) -> JobResult:
     if not dry_run:
         store.finish(envelope.request_id, needs_review=any(r.startswith('✗') for r in result.results))
     return JobResult(envelope.request_id, store.get(envelope.request_id).status, result)
+
+
+# Lazy decoration avoids the requests/recovery import cycle.
+def run_job(envelope, job, *, dry_run=False):
+    from .recovery import serialized
+    return serialized(_run_job)(envelope, job, dry_run=dry_run)

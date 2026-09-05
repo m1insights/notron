@@ -88,7 +88,9 @@ def test_model_action_values_are_arguments_never_jxa_source(kind, outbound_trans
     assert argv[:4] == ['osascript', '-l', 'JavaScript', '-']
     assert len(argv) == 5
     data = json.loads(argv[4])
-    assert data['title'] == data['notes'] == HOSTILE
+    from notron.recovery import reference
+    assert data['title'] == HOSTILE
+    assert data['notes'] == HOSTILE + '\n' + reference(state.actions[0].operation_id)
     assert HOSTILE not in kw['input'] and 'synthetic-attack' not in kw['input']
     assert not kw.get('shell', False)
     assert not process_calls

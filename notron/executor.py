@@ -108,11 +108,13 @@ class Executor:
         return self.apply_write(replace(capture_write(title, folder=folder, mode='restore'),
                                         markdown=raw_html_body))
 
-    def create_approved(self, title, body_markdown, *, folder, source_checks=(), content_sources=()):
+    def create_approved(self, title, body_markdown, *, folder, source_checks=(), content_sources=(), operation_id=None):
         # Creation is a distinct explicit operation, never a title-selected append.
-        return self._execute(Write(title=title, folder=folder, markdown=body_markdown,
-                                   mode='append', source_checks=list(source_checks),
-                                   content_sources=list(content_sources)), creation=True)
+        write = Write(title=title, folder=folder, markdown=body_markdown,
+                      mode='append', source_checks=list(source_checks), content_sources=list(content_sources))
+        if operation_id:
+            write.operation_id = operation_id
+        return self._execute(write, creation=True)
 
     def _permitted(self, note, mode, rewrite_allowed=False):
         snap = policy.current()
@@ -178,15 +180,15 @@ class Executor:
         retention.require_ready()
         with write_transaction():
             result = self._locked_write(write, creation=creation)
-            if result.ok and result.reason == 'written':
+            if result.ok:
                 # A failed audit never turns a verified primary effect into failure.
-                self._log(f'{write.mode} on *{write.title}*', content_sources=self._content_sources(write))
+                self._log('Notes operation verified', operation_id=write.operation_id)
             elif not result.ok:
                 self._log('**BLOCKED / NEEDS REVIEW** Notes write was not verified')
             return result
 
     def _locked_write(self, write: Write, *, creation=False) -> WriteResult:
-        from . import operations, requests
+        from . import operations, requests, recovery
         folder = write.folder or workspace.FOLDER
         def result(ok, reason, *, observed=None, alternative=None, note_id=None):
             return WriteResult(ok, reason, note_id or write.note_id,
@@ -202,9 +204,46 @@ class Executor:
                 return (policy.current().status == 'ready' and folder != workspace.FOLDER
                         and not notes.find_note(folder, write.title))
             return self._permitted(current_note, write.mode, write.rewrite_allowed)
-        if not permitted(note):
+        if not creation and not permitted(note):
             return result(False, 'note missing or note policy denied access')
         content_sources = self._content_sources(write)
+        if not self.dry_run:
+            store = operations.current()
+            prior = store.get(write.operation_id)
+            if prior and prior.status != operations.S.PREPARED:
+                envelope = requests.active_request()
+                payload = json.dumps({'write': asdict(write), 'creation': creation},
+                                     sort_keys=True, ensure_ascii=False).encode()
+                expected_request = envelope.request_id if envelope else 'write:' + write.operation_id
+                if (prior.request_id != expected_request or prior.payload_hash != sha256(payload).hexdigest()
+                        or prior.content_source_ids != content_sources):
+                    raise operations.OperationConflict('Operation identity already belongs to different work.')
+                if not prior.payload_ref or not self._content_readable(prior.content_source_ids or ()):
+                    return result(False, 'operation content unavailable; review required')
+                if prior.status in (operations.S.APPLIED, operations.S.RECEIPTED):
+                    return result(True, 'already applied; no write repeated', observed=prior.observed_revision, note_id=prior.external_id)
+                if prior.status == operations.S.APPLYING or (prior.status == operations.S.NEEDS_REVIEW and
+                                                             prior.failure_code == 'unknown_outcome'):
+                    evidence = recovery.get(write.operation_id + ':evidence')
+                    if creation and evidence:
+                        # Local verification of this explicitly approved creation:
+                        # title alone never establishes identity; the full body hash
+                        # includes an opaque reference unique to this operation.
+                        matches = [n for n in notes.list_notes(folder) if n.title == write.title
+                                   and revision(notes.read_body(n.id)) == evidence['revision']]
+                        note = matches[0] if len(matches) == 1 else None
+                    if note and evidence and revision(notes.read_body(note.id)) == evidence['revision']:
+                        store.transition(write.operation_id, prior.status, operations.S.APPLIED,
+                                         external_id=note.id, observed_revision=evidence['revision'])
+                        return result(True, 'reconciled; no write repeated', observed=evidence['revision'], note_id=note.id)
+                    if prior.status == operations.S.APPLYING:
+                        store.transition(write.operation_id, prior.status, operations.S.NEEDS_REVIEW,
+                                         failure_code='post_write_divergence')
+                    else:
+                        store.record_inconclusive_review(write.operation_id)
+                return result(False, 'operation requires review; no write repeated', observed=prior.observed_revision)
+        if creation and not permitted(note):
+            return result(False, 'creation target exists or policy denied access')
         if not self._content_readable(content_sources) or not self._sources_current(write):
             return result(False, 'source missing, changed or ambiguous; nothing copied')
         old = notes.read_body(note.id) if note else ''
@@ -223,7 +262,7 @@ class Executor:
                                source_id=(write.source_checks[0][0] if write.source_checks else
                                           envelope.note_id if envelope else write.note_id),
                                target_id=write.note_id, expected_revision=write.expected_revision,
-                               content_source_ids=content_sources)
+                               content_source_ids=content_sources, require_active_request=bool(envelope))
             if op.status in (operations.S.APPLIED, operations.S.RECEIPTED):
                 return result(True, 'already applied; no write repeated', observed=op.observed_revision)
             if op.status != operations.S.PREPARED:
@@ -248,6 +287,8 @@ class Executor:
                     notedoc.locate_unique(old, write.anchor, near=0) is None):
                 return refuse('the note changed; append anchor or layout cannot be safely rebased')
             new = (old if note else markup.render(write.title, '')) + markup.to_html(write.markdown)
+            if creation:
+                new += markup.to_html(recovery.reference(write.operation_id))
         elif write.mode == 'insert':
             at = notedoc.locate_unique(old, write.anchor, near=write.after or 0, unchanged=unchanged)
             if at is None:
@@ -278,6 +319,9 @@ class Executor:
         # Commit APPLYING before the external effect, then make final checks.
         if store.get(write.operation_id).status != operations.S.PREPARED:
             return result(False, 'note policy changed during preparation; nothing written')
+        recovery.put(op.request_id, write.operation_id + ':evidence',
+                     {'revision': revision(new)}, content_sources)
+        recovery.boundary('before_applying', write.operation_id)
         store.transition(write.operation_id, operations.S.PREPARED, operations.S.APPLYING)
         try:
             current_note = notes.get_note(note.id) if note else None
@@ -314,11 +358,13 @@ class Executor:
                 nid = note.id
             else:
                 nid = notes.create_note(folder, new)
+            recovery.boundary('after_external_save', write.operation_id)
             observed = revision(notes.read_body(nid))
             if observed != revision(new):
                 store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
                                  external_id=nid, failure_code='post_write_divergence', observed_revision=observed)
                 return result(False, 'post-write divergence; outcome needs review', observed=observed, note_id=nid)
+            recovery.boundary('before_external_id', write.operation_id)
             store.transition(write.operation_id, operations.S.APPLYING, operations.S.APPLIED,
                              external_id=nid, observed_revision=observed)
         except Exception:
@@ -331,53 +377,121 @@ class Executor:
             policy.consume_reply()
         return result(True, 'written', observed=observed, note_id=nid)
 
-    def do(self, action, *, about: str = "", request: str = "") -> WriteResult:
-        """Apply one thing outside Notes. Still no model anywhere in this path."""
+    def do(self, action, *, about: str = "", request: str = "", content_sources=()) -> WriteResult:
+        """Commit intent before EventKit; reconcile uncertain saves without replay."""
+        from . import operations, requests, recovery, retention
         if policy.current().status != 'ready':
             return WriteResult(False, 'note policy not ready; actions paused')
-        from . import retention
         retention.require_ready()
-        verdict = guard.check_action(action, about=about, request=request)
-        if not verdict:
-            self._log(f"**BLOCKED** {action.op} {action.kind} *{action.title}* — {verdict.reason}")
-            return WriteResult(False, verdict.reason)
+        with write_transaction():
+            store = operations.current()
+            oid = action.operation_id
+            prior = store.get(oid)
+            if prior:
+                if not prior.payload_ref or not self._content_readable(prior.content_source_ids or ()):
+                    return WriteResult(False, 'action content unavailable; review required', operation_id=oid)
+                persisted = recovery.get(oid)
+                from .state import Action
+                saved = Action(**persisted['action'])
+                envelope = requests.active_request()
+                expected_request = envelope.request_id if envelope else 'action:' + oid
+                incoming = replace(action, target_id=saved.target_id) if action.target_id is None else action
+                incoming_sources = set(content_sources)
+                if envelope and envelope.note_id:
+                    incoming_sources.add(envelope.note_id)
+                if (prior.request_id != expected_request or asdict(incoming) != asdict(saved)
+                        or tuple(sorted(incoming_sources)) != prior.content_source_ids):
+                    raise operations.OperationConflict('Action identity already belongs to different work.')
+                action = saved
+                if prior.status in (operations.S.APPLIED, operations.S.RECEIPTED):
+                    self._log('Action verified', operation_id=oid)
+                    return WriteResult(True, self._said(action).strip(' —') or 'done',
+                                       ref=prior.external_id, operation_id=oid)
+                if prior.status == operations.S.APPLYING:
+                    return self._reconcile_action(action, prior)
+                if prior.status != operations.S.PREPARED:
+                    return WriteResult(False, 'action outcome needs review', operation_id=oid)
+            verdict = guard.check_action(action, about=about, request=request)
+            if not verdict:
+                self._log('**BLOCKED** action was refused')
+                return WriteResult(False, verdict.reason, operation_id=oid)
+            if self.dry_run:
+                return WriteResult(True, 'dry run — nothing created')
+            envelope = requests.active_request()
+            sources = set(content_sources)
+            if envelope and envelope.note_id:
+                sources.add(envelope.note_id)
+            if not self._content_readable(tuple(sources)):
+                return WriteResult(False, 'source permission changed; action paused')
+            if action.op == 'complete' and not action.target_id:
+                hit = reminders.find_open(action.title)
+                if hit is None:
+                    return WriteResult(False, "couldn't find an open reminder with that title")
+                action = replace(action, target_id=hit.id)
+            if not prior:
+                prior = recovery.put(envelope.request_id if envelope else 'action:' + oid, oid,
+                                     {'action': asdict(action)}, sources)
+            if envelope and not requests.current().validate_source(envelope):
+                store.transition(oid, operations.S.PREPARED, operations.S.NEEDS_REVIEW,
+                                 failure_code='source_changed')
+                return WriteResult(False, 'source changed before action; review required', operation_id=oid)
+            recovery.boundary('before_applying', oid)
+            store.transition(oid, operations.S.PREPARED, operations.S.APPLYING)
+            if not self._content_readable(prior.content_source_ids or ()) or store.get(oid).status != operations.S.APPLYING:
+                return WriteResult(False, 'source permission changed; action paused')
+            try:
+                ref, detail = self._perform(action)
+                recovery.boundary('after_external_save', oid)
+                recovery.boundary('before_external_id', oid)
+                store.transition(oid, operations.S.APPLYING, operations.S.APPLIED, external_id=ref)
+            except Exception:
+                # Leave APPLYING: a later exact adapter read may establish the ID.
+                return WriteResult(False, 'action outcome uncertain; recovery pending', operation_id=oid)
+            self._log('Action verified', operation_id=oid)
+            return WriteResult(True, detail.strip(' —') or 'done', ref=ref, operation_id=oid)
 
-        if self.dry_run:
-            return WriteResult(True, "dry run — nothing created")
-
+    def _reconcile_action(self, action, op):
+        from . import operations
+        store = operations.current()
         try:
-            ref, detail = self._perform(action)
-        except LookupError as e:
-            self._log(f"**BLOCKED** {action.op} {action.kind} *{action.title}* — {e}")
-            return WriteResult(False, str(e))
-        except Exception as e:
-            # An app that is not approved yet hangs rather than failing, so a real
-            # exception here is worth saying out loud instead of swallowing.
-            self._log(f"**FAILED** {action.op} {action.kind} *{action.title}* — {type(e).__name__}: {e}")
-            return WriteResult(False, f"{action.kind} app said no ({type(e).__name__})")
-
-        self._log(f"{action.op} {action.kind} *{action.title}*{detail}")
-        return WriteResult(True, detail.strip(" —") or "done", ref=ref)
+            if action.op == 'complete':
+                matches = [action.target_id] if reminders.is_completed(action.target_id) else []
+            else:
+                adapter = reminders if action.kind == 'reminder' else calendar
+                matches = adapter.find_by_operation(action.operation_id)
+        except Exception:
+            matches = []
+        if len(matches) == 1 and matches[0]:
+            store.transition(op.operation_id, operations.S.APPLYING, operations.S.APPLIED,
+                             external_id=matches[0])
+            self._log('Action verified', operation_id=op.operation_id)
+            return WriteResult(True, self._said(action).strip(' —') or 'done', ref=matches[0],
+                               operation_id=op.operation_id)
+        store.transition(op.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
+                         failure_code='unknown_outcome')
+        return WriteResult(False, 'action outcome needs review; no save repeated', operation_id=op.operation_id)
 
     def _perform(self, action) -> tuple[str, str]:
         if action.kind == "reminder" and action.op == "create":
-            ref = reminders.create(action.title, notes=action.notes,
+            ref = reminders.create(action.title, notes=self._action_notes(action),
                                    list_name=action.where, when_iso=action.when)
             return ref, self._said(action)
 
         if action.kind == "reminder" and action.op == "complete":
-            hit = reminders.find_open(action.title)
-            if hit is None:
-                raise LookupError(f"couldn't find an open reminder called {action.title!r}")
-            reminders.complete(hit.id)
-            return hit.id, f" — ticked off “{hit.title}”"
+            reminders.complete(action.target_id)
+            return action.target_id, f" — ticked off “{action.title}”"
 
         if action.kind == "event" and action.op == "create":
             ref = calendar.create(action.title, start_iso=action.when, end_iso=action.ends,
-                                  calendar_name=action.where, notes=action.notes)
+                                  calendar_name=action.where, notes=self._action_notes(action))
             return ref, self._said(action)
 
         raise ValueError(f"nothing to do for {action.kind}/{action.op}")
+
+    @staticmethod
+    def _action_notes(action):
+        from .recovery import reference
+        return action.notes.rstrip() + '\n' + reference(action.operation_id)
 
     @staticmethod
     def _said(action) -> str:
@@ -386,14 +500,12 @@ class Executor:
         moment = when_mod.parse(action.when)
         return f" — {when_mod.human(moment)}" if moment else ""
 
-    def _log(self, line: str, *, content_sources=()) -> None:
+    def _log(self, line: str, *, content_sources=(), operation_id=None) -> None:
         if not self.audit or self.dry_run:
             return
         try:
-            # The same lock/revision/post-read path, with recursion disabled.
-            target = capture_write(workspace.LOG, mode='append')
-            if target.note_id:
-                Executor(audit=False).apply_write(replace(target, content_sources=list(content_sources), markdown=
-                    f"{datetime.now():%Y-%m-%d %H:%M} — {line}"))
+            from . import audit
+            audit.enqueue(line, operation_id=operation_id)
+            audit.drain(limit=1)
         except Exception:
-            pass  # durable primary success stands; audit recovery belongs to Task 3
+            pass  # Primary APPLIED state never depends on an audit adapter.

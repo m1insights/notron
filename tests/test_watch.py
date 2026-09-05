@@ -54,11 +54,17 @@ def test_the_listener_survives_notes_going_away(monkeypatch):
     w = watch.Watcher(brain=None)
     calls = []
 
+    class StopListener(BaseException):
+        pass
+
     def boom():
+        if len(calls) >= 2:
+            raise StopListener()
         calls.append(1)
         raise TimeoutError("osascript timed out")
 
     w.check_ask = boom
+    w.recover_pending = lambda: False
     w.scanner.prime = lambda: 0
     monkeypatch.setattr(watch.notes, "warm_up", lambda: 0.0)
     w.scanner.primed = False
@@ -66,9 +72,15 @@ def test_the_listener_survives_notes_going_away(monkeypatch):
     w.on_event = lambda m: None
 
     import threading
-    t = threading.Thread(target=w.run_forever, daemon=True)
+    def run():
+        try:
+            w.run_forever()
+        except StopListener:
+            pass
+    t = threading.Thread(target=run, daemon=True)
     t.start()
-    time.sleep(0.3)
+    t.join(timeout=3)
+    assert not t.is_alive()
     assert len(calls) > 1, "loop stopped after the first failure"
 
 

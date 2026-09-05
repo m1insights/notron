@@ -91,7 +91,7 @@ class Watcher:
             self._say(f"  {line}")
         for result in state.results:
             self._say(f"  {result}")
-        wrote = any(r.startswith("✓") for r in state.results)
+        wrote = state.receipt_complete
         if not wrote:
             self._say("  nothing was written — she will read this again")
         self._say(f"\n{state.answer}\n")
@@ -152,7 +152,8 @@ class Watcher:
                                   title=workspace.ASK, folder=workspace.FOLDER)
         for q, envelope in zip(asks, envelopes):
             record = store.get(envelope.request_id)
-            if record.status != 'prepared':
+            from . import recovery
+            if record.status != 'prepared' and not recovery.available(record):
                 if record.status in {'running', 'needs_review'}:
                     self._say('  request needs review before it can run again')
                 continue
@@ -196,7 +197,8 @@ class Watcher:
             if m.envelope is None:
                 continue
             record = requests.current().get(m.envelope.request_id)
-            if record.status != 'prepared':
+            from . import recovery
+            if record.status != 'prepared' and not recovery.available(record):
                 if record.status in {'running', 'needs_review'}:
                     self._say('  request needs review before it can run again')
                 continue
@@ -255,7 +257,9 @@ class Watcher:
             self._pending.pop("dump", None)
             return
         envelope = envelopes[0]
-        if store.get(envelope.request_id).status != 'prepared':
+        from . import recovery
+        record = store.get(envelope.request_id)
+        if record.status != 'prepared' and not recovery.available(record):
             self._say('  filing batch already completed or needs review')
             return
         if not self._settled("dump", fingerprint, settle=self.dump_settle):
@@ -270,6 +274,38 @@ class Watcher:
             self._say(f"  {result}")
         self._say(f"\n{out.summary()}\n")
         self._pending.pop("dump", None)
+
+    def recover_pending(self) -> bool:
+        """Repair one persisted request, including one hidden by its own receipt."""
+        from contextlib import nullcontext
+        from . import recovery, operations
+        for record in requests.current().pending():
+            if not recovery.available(record):
+                continue
+            envelope = record.envelope
+            key = 'recover:' + envelope.request_id
+            if not self._worth_trying(key):
+                continue
+            if envelope.note_id:
+                note = notes.get_note(envelope.note_id)
+                if not note or not policy.current().readable(note):
+                    continue
+            graph_plan = any(op.request_id == envelope.request_id and ':checkpoint:' in op.operation_id
+                             for op in operations.current().pending())
+            # This is the watcher's scoped delivery authority for an already
+            # admitted Ask/tag occurrence, never a capability in cached model data.
+            scope = (policy.explicit_reply(envelope.note_id)
+                     if envelope.note_id and envelope.source in {'ask', 'mention'} else nullcontext())
+            with scope:
+                if graph_plan:
+                    state = graph.run_request(envelope, brain=self.brain)
+                    complete = state.receipt_complete
+                else:
+                    result = requests.run_job(envelope, lambda: filer.run(self.brain))
+                    complete = result.status == 'completed'
+            self._attempted(key, complete)
+            return True
+        return False
 
     # ------------------------------------------------------------------- loop
 
@@ -295,6 +331,9 @@ class Watcher:
         while True:
             time.sleep(self.ask_poll)
             try:
+                from . import audit
+                audit.drain()
+                self.recover_pending()
                 self.check_ask()
                 if self.scanner.primed and time.time() - last_sweep >= self.sweep_every:
                     last_sweep = time.time()

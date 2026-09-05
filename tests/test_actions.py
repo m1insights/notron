@@ -149,7 +149,7 @@ def test_a_blocked_action_is_logged_and_never_reaches_the_app(monkeypatch):
     from notron import executor as ex_mod
 
     logged, created = [], []
-    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: logged.append(line))
+    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line, **kw: logged.append(line))
     monkeypatch.setattr(ex_mod.reminders, "create",
                         lambda *a, **kw: created.append(a) or "x")
 
@@ -163,7 +163,7 @@ def test_an_allowed_reminder_reaches_the_app_and_is_logged(monkeypatch):
     from notron import executor as ex_mod
 
     logged, created = [], []
-    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: logged.append(line))
+    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line, **kw: logged.append(line))
     monkeypatch.setattr(ex_mod.reminders, "create",
                         lambda title, **kw: created.append(title) or "x-7")
 
@@ -190,7 +190,7 @@ def test_completing_looks_the_reminder_up_by_what_the_user_called_it(monkeypatch
     from notron import executor as ex_mod
     from notron.reminders import Reminder
 
-    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: None)
+    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line, **kw: None)
     monkeypatch.setattr(ex_mod.reminders, "find_open",
                         lambda phrase, **kw: Reminder(id="x-3", title="Call the pharmacy",
                                                        list_name="Inbox", due=""))
@@ -205,7 +205,7 @@ def test_completing_looks_the_reminder_up_by_what_the_user_called_it(monkeypatch
 def test_ticking_off_something_that_isnt_there_says_so(monkeypatch):
     from notron import executor as ex_mod
 
-    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line: None)
+    monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line, **kw: None)
     monkeypatch.setattr(ex_mod.reminders, "find_open", lambda phrase, **kw: None)
     r = ex_mod.Executor().do(Action(kind="reminder", op="complete", title="feed the cat"), about="")
     assert not r.ok and "couldn't find" in r.reason.lower()

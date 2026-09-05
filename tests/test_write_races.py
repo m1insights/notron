@@ -702,7 +702,7 @@ def test_writer_context_provenance_is_retained_and_revocable(fake_note_store):
     assert operations.current().payload(operation_id) is None
 
 
-def test_success_audit_payload_tracks_note_derived_title(fake_note_store, make_write):
+def test_success_audit_payload_omits_note_derived_title(fake_note_store, make_write):
     from notron import operations, retention
     target = fake_note_store.add('Source title', '<div>original</div>')
     log = fake_note_store.add(workspace.LOG, '<div>Log</div>', workspace.FOLDER)
@@ -710,7 +710,8 @@ def test_success_audit_payload_tracks_note_derived_title(fake_note_store, make_w
     assert executor.Executor().apply_write(make_write(note_id=target)).ok
     ledger = operations.current()
     audit = next(op for op in ledger.pending() if op.target_id == log)
-    assert b'Source title' in ledger.payload(audit.operation_id)
+    assert b'Source title' not in ledger.payload(audit.operation_id)
+    assert target not in audit.content_source_ids
     del fake_note_store.rows[target]
     retention.reconcile()
-    assert ledger.payload(audit.operation_id) is None
+    assert ledger.payload(audit.operation_id) is not None

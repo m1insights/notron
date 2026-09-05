@@ -444,6 +444,10 @@ def _save(data: dict, *, dry_run: bool) -> None:
     if len(judged) > MAX_JUDGED:
         for key in list(judged)[: len(judged) - MAX_JUDGED]:
             judged.pop(key, None)
+    from . import requests
+    envelope = requests.active_request()
+    if envelope and requests.current().get(envelope.request_id).envelope is None:
+        return  # Registration/revocation purged this content; never repopulate it.
     from .securestore import write_json
     write_json(STATE, data)
 
@@ -554,16 +558,26 @@ def _source_key(it: Item) -> tuple:
 def _tick(ex, by_note: dict[tuple, list[tuple[str, int, str]]], out: Outcome, *,
           content_sources: list[str]) -> None:
     from .state import Write
+    from . import requests, recovery
+    from hashlib import sha256
+    import json
+    envelope = requests.active_request()
     for (note_id, folder, title, expected), marks in by_note.items():
-        r = ex.apply_write(Write(title=title, folder=folder, note_id=note_id,
-                                 expected_revision=expected, mode='mark', marks=marks, markdown='',
-                                 content_sources=content_sources))
+        write = Write(title=title, folder=folder, note_id=note_id,
+                      expected_revision=expected, mode='mark', marks=marks, markdown='',
+                      content_sources=content_sources)
+        if envelope:
+            write.operation_id = envelope.request_id + ':source_receipt:' + sha256(json.dumps([note_id, marks], sort_keys=True).encode()).hexdigest()[:16]
+        recovery.boundary('before_receipt', write.operation_id)
+        r = ex.apply_write(write)
+        if r.ok:
+            recovery.boundary('after_receipt', write.operation_id)
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
         if r.ok:
             out.ticked.add((folder, title))
 
 
-def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
+def _prepare_file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
           extra_marks: dict[tuple, list[tuple[str, int, str]]] | None = None,
           on_step=None) -> None:
     """The shared core: judge, copy, tick, propose."""
@@ -577,7 +591,13 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     candidates = masters(exclude={workspace.DUMP})
     known = {m.title: m for m in candidates}
     content_sources = sorted({m.note_id for m in candidates if m.note_id} |
-                             {it.note_id for it in items if it.note_id})
+                             {it.note_id for lead in items for it in (lead, *lead.parts) if it.note_id})
+    for prior in state['judged'].values():
+        if prior.get('note_id'):
+            content_sources.append(prior['note_id'])
+    for prior in state['proposals'].values():
+        content_sources.extend(prior.get('content_sources', []))
+    content_sources = sorted(set(content_sources))
     targets, bodies = {}, {}
     for master in candidates:
         note = notes.get_note(master.note_id) if master.note_id else None
@@ -591,6 +611,8 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
             from .state import Write
             targets[master.title] = Write(title=master.title, folder=master.folder, markdown='', mode='append')
     dump_target = capture_write(workspace.DUMP, mode='append')
+    if dump_target.note_id:
+        content_sources = sorted(set(content_sources) | {dump_target.note_id})
 
     # 1. Verdicts — from memory where she already judged this exact line.
     #    A remembered part rejoins its lead if the lead is still here, in the
@@ -640,6 +662,47 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     parts_of = _flatten_parts(items, parts_of, judged)
     items = _fold(items, parts_of)
 
+    from dataclasses import asdict
+    return {'items': [it.as_dict() for it in items], 'state': state,
+            'targets': {title: asdict(w) for title, w in targets.items()}, 'bodies': bodies,
+            'candidates': [asdict(m) for m in candidates], 'content_sources': content_sources,
+            'verdicts': {str(i): v for i, v in verdicts.items()}, 'said_shapes': said_shapes,
+            'extra_marks': [[list(k), v] for k, v in (extra_marks or {}).items()],
+            'dump_target': asdict(dump_target),
+            'left': [[it.as_dict(), reason] for it, reason in out.left]}
+
+
+def _file(ex, brain, items, state, out, *, extra_marks=None, on_step=None):
+    from . import requests, recovery
+    from .state import Write
+    envelope = requests.active_request()
+    plan_id = envelope.request_id + ':filing_plan' if envelope else None
+    plan = recovery.get(plan_id) if plan_id and not ex.dry_run else None
+    if plan is None:
+        plan = _prepare_file(ex, brain, items, state, out, extra_marks=extra_marks, on_step=on_step)
+        if plan_id and not ex.dry_run:
+            recovery.put(envelope.request_id, plan_id, plan, plan['content_sources'])
+    else:
+        state.clear()
+        state.update(plan['state'])
+        out.left = [(Item.from_dict(it), reason) for it, reason in plan['left']]
+    items = [Item.from_dict(it) for it in plan['items']]
+    targets = {title: Write(**w) for title, w in plan['targets'].items()}
+    if plan_id:
+        for i, w in enumerate(targets.values()):
+            w.operation_id = envelope.request_id + ':copy:' + str(i)
+    bodies = plan['bodies']
+    known = {m['title']: Master(**m) for m in plan['candidates']}
+    content_sources = plan['content_sources']
+    verdicts = {int(i): v for i, v in plan['verdicts'].items()}
+    said_shapes = plan['said_shapes']
+    extra_marks = {tuple(k): v for k, v in plan['extra_marks']}
+    judged, proposals = state['judged'], state['proposals']
+    pending_titles = {t.casefold(): t for t in proposals}
+    from .executor import capture_write
+    dump_target = Write(**plan['dump_target'])
+    if envelope:
+        dump_target.operation_id = envelope.request_id + ':proposal'
     # 2. Copy into existing notes, then tick — only what actually landed.
     by_master: dict[str, list[int]] = {}
     for i, (kind, title) in verdicts.items():
@@ -653,6 +716,14 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         shape = _shape_for(title, said_shapes, state)
         checks = [(it.note_id, it.expected_revision, it.anchor, it.near)
                   for lead in group for it in (lead, *lead.parts)]
+        from . import operations
+        from .executor import revision
+        prior = operations.current().get(targets[title].operation_id) if not ex.dry_run else None
+        if prior and prior.status in (operations.S.APPLIED, operations.S.RECEIPTED) and (
+                not notes.get_note(master.note_id) or
+                revision(notes.read_body(master.note_id)) != prior.observed_revision):
+            out.results.append('✗ filing copy identity changed; review required')
+            return
         r = ex.apply_write(replace(targets[title], source_checks=checks, content_sources=content_sources,
                                   rebase_append=shape != layout.LOG, markdown=
             _entry_markdown(group, shape=shape, existing=bodies.get(title, ""))))
@@ -720,7 +791,23 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
     """Handle yes/no lines typed under a proposal. Returns the items that were
     not answers — the actual thoughts still to file."""
     say = on_step or (lambda m: None)
+    from . import requests, recovery
+    from hashlib import sha256
+    envelope = requests.active_request()
+    plan_id = envelope.request_id + ':approval_plan' if envelope else None
+    plan = recovery.get(plan_id) if plan_id and not ex.dry_run else None
+    if plan:
+        items = [Item.from_dict(it) for it in plan['items']]
+        state.clear()
+        state.update(plan['state'])
     items = _bind_items(items)
+    if plan_id and not plan and not ex.dry_run and state['proposals']:
+        sources = {it.note_id for lead in items for it in (lead, *lead.parts) if it.note_id}
+        for proposal in state['proposals'].values():
+            sources.update(proposal.get('content_sources', []))
+        recovery.put(envelope.request_id, plan_id,
+                     {'items': [it.as_dict() for it in items], 'state': state}, sources)
+    new_homes = []
     proposals: dict = state["proposals"]
     judged: dict = state["judged"]
     rest: list[Item] = []
@@ -771,7 +858,9 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                       for lead in (*waiting, it) for source in (lead, *lead.parts)]
             r = ex.create_approved(title, _entry_markdown(waiting, shape=shape),
                                    folder=FILING_FOLDER, source_checks=checks,
-                                   content_sources=record["content_sources"])
+                                   content_sources=record["content_sources"],
+                                   operation_id=(envelope.request_id + ':create_copy:' +
+                                       sha256((title + it.digest()).encode()).hexdigest()[:16]) if envelope else None)
             out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
             if not r.ok:
                 proposals[title] = record            # keep the question open
@@ -779,10 +868,12 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 continue
             out.created.append(title)
             if r.note_id:
-                from . import library
-                library.add_home(r.note_id)
-                proposal_sources.add(r.note_id)
-                receipt_sources.add(r.note_id)
+                from .executor import revision
+                if revision(notes.read_body(r.note_id)) != r.observed_revision:
+                    out.results.append('✗ created copy changed; review required')
+                    proposals[title] = record
+                    continue
+                new_homes.append(r.note_id)
             marks: dict[tuple, list[tuple[str, int, str]]] = {}
             for w in waiting:
                 out.filed.append((w, title))
@@ -795,6 +886,10 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
         if receipts:
             _tick(ex, {_source_key(it): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out,
                   content_sources=sorted(receipt_sources))
+    if new_homes and not any(r.startswith('✗') for r in out.results) and not ex.dry_run:
+        from . import library
+        for nid in new_homes:
+            library.add_home(nid)
     return [it for it in rest if it.digest() not in landed]
 
 
@@ -816,6 +911,18 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> Outcome:
     if policy.current().system_notes.get(workspace.DUMP) != dump.id or not policy.current().readable(dump):
         raise policy.PolicyError('Brain Dump requires setup or permission recovery.')
     items = unfiled(notes.read_body(dump.id), note_id=dump.id, modified=dump.modified)
+    from . import recovery, requests
+    envelope = requests.active_request()
+    approval = envelope and recovery.get(envelope.request_id + ':approval_plan') if not dry_run else None
+    if approval:
+        items = [Item.from_dict(it) for it in approval['items']]
+    cached = envelope and recovery.get(envelope.request_id + ':filing_plan') if not dry_run else None
+    if cached:
+        ex = Executor(dry_run=dry_run)
+        state = _state()
+        _file(ex, brain, [], state, out, on_step=say)
+        _save(state, dry_run=dry_run)
+        return out
     if not items:
         say("nothing unfiled")
         return out

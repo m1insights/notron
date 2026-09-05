@@ -50,6 +50,7 @@ class Action:
     where: str = ""                  # list name / calendar name
     notes: str = ""
     target_id: str | None = None     # set by the doer for "complete"
+    operation_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 @dataclass
@@ -80,6 +81,7 @@ class State:
     answer: str = ""
     writes: list[Write] = field(default_factory=list)
     results: list[str] = field(default_factory=list)
+    receipt_complete: bool = False
     trace: list[str] = field(default_factory=list)
 
     def note(self, node: str, detail: str = "") -> None:

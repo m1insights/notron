@@ -333,8 +333,12 @@ def doer(state: State, *, brain=None, dry_run: bool = False) -> State:
         return state
     ex = Executor(dry_run=dry_run)
     done: list[str] = []
-    for a in state.actions:
-        r = ex.do(a, about=state.about, request=state.request)
+    from . import recovery
+    for index, a in enumerate(state.actions):
+        if state.request_id:
+            a.operation_id = state.request_id + ':action:' + str(index)
+        r = ex.do(a, about=state.about, request=state.request,
+                  content_sources=recovery.state_sources(state))
         state.results.append(f"{'✓' if r.ok else '✗'} {a.kind} — {r.reason}")
         done.append(_confirmation(a, r))
     state.answer = "\n\n".join(done)
@@ -392,6 +396,7 @@ def filer(state: State, *, brain, dry_run: bool = False) -> State:
         out = filing.run(brain, dry_run=dry_run, on_step=lambda m: state.note("filer", m))
         state.answer = out.summary()
         state.writes.append(_reply(state))
+    state.receipt_complete = bool(out.ticked) and not any(r.startswith('✗') for r in out.results)
     state.results.extend(out.results)
     state.note("filer", f"{len(out.filed)} filed, {len(out.proposed)} proposed, "
                         f"{len(out.left)} left, {out.model_calls} model call(s)")
@@ -897,10 +902,16 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
                      [*state.system_sources.values(), *state.context] if passage.note_id}
     if state.source_note_id:
         known_sources.add(state.source_note_id)
+    from . import recovery
+    all_ok = bool(state.writes)
     for w in state.writes:
         # Context supplied to producers is provenance, never a permission grant.
         w.content_sources = sorted(set(w.content_sources) | known_sources)
+        recovery.boundary('before_receipt', w.operation_id)
         r = ex.apply_write(w)
+        all_ok = all_ok and r.ok
+        if r.ok:
+            recovery.boundary('after_receipt', w.operation_id)
         if r.alternative_text:
             state.answer = r.alternative_text + "\n\n" + r.reason
         elif not r.ok:
@@ -909,6 +920,13 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
             if draft:
                 state.answer += "\n\nUnsaved draft:\n" + draft
         state.results.append(f"{'✓' if r.ok else '✗'} {w.title} — {r.reason}")
+    state.receipt_complete = all_ok or state.receipt_complete
+    if all_ok and not dry_run:
+        from . import operations
+        store = operations.current()
+        for op in store.pending():
+            if op.request_id == state.request_id and op.status == operations.S.APPLIED:
+                store.transition(op.operation_id, operations.S.APPLIED, operations.S.RECEIPTED)
     state.note("executor", f"{len(state.writes)} writes")
     return state
 

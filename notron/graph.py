@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from . import nodes
+from . import nodes, recovery
 from .state import State
 
 Node = Callable[..., State]
@@ -92,6 +92,7 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
                        on_node=on_node, trigger=trigger)
 
 
+@recovery.serialized
 def run_request(envelope, *, brain, dry_run: bool = False,
                 on_node: Callable[[str, State], None] | None = None,
                 trigger: str | None = None) -> State:
@@ -100,7 +101,7 @@ def run_request(envelope, *, brain, dry_run: bool = False,
     Existing completed/uncertain requests are never silently replayed. The
     envelope carries provenance, but does not grant an explicit reply capability.
     """
-    from . import policy, retention, requests
+    from . import policy, retention, requests, recovery
     policy.require_ready()
     retention.reconcile()
     store = requests.current()
@@ -111,27 +112,38 @@ def run_request(envelope, *, brain, dry_run: bool = False,
                   source_note_id=envelope.note_id, source_modified=envelope.source_modified,
                   source_revision=envelope.source_revision)
     record = store.get(envelope.request_id)
-    if record.status != 'prepared':
+    resumed = recovery.latest(envelope, ORDER) if recovery.available(record) else None
+    if record.status != 'prepared' and resumed is None:
         state.answer = ('This request was already completed.' if record.status == 'completed'
                         else 'This request needs review before it can run again.')
         state.note('graph', record.status)
         return state
-    if not store.validate_source(envelope):
+    if resumed is None and not store.validate_source(envelope):
         state.answer = 'The source changed. Waiting for a fresh observation before running.'
         state.note('graph', 'source changed before inference')
         return state
-    if not dry_run and not store.claim(envelope.request_id):
+    if not dry_run and not (recovery.claim(record) if resumed else store.claim(envelope.request_id)):
         state.answer = 'This request is already active or needs review.'
         state.note('graph', 'request not claimed')
         return state
+    start = 0
+    if resumed:
+        name, state = resumed
+        start = ORDER.index(name) + 1
     try:
         with requests.execution(envelope):
-            for name in ORDER:
+            for name in ORDER[start:]:
                 fn = NODES[name]
                 if name in ('executor', 'doer', 'filer'):
                     state = fn(state, brain=brain, dry_run=dry_run)
                 else:
                     state = fn(state, brain=brain)
+                if any(r.startswith('✗') for r in state.results):
+                    break
+                if not dry_run:
+                    if not recovery.checkpoint(state, name):
+                        state.results.append('✗ source permission changed; recovery payload not retained')
+                        break
                 if on_node:
                     on_node(name, state)
                 if state.intent == 'ignore' and name == 'router':

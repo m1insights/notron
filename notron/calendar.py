@@ -169,3 +169,34 @@ def create(title: str, *, start_iso: str, end_iso: str | None = None,
     if "error" in out:
         raise eventkit.EventKitError(f"could not create the event: {out['error']}")
     return out["id"]
+
+
+_FIND_OPERATION = """
+var store = $.EKEventStore.alloc.init;
+var f = $.NSDateFormatter.alloc.init;
+f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mm';
+var day = f.dateFromString(input.start);
+var start = day.dateByAddingTimeInterval(-86400);
+var end = day.dateByAddingTimeInterval(86400);
+var pred = store.predicateForEventsWithStartDateEndDateCalendars(start, end, $());
+var events = store.eventsMatchingPredicate(pred);
+var ids = [];
+for (var i = 0; i < events.count; i++) {
+  var e = events.objectAtIndex(i);
+  var text = e.notes.isNil() ? '' : ObjC.unwrap(e.notes);
+  if (text.split('\\n').indexOf(input.reference) >= 0)
+    ids.push(ObjC.unwrap(e.eventIdentifier));
+}
+return JSON.stringify(ids);
+"""
+
+
+def find_by_operation(operation_id: str, *, caller=None) -> list[str]:
+    """Bound reconciliation to the captured event date. A moved event needs review."""
+    from .recovery import get, reference
+    value = get(operation_id)
+    start = parse(value['action']['when']) if value else None
+    if start is None:
+        return []
+    return (caller or eventkit.run)(_FIND_OPERATION, data={
+        'reference': reference(operation_id), 'start': start.strftime('%Y-%m-%dT%H:%M')})

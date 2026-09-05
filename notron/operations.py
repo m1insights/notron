@@ -229,7 +229,8 @@ class OperationStore:
     def prepare(self, request_id: str, operation_id: str, payload_hash: str, *,
                 payload: bytes | None = None, source_id: str | None = None,
                 target_id: str | None = None, expected_revision: str | None = None,
-                content_source_ids: tuple[str, ...] | list[str] | None = None) -> Operation:
+                content_source_ids: tuple[str, ...] | list[str] | None = None,
+                require_active_request: bool = False) -> Operation:
         identity(request_id), identity(operation_id), identity(payload_hash)
         if payload is not None and content_source_ids is None:
             raise ValueError('Payload requires explicit complete content provenance.')
@@ -243,6 +244,10 @@ class OperationStore:
         if payload is not None and sha256(payload).hexdigest() != payload_hash:
             raise OperationConflict('Operation payload does not match its digest.')
         with self.transaction() as db:
+            if require_active_request:
+                parent = db.execute('SELECT status,payload_ref FROM requests WHERE request_id=?', (request_id,)).fetchone()
+                if not parent or parent['status'] != 'running' or not parent['payload_ref']:
+                    raise ValueError('Parent request invalidated; payload must not be recreated.')
             row = db.execute('SELECT * FROM operations WHERE operation_id=?', (operation_id,)).fetchone()
             if row:
                 if (row['request_id'], row['payload_hash'], row['source_id'], row['target_id'], row['expected_revision'], row['content_source_ids']) != (
@@ -280,6 +285,19 @@ class OperationStore:
                        'WHERE operation_id=? AND status=?',
                        (target, now(), external_id, failure_code, observed_revision, operation_id, expected))
             return self._record(db.execute('SELECT * FROM operations WHERE operation_id=?', (operation_id,)).fetchone())
+
+    def record_inconclusive_review(self, operation_id: str) -> None:
+        """An attempted read did not establish a previously uncertain save.
+
+        This refines an existing review reason; it grants no replay or state edge.
+        Later automatic reads must not silently resolve this review decision.
+        """
+        with self.transaction() as db:
+            changed = db.execute("UPDATE operations SET failure_code='post_write_divergence',updated_at=? "
+                                 "WHERE operation_id=? AND status='needs_review' AND failure_code='unknown_outcome'",
+                                 (now(), operation_id)).rowcount
+            if changed != 1:
+                raise OperationConflict('Operation review state changed.')
 
     def prune_payloads(self):
         """Remove orphan ciphertext under the same lock used by payload preparation."""
