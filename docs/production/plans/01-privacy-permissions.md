@@ -146,13 +146,32 @@ def test_private_or_mixed_destinations_are_rejected():
 
 ## Task 5 — Security inventory and release-facing assertions
 
+**Status:** Authorized implementation complete, 2026-09-05. [Security report](../evidence/P01-security-boundaries.md)
+and [session handoff](../handoffs/2026-09-05-P01-task-5.md). **664 passing Python tests**;
+pip-audit **2.10.1** returned zero known advisories across **26** distinct locked
+package/version pairs, none skipped. Native startup stays gated on P06. Private
+reporting route remains an owner decision and public-release blocker, not a completed
+release deliverable. No subsequent task started.
+
+Additional task-owned files: JXA adapters/calendar/reminders, scheduler schema,
+launchd plist serialization, their tests/global subprocess guard, CI workflow,
+audit artifacts, shared design and caller map. No dependencies/models changed.
+
+
 **Files:** Create `SECURITY.md`, `docs/production/evidence/P01-security-boundaries.md`, `tests/test_security_boundaries.py`; Modify `README.md` and inaccurate privacy promises in `CLAUDE.md` only where superseded by verified behavior.
 **Consumes:** Tasks 1–4 evidence.
 **Produces:** Threat model covering malicious content, malicious local software, supply-chain/update compromise, cloud tenant isolation, accidental leakage, and user edit loss; a documented private vulnerability reporting route chosen by the owner before public release.
 
-- [ ] Add CI tests proving model text cannot create arbitrary operations or script source. Audit subprocess invocations for argv-safe construction and no `shell=True` on user inputs.
-- [ ] Document limitations: local compromised user account, imperfect redaction, untrusted model instructions, Apple Notes non-atomic writes and provider retention. Do not advertise sandbox isolation unless implemented and verified.
-- [ ] Run `.venv/bin/python -m pytest tests -q`; collect dependency vulnerability results using a pinned audit tool in a disposable environment. Findings are triaged; merely running a scanner is not approval.
-- [ ] Produce the outbound-path map and security report with actual commands/results; create the handoff and update P01 roadmap status. Commit only P01-owned changes.
+- [x] Add CI tests proving model text cannot create arbitrary operations or script source. Audit subprocess invocations for argv-safe construction and no `shell=True` on user inputs.
+- [x] Document limitations: local compromised user account, imperfect redaction, untrusted model instructions, Apple Notes non-atomic writes and provider retention. Do not advertise sandbox isolation unless implemented and verified.
+- [x] Run `.venv/bin/python -m pytest tests -q`; collect dependency vulnerability results using a pinned audit tool in a disposable environment. Findings are triaged; merely running a scanner is not approval.
+- [x] Produce the outbound-path map and security report with actual commands/results; create the handoff and update P01 roadmap status. Commit only P01-owned changes.
 
 **Exit gate:** No known route sends excluded content; corruption never grants access; secret storage has no plaintext fallback; arbitrary model URL checks are gone. Native signing/permission security remains a P06/P07 gate. No new feature can bypass these boundaries.
+
+
+**Exit evidence:** Tasks 1–5 synthetic privacy/policy/storage/network/security
+regressions and the full suite pass. This supports the P01 local-code exit, not
+native or public-release approval. Private reporting, provider retention, P06
+signed Keychain/startup and P07 independent review remain open. Next: **P02 Task 1 —
+Request envelopes and durable operation state**.
