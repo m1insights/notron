@@ -1,7 +1,7 @@
 # Notron production roadmap
 
-Status: **implementation in progress; P01 Tasks 1–3 complete; native secure-startup gate pending P06**. Updated 2026-09-04.
-Evidence: [P01 Task 3 session handoff](handoffs/2026-09-04-P01-task-3.md), [secure storage evidence](evidence/P01-secure-storage.md) and [outbound caller map](evidence/P01-outbound-map.md).
+Status: **implementation in progress; P01 Tasks 1–4 complete; native secure-startup gate pending P06**. Updated 2026-09-05.
+Evidence: [P01 Task 4 session handoff](handoffs/2026-09-05-P01-task-4.md), [secure storage evidence](evidence/P01-secure-storage.md) and [outbound caller map](evidence/P01-outbound-map.md).
 Audience: the owner and an engineer starting a fresh coding session.
 
 ## Outcome and scope
@@ -16,7 +16,7 @@ Read the [shared design and contracts](design.md) before any plan. Findings are 
 
 | ID | Plan | Prerequisite | Exit deliverable | Status |
 |---|---|---|---|---|
-| P01 | [Privacy and permissions](plans/01-privacy-permissions.md) | Shared design | Private inputs, credentials, permissions and network destinations have enforced boundaries | In progress — Tasks 1–3 complete; Task 4 next; native Keychain gate P06 |
+| P01 | [Privacy and permissions](plans/01-privacy-permissions.md) | Shared design | Private inputs, credentials, permissions and network destinations have enforced boundaries | In progress — Tasks 1–4 complete; Task 5 next; native Keychain gate P06 |
 | P02 | [Reliable execution and recovery](plans/02-reliable-execution.md) | P01 policy APIs | Durable operations, guarded writes, safe retries and stale-request handling | Planned |
 | P03 | [Ask conversation](plans/03-ask-conversation.md) | P01; P02 request contracts | Bounded contextual follow-ups and clarification | Planned |
 | P04 | [Mobile Shortcut feasibility](plans/04-shortcut-prototype.md) | Local experiment can start immediately; hosted test requires P01 and P02 contracts | Real-iPhone evidence and explicit continue/stop decision | Planned |
@@ -125,4 +125,11 @@ This approved roadmap supersedes older product assumptions where they conflict: 
 
 ## Next implementation session
 
-Continue with **P01 Task 3: Sensitive cache migration and retention**. Tasks 1–2 are committed: policy, scoped replies, provenance at all model/search boundaries, and redaction before transport/indexing are verified by 453 passing Python tests. Encryption and retention are not implemented. The P01 exit gate and M1 remain open until their remaining tasks are verified. P04 Task 1 can be scheduled as an independent device experiment when an iPhone is available.
+Continue with **P01 Task 5: Security inventory and release-facing assertions**.
+Tasks 1–4 are complete: local policy/scoped replies, prepared model/search inputs,
+encrypted sensitive storage/migration/retention, constrained provider destinations
+and zero-fetch citation grounding. The final Task 4 Python suite has **624 passing
+tests**. P06 signed Keychain/startup remains unverified and real processing stays
+paused. Task 5, the P01 exit gate and M1 remain open; do not equate synthetic test
+success with native or production readiness. P04 Task 1 can be scheduled as an
+independent device experiment when an iPhone is available.

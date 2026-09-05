@@ -86,7 +86,7 @@ def test_direct_requests_are_filtered_too():
 [verification/handoff](../handoffs/2026-09-04-P01-task-3.md). Full Python suite:
 **489 passed**. Swift helper type-checks; signed/native Keychain and startup
 integration remain explicitly gated on P06. Default real-data processing pauses.
-Task 4 has not started. Additional task-owned integrations cover filing request
+Task 4 is recorded below. Additional Task 3-owned integrations cover filing request
 state, search credentials, startup/executor/fallback gates, cleanup, diagnostics,
 Mac mood path, and explicit offline storage CLI commands.
 
@@ -118,11 +118,18 @@ def test_payload_not_plaintext_and_tampering_fails(tmp_path):
 
 ## Task 4 — Restrict outbound URL validation and provider destinations
 
+**Status:** Complete, 2026-09-05. Implementation commit `5649a71`; [Task 4 handoff](../handoffs/2026-09-05-P01-task-4.md) and
+[complete HTTP map](../evidence/P01-outbound-map.md). Full suite: **624 passed**;
+network/citation/research: **156 passed**; adjacent privacy/policy/storage: **345 passed**.
+Additional task-owned changes cover the shared development credential allowlist,
+Swift name parity (type-check only), test isolation and pinned existing SDK/HTTP
+versions. P06 signed startup remains gated; Task 5 has not started.
+
 **Files:** Create `notron/network.py`, `tests/test_network.py`; Modify `notron/research.py`, `notron/brain.py`, `notron/nodes.py`.
 **Consumes:** Prepared search strings and fixed provider settings.
 **Produces:** `public_https_url(url: str, addresses: list[str]) -> bool`; a provider endpoint validator; no automatic HTTP requests to model-invented citation URLs.
 
-- [ ] Add fixtures for loopback, RFC1918, link-local, IPv6 local/mapped addresses, metadata IPs, URL credentials, redirects and mixed public/private DNS results. Use only fake resolvers/transports.
+- [x] Add fixtures for loopback, RFC1918, link-local, IPv6 local/mapped addresses, metadata IPs, URL credentials, redirects and mixed public/private DNS results. Use only fake resolvers/transports.
 
 ```python
 from notron.network import public_https_url
@@ -133,9 +140,9 @@ def test_private_or_mixed_destinations_are_rejected():
     assert not public_https_url('http://example.org/x', ['93.184.216.34'])
 ```
 
-- [ ] Remove the HEAD request for citations invented by the writer. Keep only URLs present in prepared trusted-source results/user-supplied context; mark unsupported citations unverifiable in the response. A reachable URL never established factual correctness anyway.
-- [ ] Restrict managed inference/search destinations to configured HTTPS service domains; block redirects carrying authorization to a different host. For BYO development endpoint overrides, require an explicit development setting and no production credential fallback. Any remaining generic fetch must enforce address checks at connection time, not resolve-then-fetch vulnerable to DNS rebinding.
-- [ ] Run network/citation/research tests; assert no network calls for untrusted model URLs. Commit.
+- [x] Remove the HEAD request for citations invented by the writer. Keep only URLs present in prepared trusted-source results/user-supplied context; mark unsupported citations unverifiable in the response. A reachable URL never established factual correctness anyway.
+- [x] Restrict managed inference/search destinations to configured HTTPS service domains; block redirects carrying authorization to a different host. For BYO development endpoint overrides, require an explicit development setting and no production credential fallback. Any remaining generic fetch must enforce address checks at connection time, not resolve-then-fetch vulnerable to DNS rebinding.
+- [x] Run network/citation/research tests; assert no network calls for untrusted model URLs. Commit.
 
 ## Task 5 — Security inventory and release-facing assertions
 
