@@ -315,17 +315,31 @@ model answer never becomes the note — the one path here that can overwrite a
 user's own words outright refuses to write rather than risk it.
 
 **`undoer`** (`@notron undo` / `revert this`, said inside the note itself —
-bare "undo" in 📥 Ask Notron asks which note rather than guessing) puts a note
-back to what it held before Notron's immediately-prior write, one level,
-consumed on use. Every successful write except `restore` itself saves the
-prior body (`Executor.apply_write`); `restore` is exempt from the outside-folder
-block and the append-preserve/secret-scan checks (`guard.py`) because it puts
-back words that were already live in that exact note a moment ago — not new,
-AI-authored content. The receipt rides inside the single `restore` write
-(a second write would refill the one undo slot with the wrong body) and ticks
-every unanswered tagged turn the restored body still holds, or the watcher
-would hand the note straight back and redo the very write that was just
-undone.
+bare "undo" in 📥 Ask Notron asks which note rather than guessing) now uses
+revision-bound encrypted snapshots. `undo.peek` does not consume; a restore must
+match the exact saved snapshot and its successful post-write revision, then
+verify its resulting body before `undo.consume(note_id, snapshot_id)` removes it.
+A staged backup is durable before every ordinary mutation, promoted on verified
+success, retained on unknown outcomes, and discarded on known pre-write refusal.
+The previous committed slot survives refused writes. The restore receipt rides
+inside the one proven restore and cannot refill the slot.
+
+Any intervening edit, including typing an undo command, requires a separate
+plain-text recovery copy. The exact tagged `undo recovery copy <snapshot-id>`
+command confirms that snapshot in that source note. Copies go through the Guard
+and Executor, preserve the original snapshot and later user words, and grant no
+automatic filing-home permission. Recovered nonblank lines carry the answered
+marker so old tags cannot become new actions, even if the copy is later selected.
+Legacy encrypted body-only snapshots remain recovery-only; no revision is guessed.
+
+P02 recovery persists exact copy/write identities and content before effects.
+Graph checkpoints reuse successful inference for receipt repair. A saved action
+is separate from its Notes receipt (`State.receipt_complete`); exact operation
+references reconcile EventKit saves and exact revision evidence reconciles Notes.
+Uncertain results require review. No same-title scan may read unselected note
+bodies to recover a lost creation ID. Audit retries use bounded metadata only.
+See `docs/production/handoffs/2026-09-05-P02-tasks-3-4.md` for current evidence and
+remaining native/worker limitations.
 
 Full design: `docs/plans/2026-09-03-rewrite-permission-and-undo-design.md`.
 Onboarding's global default (`rewrite.default_for_new_notes`) has a `mac/`

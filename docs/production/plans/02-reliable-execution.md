@@ -76,12 +76,14 @@ The three fixtures above belong in `tests/test_write_races.py`: `fake_note_store
 
 ## Task 3 — Side effects and receipts recover independently
 
+Completed 2026-09-05; [implementation and review evidence](../handoffs/2026-09-05-P02-task-3.md). Lost creation IDs stop for review when safe reconciliation is unavailable.
+
 **Files:** Modify `notron/executor.py`, `notron/filer.py`, `notron/reminders.py`, `notron/calendar.py`, `notron/nodes.py`, `notron/watch.py`; Create `tests/test_action_recovery.py`, `tests/test_filing_recovery.py`.
 **Consumes:** Durable operation store and ID-based writes.
 **Produces:** Reconciliation adapters `find_by_operation(operation_id) -> list[str]` for created events/reminders; receipt-only recovery for APPLIED actions; filing suboperation records `copy` and `source_receipt`.
 
-- [ ] Add a failpoint harness around every boundary: before APPLYING commit, after external save, before external ID persistence, before receipt, after receipt. Use a fake EventKit/Notes store whose state survives ledger reopen.
-- [ ] Assert the contract through a fake action adapter:
+- [x] Add a failpoint harness around every boundary: before APPLYING commit, after external save, before external ID persistence, before receipt, after receipt. Use a fake EventKit/Notes store whose state survives ledger reopen.
+- [x] Assert the contract through a fake action adapter:
 
 ```python
 def test_receipt_failure_does_not_create_a_second_reminder(recovery_harness):
@@ -97,19 +99,21 @@ def test_receipt_failure_does_not_create_a_second_reminder(recovery_harness):
 
 Implement `recovery_harness` in `tests/test_action_recovery.py` using production graph/ledger with injected fake adapters. Failpoints raise controlled exceptions and never patch away ledger logic.
 
-- [ ] Persist APPLYING before an external call; add an opaque operation reference to created reminder/event notes. On one exact reconciliation match, recover the ID. On zero/ambiguous matches after an uncertain save, stop at NEEDS_REVIEW; do not treat a delayed sync result as proof nothing was created.
-- [ ] For filing, record/verifiably recognize destination copy before marking the source. On retry, repair only the missing mark. If destination changed so copy identity cannot be established, ask for review. Keep original Brain Dump lines.
-- [ ] Separate `_answer` completion from `any(result.startswith('✓'))`: an action success is not proof its user receipt succeeded. Retry known suboperations, not the entire graph. Cache successful inference per pending request to avoid charging again for receipt repair.
-- [ ] Make audit failures independent: a failed Log append cannot convert an applied event into an unknown event. Store local metadata first and retry audit asynchronously. Bound growth and apply P01 redaction/retention.
-- [ ] Run recovery tests across all failpoints, restart each time, then existing action/filer/watch suites. Commit.
+- [x] Persist APPLYING before an external call; add an opaque operation reference to created reminder/event notes. On one exact reconciliation match, recover the ID. On zero/ambiguous matches after an uncertain save, stop at NEEDS_REVIEW; do not treat a delayed sync result as proof nothing was created.
+- [x] For filing, record/verifiably recognize destination copy before marking the source. On retry, repair only the missing mark. If destination changed so copy identity cannot be established, ask for review. Keep original Brain Dump lines.
+- [x] Separate `_answer` completion from `any(result.startswith('✓'))`: an action success is not proof its user receipt succeeded. Retry known suboperations, not the entire graph. Cache successful inference per pending request to avoid charging again for receipt repair.
+- [x] Make audit failures independent: a failed Log append cannot convert an applied event into an unknown event. Store local metadata first and retry audit asynchronously. Bound growth and apply P01 redaction/retention.
+- [x] Run recovery tests across all failpoints, restart each time, then existing action/filer/watch suites. Commit.
 
 ## Task 4 — Revision-bound undo with recoverable snapshots
+
+Completed 2026-09-05; [implementation and review evidence](../handoffs/2026-09-05-P02-task-4.md). Strict revision matching includes newly typed undo commands; recovery copies retain inactive history and grant no filing-home permission.
 
 **Files:** Modify `notron/undo.py`, `notron/executor.py`, `notron/nodes.py`, `tests/test_undo.py`, `tests/test_executor.py`.
 **Consumes:** Securestore, target ID, pre-write and post-write revisions.
 **Produces:** `undo.peek(note_id) -> Snapshot | None`, `undo.consume(note_id, snapshot_id) -> None`; `Snapshot(snapshot_id, before_html, after_revision, operation_id)`. Remove early destructive `pop` use.
 
-- [ ] Write cases for failed restore, user edit after Notron, second undo, and snapshot save failure before write.
+- [x] Write cases for failed restore, user edit after Notron, second undo, and snapshot save failure before write.
 
 ```python
 def test_failed_restore_keeps_snapshot(undo_harness):
@@ -120,9 +124,9 @@ def test_failed_restore_keeps_snapshot(undo_harness):
     assert h.snapshot('n1') is not None
 ```
 
-- [ ] Snapshot durably before changing Notes; abort a destructive write if its required backup cannot be saved. Verify live body equals the stored post-write revision before restoring. Consume only after verified restore; do not refill the slot from the undo receipt.
-- [ ] If user edits intervene, offer a recovery copy requiring explicit confirmation. Never overwrite later words to satisfy an old undo request.
-- [ ] Run undo/executor/rewrite tests; commit.
+- [x] Snapshot durably before changing Notes; abort a destructive write if its required backup cannot be saved. Verify live body equals the stored post-write revision before restoring. Consume only after verified restore; do not refill the slot from the undo receipt.
+- [x] If user edits intervene, offer a recovery copy requiring explicit confirmation. Never overwrite later words to satisfy an old undo request.
+- [x] Run undo/executor/rewrite tests; commit.
 
 ## Task 5 — Time, target ambiguity and fresh context
 
