@@ -1045,3 +1045,66 @@ def test_legacy_proposal_missing_revision_is_not_refreshed_on_approval(store):
     assert not outcome.created
     assert not any(n.title == 'Ideas' for n in store.list_all_notes())
     assert 'Ideas' in filer._state()['proposals']
+
+
+def _retained_marks(source):
+    import json
+    from notron import operations
+    ledger = operations.current()
+    return [op for op in ledger.pending() if op.target_id == source and op.payload_ref
+            and json.loads(ledger.payload(op.operation_id))['write']['mode'] == 'mark']
+
+
+def test_filing_receipt_payload_purges_deleted_destination(store):
+    from notron import operations, retention
+    source = dump(store, 'one thought')
+    destination = store.add('Ideas', 'old')
+    assert filer.run(FilerBrain({'one thought': {'note': 'Ideas'}})).filed
+    marks = _retained_marks(source)
+    assert len(marks) == 1
+    ledger = operations.current()
+    assert b'Ideas' in ledger.payload(marks[0].operation_id)
+    del store.rows[destination]
+    retention.reconcile()
+    assert ledger.payload(marks[0].operation_id) is None
+    assert not (ledger.payload_store.root / (marks[0].payload_ref + '.enc')).exists()
+
+
+@pytest.mark.parametrize('answer,removed', [('yes', 'destination'), ('yes', 'context'),
+                                            ('no', 'context'), ('failed', 'context')])
+def test_proposal_receipts_retain_all_known_contributors(store, answer, removed):
+    from notron import operations, retention
+    source = dump(store, 'one thought')
+    context = store.add('Reference', 'other topic')
+    brain = FilerBrain({'one thought': {'new': 'Ideas'}})
+    filer.run(brain)
+    if answer == 'failed':
+        store.rows[source]['body'] = store.rows[source]['body'].replace('<div>one thought</div>', '<div>edited thought</div>', 1)
+    store.rows[source]['body'] += markup.to_html('no' if answer == 'no' else 'yes')
+    outcome = filer.run(brain)
+    assert bool(outcome.created) == (answer == 'yes')
+    marks = _retained_marks(source)
+    assert len(marks) == (2 if answer == 'yes' else 1)
+    ledger = operations.current()
+    assert all(b'Ideas' in ledger.payload(mark.operation_id) for mark in marks)
+    destination = next((n.id for n in store.list_all_notes() if n.title == 'Ideas'), None)
+    del store.rows[destination if removed == 'destination' else context]
+    retention.reconcile()
+    for mark in marks:
+        assert ledger.payload(mark.operation_id) is None
+        assert not (ledger.payload_store.root / (mark.payload_ref + '.enc')).exists()
+
+
+@pytest.mark.parametrize('answer', ['yes', 'no'])
+def test_legacy_proposal_without_provenance_writes_no_receipt(store, answer):
+    source = dump(store, 'one thought')
+    brain = FilerBrain({'one thought': {'new': 'Ideas'}})
+    filer.run(brain)
+    state = filer._state()
+    del state['proposals']['Ideas']['content_sources']
+    filer._save(state, dry_run=False)
+    store.rows[source]['body'] += markup.to_html(answer)
+    outcome = filer.run(brain)
+    assert not outcome.created and not outcome.declined
+    assert not _retained_marks(source)
+    assert 'Ideas' in filer._state()['proposals']

@@ -630,8 +630,11 @@ complete `content_source_ids` list for encrypted payloads; it is immutable with
 operation identity and must include declared source/target metadata. Retention
 purges the payload and preserves a review tombstone if any contributor is deleted
 or denied, including a secondary copied source, model context, destination anchor
-or title in a successful audit entry. Generic refusal audits contain no copied
-source content. This uses available producer provenance without redesigning
+or title in a successful audit entry. Filing mark batches also carry their
+destination/proposal contributors: source ticks, creation/approval receipts,
+declines and failed-creation receipts preserve the known source set. A missing
+legacy proposal source set refuses title-bearing receipts. Generic refusal audits
+contain no copied source content. This uses available producer provenance without redesigning
 Task 5 context selection.
 
 The atomic v1→v2 migration adds nullable `observed_revision`; v2→v3 adds contributor

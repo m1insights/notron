@@ -551,11 +551,13 @@ def _source_key(it: Item) -> tuple:
     return (it.note_id, it.folder, it.note_title, it.expected_revision)
 
 
-def _tick(ex, by_note: dict[tuple, list[tuple[str, int, str]]], out: Outcome) -> None:
+def _tick(ex, by_note: dict[tuple, list[tuple[str, int, str]]], out: Outcome, *,
+          content_sources: list[str]) -> None:
     from .state import Write
     for (note_id, folder, title, expected), marks in by_note.items():
         r = ex.apply_write(Write(title=title, folder=folder, note_id=note_id,
-                                 expected_revision=expected, mode='mark', marks=marks, markdown=''))
+                                 expected_revision=expected, mode='mark', marks=marks, markdown='',
+                                 content_sources=content_sources))
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
         if r.ok:
             out.ticked.add((folder, title))
@@ -699,7 +701,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     if not out.filed:
         marks = {}      # a bare "file this" line only reads as done once something landed
     if marks:
-        _tick(ex, marks, out)
+        _tick(ex, marks, out, content_sources=content_sources)
 
 
 def _proposal_text(new: dict[str, list[Item]]) -> str:
@@ -743,20 +745,25 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
         if not chosen:
             chosen = list(proposals)
         receipts: list[str] = []
+        receipt_sources: set[str] = set()
         for title in chosen:
             record = proposals.pop(title)
             # Persisted proposal snapshots must not be rebound to today's source.
             # Legacy proposals without captured identity/revision refuse safely.
             waiting = [Item.from_dict(d) for d in record.get("items", [])]
+            if 'content_sources' not in record:
+                proposals[title] = record
+                out.results.append(f"✗ {title} — proposal provenance missing; review required")
+                continue
+            proposal_sources = set(record["content_sources"])
+            proposal_sources.update(source.note_id for lead in (*waiting, it)
+                                    for source in (lead, *lead.parts) if source.note_id)
+            receipt_sources.update(proposal_sources)
             if word == "no":
                 for w in waiting:
                     judged[w.digest()] = {"kind": "declined", "title": title}
                 out.declined.append(title)
                 receipts.append(f"left “{title}” alone")
-                continue
-            if 'content_sources' not in record:
-                proposals[title] = record
-                out.results.append(f"✗ {title} — proposal provenance missing; review required")
                 continue
             say(f"making “{title}” with {len(waiting)} line(s)")
             shape = _shape_for(title, {}, state)
@@ -774,6 +781,8 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
             if r.note_id:
                 from . import library
                 library.add_home(r.note_id)
+                proposal_sources.add(r.note_id)
+                receipt_sources.add(r.note_id)
             marks: dict[tuple, list[tuple[str, int, str]]] = {}
             for w in waiting:
                 out.filed.append((w, title))
@@ -781,9 +790,11 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 marks.setdefault(_source_key(w), []).extend(_marks_for(w, f"{RECEIPT}{title}"))
                 landed.add(w.digest())
                 landed.update(p.digest() for p in w.parts)   # its parts landed with it
-            _tick(ex, marks, out)
+            _tick(ex, marks, out, content_sources=sorted(proposal_sources))
             receipts.append(f"made “{title}”, {len(waiting)} filed")
-        _tick(ex, {_source_key(it): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out)
+        if receipts:
+            _tick(ex, {_source_key(it): [(it.anchor, it.near, f"{RECEIPT}{'; '.join(receipts)}")]}, out,
+                  content_sources=sorted(receipt_sources))
     return [it for it in rest if it.digest() not in landed]
 
 
