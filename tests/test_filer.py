@@ -702,8 +702,8 @@ def test_two_leads_with_the_same_text_do_not_double_record_by_dict_equality(stor
     store.rows[nid]["body"] += "<div>yes</div>"
     out = filer.run(brain)
 
-    assert out.created == ["Meals"]
-    assert store.text("Meals").count("Weekly meal plan:") == 1, "must not be filed twice"
+    assert out.created == [], "stale duplicate source anchors must refuse rather than guess"
+    assert "Meals" in filer.pending_proposals()
 
 
 def test_a_dry_run_judges_everything_and_writes_nothing(store):
@@ -992,3 +992,56 @@ def test_source_deleted_or_edited_during_classification_is_not_copied(store, cha
     outcome = filer.run(EditingBrain({'one thought': {'note': 'Ideas'}}))
     assert not outcome.filed
     assert store.rows[nid]['body'] == before
+
+
+@pytest.mark.parametrize('change', ['edit', 'remove', 'part'])
+def test_approved_creation_rechecks_persisted_proposal_sources(store, change):
+    source = dump(store, 'one thought:\n- original detail')
+    brain = FilerBrain({'one thought:': {'new': 'Ideas'},
+                        'original detail': {'part_of': 'one thought:'}})
+    filer.run(brain)
+    if change == 'edit':
+        store.rows[source]['body'] = store.rows[source]['body'].replace('one thought:', 'changed thought:', 1)
+    elif change == 'remove':
+        store.rows[source]['body'] = store.rows[source]['body'].replace('<div>one thought:</div>', '', 1)
+    else:
+        store.rows[source]['body'] = store.rows[source]['body'].replace('original detail', 'changed detail', 1)
+    store.rows[source]['body'] += markup.to_html('yes')
+    outcome = filer.run(brain)
+    assert not outcome.created
+    assert not any(n.title == 'Ideas' for n in store.list_all_notes())
+    assert 'Ideas' in filer._state()['proposals']
+    assert any(line.startswith('✗ Ideas') for line in outcome.results)
+
+
+def test_approved_creation_checks_sources_again_at_final_boundary(store, monkeypatch):
+    from notron import operations
+    source = dump(store, 'one thought')
+    brain = FilerBrain({'one thought': {'new': 'Ideas'}})
+    filer.run(brain)
+    store.rows[source]['body'] += markup.to_html('yes')
+    transition = operations.OperationStore.transition
+    def change_before_create(ledger, operation_id, expected, target, *args, **kwargs):
+        result = transition(ledger, operation_id, expected, target, *args, **kwargs)
+        if target == operations.S.APPLYING and result.target_id is None:
+            store.rows[source]['body'] = store.rows[source]['body'].replace('<div>one thought</div>', '<div>changed thought</div>', 1)
+        return result
+    monkeypatch.setattr(operations.OperationStore, 'transition', change_before_create)
+    outcome = filer.run(brain)
+    assert not outcome.created
+    assert not any(n.title == 'Ideas' for n in store.list_all_notes())
+    assert 'Ideas' in filer._state()['proposals']
+
+
+def test_legacy_proposal_missing_revision_is_not_refreshed_on_approval(store):
+    source = dump(store, 'one thought')
+    brain = FilerBrain({'one thought': {'new': 'Ideas'}})
+    filer.run(brain)
+    state = filer._state()
+    state['proposals']['Ideas']['items'][0].pop('expected_revision')
+    filer._save(state, dry_run=False)
+    store.rows[source]['body'] += markup.to_html('yes')
+    outcome = filer.run(brain)
+    assert not outcome.created
+    assert not any(n.title == 'Ideas' for n in store.list_all_notes())
+    assert 'Ideas' in filer._state()['proposals']

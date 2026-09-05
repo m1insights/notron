@@ -473,9 +473,11 @@ def organizer(state: State, *, brain) -> State:
     _bind_reply(state)
 
     supported = notedoc.supports_replacement(body)
+    separate_target = _separate_result_target() if not supported else None
     if CONFIRM_WORDS.fullmatch(state.request.strip()):
         if not supported:
             state.answer = "This note contains unsupported rich content. Keep the original and use a separate plain-text result."
+            state.writes.append(replace(separate_target, markdown=conversation.turn(state.answer)))
             return state
         if not _offer_precedes(body, after):
             # A bare `yes` is consent to rewrite a note only directly under the
@@ -518,6 +520,8 @@ def organizer(state: State, *, brain) -> State:
         state.answer = "I couldn't tidy that safely, so I left it alone."
         if supported:
             state.writes.append(_reply(state))
+        else:
+            state.writes.append(replace(separate_target, markdown=conversation.turn(state.answer)))
         state.note("organizer", "model's answer was empty or too short — refused to write it")
         return state
 
@@ -525,7 +529,8 @@ def organizer(state: State, *, brain) -> State:
         state.answer = (cleaned + "\n\nThis note contains unsupported rich content. "
                         "I kept the original untouched. You can use this separate plain-text result "
                         "in a new note.")
-        state.note("organizer", "unsupported rich content; separate result only")
+        state.writes.append(replace(separate_target, markdown=conversation.turn(state.answer)))
+        state.note("organizer", "unsupported rich content; separate result in Ask")
         return state
 
     if rewrite.allowed(note.id):
@@ -546,6 +551,23 @@ def organizer(state: State, *, brain) -> State:
         state.note("organizer", f"added a cleaned copy below and asked ({len(cleaned)} chars)")
     return state
 
+
+
+def _separate_result_target() -> Write:
+    """Capture a safe existing Ask destination before rich-note inference.
+
+    An unavailable or rich Ask produces an unbound Write, so execution records a
+    refusal and request admission retains needs_review instead of silent completion.
+    No fallback to a title twin or automatic creation is allowed.
+    """
+    nid = policy.current().system_notes.get(workspace.ASK)
+    note = notes.get_note(nid) if nid else None
+    if note and policy.current().readable(note):
+        body = notes.read_body(note.id)
+        if notedoc.supports_replacement(body):
+            return capture_write(workspace.ASK, note_id=nid, body=body,
+                                 mode='append', rebase_append=False)
+    return Write(title=workspace.ASK, folder=workspace.FOLDER, markdown='', mode='append')
 
 def _without_tags(markdown: str) -> str:
     """Drop any line still addressed to her.

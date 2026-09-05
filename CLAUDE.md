@@ -231,8 +231,9 @@ closes a 700× gap — use `notron/eventkit.py`.
   checks policy/revision immediately before mutation and verifies the observed
   body afterward. Stale replace/restore refuses; stale append/insert/mark needs
   unambiguous captured anchors, and journal appends refuse stale layout. Rich
-  replacement input is conservatively refused; organizer returns separate text
-  without touching the rich original. Notes mutations have no automatic timeout
+  replacement input is conservatively refused; organizer delivers separate text
+  or refusal to the existing registered plain Ask note without touching the rich
+  original. Unsafe/unavailable Ask delivery leaves the request needing review. Notes mutations have no automatic timeout
   retry. Remote iCloud/editor writers do not honor the local lock: the final
   read/write gap remains a race, including undetectable overwritten remote text.
   Reconciliation, undo snapshot lifecycle and worker ownership remain Tasks 3/4/6.

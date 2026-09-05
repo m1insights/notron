@@ -394,13 +394,16 @@ def test_rich_organizer_returns_separate_result_without_any_source_write(fake_no
     body = '<div>Ideas</div><div>original details</div><object data="cid:attachment"></object>'
     nid = fake_note_store.add('Ideas', body)
     rewrite.allow(nid)
+    ask = fake_note_store.add(workspace.ASK, '<div>Ask</div>', workspace.FOLDER)
+    lib = library.load(); lib.system_notes[workspace.ASK] = ask; library.save(lib)
     class Brain:
         def ask(self, **kwargs):
             return 'Original details carefully organized in a separate plain text result.'
     state = nodes.organizer(State(request='clean this up', intent='organize',
                             reply_to=('Ideas', 'Notes', 1), source_note_id=nid), brain=Brain())
     nodes.executor(state)
-    assert fake_note_store.body(nid) == body and fake_note_store.writes == []
+    assert fake_note_store.body(nid) == body
+    assert [target for target, value in fake_note_store.writes] == [ask]
     assert 'separate' in state.answer and 'Original details' in state.answer
 
 
@@ -526,3 +529,72 @@ def test_blocked_write_keeps_generic_audit_without_mutating_target(fake_note_sto
     assert not executor.Executor().apply_write(write).ok
     assert fake_note_store.body(nid) == '<div>user edit</div>'
     assert 'BLOCKED' in fake_note_store.body(log)
+
+
+@pytest.mark.parametrize('answer', ['Carefully organized original details in a separate result.', '', 'x'])
+def test_rich_organizer_delivers_visible_result_through_registered_ask(fake_note_store, answer):
+    from notron import graph, requests
+    body = '<div>Ideas</div><div>original details</div><div>@notron clean this up</div><img src="cid:photo">'
+    nid = fake_note_store.add('Ideas', body)
+    ask = fake_note_store.add(workspace.ASK, '<div>Ask</div>', workspace.FOLDER)
+    lib = library.load(); lib.system_notes[workspace.ASK] = ask; library.save(lib)
+    class Brain:
+        def ask(self, **kwargs): return answer
+    envelope = requests.create('clean this up', source='mention', note_id=nid,
+                               source_revision=executor.revision(body),
+                               source_text='@notron clean this up', reply_to=('Ideas', 'Notes', 2))
+    state = graph.run_request(envelope, brain=Brain())
+    assert fake_note_store.body(nid) == body
+    assert [target for target, value in fake_note_store.writes] == [ask]
+    visible = markup.to_text(fake_note_store.body(ask))
+    assert ('separate' in visible if len(answer) > 1 else 'couldn\'t tidy' in visible)
+    if len(answer) > 1:
+        assert answer in visible
+    assert state.results and all(result.startswith('✓') for result in state.results)
+    assert requests.current().get(envelope.request_id).status == 'completed'
+
+
+@pytest.mark.parametrize('ask_state', ['missing', 'denied', 'rich', 'changed'])
+def test_rich_result_undeliverable_keeps_request_in_review(fake_note_store, ask_state):
+    from notron import graph, requests
+    body = '<div>Ideas</div><div>original details</div><div>@notron clean this up</div><img src="cid:photo">'
+    nid = fake_note_store.add('Ideas', body)
+    ask = None
+    if ask_state != 'missing':
+        ask_body = '<div>Ask</div>' + ('<img src="cid:another-photo">' if ask_state == 'rich' else '')
+        ask = fake_note_store.add(workspace.ASK, ask_body, workspace.FOLDER)
+        lib = library.load(); lib.system_notes[workspace.ASK] = ask
+        if ask_state == 'denied': lib.ignore.add(ask)
+        library.save(lib)
+    class Brain:
+        def ask(self, **kwargs):
+            if ask_state == 'changed':
+                fake_note_store.set_body(ask, '<div>Ask</div><div>new user words</div>')
+            return 'Carefully organized original details in a separate plain text result.'
+    envelope = requests.create('clean this up', source='mention', note_id=nid,
+                               source_revision=executor.revision(body),
+                               source_text='@notron clean this up', reply_to=('Ideas', 'Notes', 2))
+    state = graph.run_request(envelope, brain=Brain())
+    assert fake_note_store.writes == [] and fake_note_store.body(nid) == body
+    assert any(result.startswith('✗') for result in state.results)
+    assert requests.current().get(envelope.request_id).status == 'needs_review'
+    assert 'could not verify' in state.answer.lower()
+
+
+def test_rich_confirmation_refusal_is_visible_without_model_or_source_write(fake_note_store):
+    from notron import graph, requests
+    body = '<div>Ideas</div><div>@notron yes</div><img src="cid:photo">'
+    nid = fake_note_store.add('Ideas', body)
+    ask = fake_note_store.add(workspace.ASK, '<div>Ask</div>', workspace.FOLDER)
+    lib = library.load(); lib.system_notes[workspace.ASK] = ask; library.save(lib)
+    class Brain:
+        def ask(self, **kwargs): pytest.fail('confirmation must not infer')
+        def ask_json(self, **kwargs): pytest.fail('confirmation must not infer')
+    envelope = requests.create('yes', source='mention', note_id=nid,
+                               source_revision=executor.revision(body),
+                               source_text='@notron yes', reply_to=('Ideas', 'Notes', 1))
+    state = graph.run_request(envelope, brain=Brain())
+    assert [target for target, value in fake_note_store.writes] == [ask]
+    assert fake_note_store.body(nid) == body and not rewrite.allowed(nid)
+    assert 'separate plain-text result' in markup.to_text(fake_note_store.body(ask))
+    assert state.results and requests.current().get(envelope.request_id).status == 'completed'

@@ -593,14 +593,22 @@ once for both revisions/anchors and journal layout; source ID/readability and
 captured line anchors are checked under the write lock before copy and again at
 the final boundary. Deleted, edited or ambiguous sources do not copy. Duplicate
 case-insensitive master titles are excluded; cached title-only destinations must
-be reclassified and successful judgments retain the destination ID.
+be reclassified and successful judgments retain the destination ID. Explicit
+approved creation also carries persisted lead/grouped-part source checks and the
+approval anchor through both locked boundaries. Missing legacy proposal revisions
+are not refreshed at approval; changed/missing/ambiguous sources refuse creation
+and keep the proposal pending.
 
 `notedoc.supports_replacement` accepts only a conservative plain-formatting HTML
 subset. Attachments/images/objects/native checklist metadata, links, tables,
 unknown tags/attributes and malformed structures refuse replacement; a body-size
 comparison is not preservation evidence. Restore also validates its saved input.
-Organizer returns a separate plain-text result or refusal without any write to an
-unsupported rich source, including an empty model answer. `WriteResult` exposes
+Organizer delivers a separate plain-text result or refusal by guarded append to
+the existing registered Ask note, without any write to an unsupported rich source,
+including empty/short model answers and unsupported confirmations. That Ask target
+is captured before inference, must have supported plain content, and cannot rebase
+a changed body. Missing, denied, rich or changed Ask delivery produces a failed
+result and leaves the request NEEDS_REVIEW rather than silently completing. `WriteResult` exposes
 `alternative_text`; no replacement note is automatically created. Guarded refusal
 or divergence replaces organizer/undo success wording; a planner draft is clearly
 unsaved. Existing append/insert HTML preservation checks do not prove native rich

@@ -108,10 +108,10 @@ class Executor:
         return self.apply_write(replace(capture_write(title, folder=folder, mode='restore'),
                                         markdown=raw_html_body))
 
-    def create_approved(self, title, body_markdown, *, folder):
+    def create_approved(self, title, body_markdown, *, folder, source_checks=()):
         # Creation is a distinct explicit operation, never a title-selected append.
         return self._execute(Write(title=title, folder=folder, markdown=body_markdown,
-                                   mode='append'), creation=True)
+                                   mode='append', source_checks=list(source_checks)), creation=True)
 
     def _permitted(self, note, mode, rewrite_allowed=False):
         snap = policy.current()

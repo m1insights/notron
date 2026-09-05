@@ -742,7 +742,9 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
         receipts: list[str] = []
         for title in chosen:
             record = proposals.pop(title)
-            waiting = _bind_items([Item.from_dict(d) for d in record.get("items", [])])
+            # Persisted proposal snapshots must not be rebound to today's source.
+            # Legacy proposals without captured identity/revision refuse safely.
+            waiting = [Item.from_dict(d) for d in record.get("items", [])]
             if word == "no":
                 for w in waiting:
                     judged[w.digest()] = {"kind": "declined", "title": title}
@@ -751,8 +753,10 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 continue
             say(f"making “{title}” with {len(waiting)} line(s)")
             shape = _shape_for(title, {}, state)
+            checks = [(source.note_id, source.expected_revision, source.anchor, source.near)
+                      for lead in (*waiting, it) for source in (lead, *lead.parts)]
             r = ex.create_approved(title, _entry_markdown(waiting, shape=shape),
-                          folder=FILING_FOLDER)
+                                   folder=FILING_FOLDER, source_checks=checks)
             out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
             if not r.ok:
                 proposals[title] = record            # keep the question open
