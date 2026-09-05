@@ -30,6 +30,7 @@ class Write:
     note_id: str | None = None
     expected_revision: str | None = None
     operation_id: str = field(default_factory=lambda: uuid4().hex)
+    content_sources: list[str] = field(default_factory=list)
     source_checks: list[tuple[str, str, str, int]] = field(default_factory=list)
     rebase_append: bool = True  # False when layout depends on the captured body
     marks: list[tuple[str, int, str]] = field(default_factory=list)

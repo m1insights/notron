@@ -387,25 +387,20 @@ class RequestStore:
                            "failure_code='policy_changed',updated_at=? WHERE request_id=?", (now(), request_id))
                 db.execute("UPDATE operations SET payload_ref=NULL,status=CASE WHEN status IN ('receipted','cancelled') THEN status ELSE 'needs_review' END,"
                            "failure_code='policy_changed',updated_at=? WHERE request_id=?", (now(), request_id))
-            for row in db.execute('SELECT operation_id,source_id FROM operations WHERE payload_ref IS NOT NULL').fetchall():
-                if all_content or (row['source_id'] and (not snap.can_read(row['source_id']) or
-                                      (live is not None and row['source_id'] not in live))):
+            for row in db.execute('SELECT * FROM operations WHERE payload_ref IS NOT NULL').fetchall():
+                operation = self.operations._record(row)
+                sources = operation.content_source_ids
+                if all_content or sources is None or any(not snap.can_read(nid) or
+                        (live is not None and nid not in live) for nid in sources):
                     db.execute("UPDATE operations SET payload_ref=NULL,status=CASE WHEN status IN ('receipted','cancelled') THEN status ELSE 'needs_review' END,"
-                               "failure_code='policy_changed',updated_at=? WHERE operation_id=?", (now(), row['operation_id']))
+                               "failure_code='policy_changed',updated_at=? WHERE operation_id=?", (now(), operation.operation_id))
             for row in db.execute('SELECT note_id,source FROM observations').fetchall():
                 if all_content or not snap.can_read(row['note_id']) or (live is not None and row['note_id'] not in live):
                     db.execute('UPDATE observations SET payload_ref=NULL WHERE note_id=? AND source=?', tuple(row))
         self.prune_payloads()
 
     def prune_payloads(self):
-        # Serialize cleanup with payload creation, so another transaction's
-        # not-yet-referenced payload cannot be mistaken for an orphan.
-        with self.operations.transaction() as db:
-            refs = {row[0] for row in db.execute('SELECT payload_ref FROM requests UNION SELECT payload_ref FROM operations UNION SELECT payload_ref FROM observations')}
-            for path in self.operations.payload_store.root.glob('operation-*.enc'):
-                if path.stem not in refs:
-                    from .persistence import durable_unlink
-                    durable_unlink(path)
+        self.operations.prune_payloads()
 
 
 def current() -> RequestStore:

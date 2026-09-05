@@ -57,7 +57,11 @@ this document must name it and the response process before public release.
   provider retention. Approved content leaves the Mac when those services are used.
 - **User edit loss:** Apple Notes writes replace a whole body and are non-atomic.
   P02 Task 2 binds IDs/revisions before inference, serializes local writes, checks
-  policy and revision immediately before mutation, and verifies afterward. Stale
+  policy, revision and every known content source after final reads, requires a
+  still-APPLYING operation, and verifies afterward. Admission reads cannot recreate
+  revoked payloads. Schema 3 stores complete contributor IDs, including destination
+  anchors; deletion/denial of any source purges encrypted operation content. Legacy
+  payloads without complete provenance are purged without resetting identities. Stale
   destructive writes and unsupported rich replacement input are refused. Notes
   mutation timeouts never automatically retry; uncertain outcomes require review.
   Remote iCloud/editor writers do not honor the local lock, so the final read/write

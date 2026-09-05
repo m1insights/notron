@@ -128,7 +128,10 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 4. **Write receipts are best effort** in the registered, readable `📊 Log`.
    Successful writes log afterward; inaccessible logs and crashes can leave gaps.
    P02 Task 2 records Notes operations and observed revisions in the encrypted-payload ledger;
-   asynchronous receipt reconciliation remains Task 3.
+   Schema 3 binds complete known source/context/destination provenance to each
+   payload; deletion or denial of any contributor purges it. Legacy payloads with
+   unknown complete provenance are conservatively purged during migration, while
+   operation identities survive. Asynchronous receipt reconciliation remains Task 3.
 5. **Policy exclusions precede outbound redaction.** Every model/search/embedding
    input uses `outbound.py`; supported secret patterns are filtered by `privacy.py`.
    Redaction cannot recognize every secret. See `SECURITY.md` for limits.
@@ -228,7 +231,9 @@ closes a 700× gap — use `notron/eventkit.py`.
 - **Apple Notes writes replace a whole body and are non-atomic.** P02 Task 2
   binds each proposed write to a note ID and SHA-256 revision captured before
   inference. The executor serializes local transactions, saves encrypted undo,
-  checks policy/revision immediately before mutation and verifies the observed
+  rechecks source readability after admission reads before retaining payloads,
+  checks policy/revision and all contributing source permissions after final reads,
+  requires the operation still APPLYING, and verifies the observed
   body afterward. Stale replace/restore refuses; stale append/insert/mark needs
   unambiguous captured anchors, and journal appends refuse stale layout. Rich
   replacement input is conservatively refused; organizer delivers separate text

@@ -108,10 +108,11 @@ class Executor:
         return self.apply_write(replace(capture_write(title, folder=folder, mode='restore'),
                                         markdown=raw_html_body))
 
-    def create_approved(self, title, body_markdown, *, folder, source_checks=()):
+    def create_approved(self, title, body_markdown, *, folder, source_checks=(), content_sources=()):
         # Creation is a distinct explicit operation, never a title-selected append.
         return self._execute(Write(title=title, folder=folder, markdown=body_markdown,
-                                   mode='append', source_checks=list(source_checks)), creation=True)
+                                   mode='append', source_checks=list(source_checks),
+                                   content_sources=list(content_sources)), creation=True)
 
     def _permitted(self, note, mode, rewrite_allowed=False):
         snap = policy.current()
@@ -129,6 +130,27 @@ class Executor:
         if mode == 'mark':
             return snap.can_file(note.id) or policy.can_mark_source(note.id)
         return snap.can_file(note.id) or snap.can_reply(note.id, policy.request_id())
+
+    @staticmethod
+    def _content_sources(write: Write) -> tuple[str, ...]:
+        from . import requests
+        envelope = requests.active_request()
+        sources = set(write.content_sources)
+        sources.update(check[0] for check in write.source_checks)
+        # Payload includes destination title/anchors/marks as well as copied text.
+        if write.note_id:
+            sources.add(write.note_id)
+        if envelope and envelope.note_id:
+            sources.add(envelope.note_id)
+        return tuple(sorted(nid for nid in sources if nid))
+
+    @staticmethod
+    def _content_readable(sources: tuple[str, ...]) -> bool:
+        current = [notes.get_note(nid) for nid in sources]
+        # Read current policy after the metadata reads; those reads may overlap
+        # a policy save. All contributing Notes sources must remain readable.
+        snap = policy.current()
+        return all(note is not None and snap.readable(note) for note in current)
 
     @staticmethod
     def _sources_current(write: Write) -> bool:
@@ -158,7 +180,7 @@ class Executor:
             result = self._locked_write(write, creation=creation)
             if result.ok and result.reason == 'written':
                 # A failed audit never turns a verified primary effect into failure.
-                self._log(f'{write.mode} on *{write.title}*')
+                self._log(f'{write.mode} on *{write.title}*', content_sources=self._content_sources(write))
             elif not result.ok:
                 self._log('**BLOCKED / NEEDS REVIEW** Notes write was not verified')
             return result
@@ -182,9 +204,14 @@ class Executor:
             return self._permitted(current_note, write.mode, write.rewrite_allowed)
         if not permitted(note):
             return result(False, 'note missing or note policy denied access')
-        if not self._sources_current(write):
+        content_sources = self._content_sources(write)
+        if not self._content_readable(content_sources) or not self._sources_current(write):
             return result(False, 'source missing, changed or ambiguous; nothing copied')
         old = notes.read_body(note.id) if note else ''
+        # A target read can overlap revocation before this operation exists.
+        # Never recreate revoked content in encrypted history after its purge.
+        if not self._content_readable(content_sources):
+            return result(False, 'source permission changed; nothing prepared')
         store = op = None
         if not self.dry_run:
             store = operations.current()
@@ -195,7 +222,8 @@ class Executor:
                                write.operation_id, sha256(payload).hexdigest(), payload=payload,
                                source_id=(write.source_checks[0][0] if write.source_checks else
                                           envelope.note_id if envelope else write.note_id),
-                               target_id=write.note_id, expected_revision=write.expected_revision)
+                               target_id=write.note_id, expected_revision=write.expected_revision,
+                               content_source_ids=content_sources)
             if op.status in (operations.S.APPLIED, operations.S.RECEIPTED):
                 return result(True, 'already applied; no write repeated', observed=op.observed_revision)
             if op.status != operations.S.PREPARED:
@@ -273,6 +301,13 @@ class Executor:
                     store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
                                      failure_code='policy_changed')
                 return result(False, 'note policy changed; nothing written')
+            if not self._content_readable(content_sources):
+                if store.get(write.operation_id).status == operations.S.APPLYING:
+                    store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
+                                     failure_code='policy_changed')
+                return result(False, 'source permission changed; nothing written')
+            if store.get(write.operation_id).status != operations.S.APPLYING:
+                return result(False, 'operation invalidated before mutation; nothing written')
             # Apple exposes no CAS. Remote edits after this read remain a final race.
             if note:
                 notes.write_body(note.id, new)
@@ -351,14 +386,14 @@ class Executor:
         moment = when_mod.parse(action.when)
         return f" — {when_mod.human(moment)}" if moment else ""
 
-    def _log(self, line: str) -> None:
+    def _log(self, line: str, *, content_sources=()) -> None:
         if not self.audit or self.dry_run:
             return
         try:
             # The same lock/revision/post-read path, with recursion disabled.
             target = capture_write(workspace.LOG, mode='append')
             if target.note_id:
-                Executor(audit=False).apply_write(replace(target, markdown=
+                Executor(audit=False).apply_write(replace(target, content_sources=list(content_sources), markdown=
                     f"{datetime.now():%Y-%m-%d %H:%M} — {line}"))
         except Exception:
             pass  # durable primary success stands; audit recovery belongs to Task 3

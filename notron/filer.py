@@ -574,6 +574,8 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     items = _bind_items(items)
     candidates = masters(exclude={workspace.DUMP})
     known = {m.title: m for m in candidates}
+    content_sources = sorted({m.note_id for m in candidates if m.note_id} |
+                             {it.note_id for it in items if it.note_id})
     targets, bodies = {}, {}
     for master in candidates:
         note = notes.get_note(master.note_id) if master.note_id else None
@@ -649,7 +651,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         shape = _shape_for(title, said_shapes, state)
         checks = [(it.note_id, it.expected_revision, it.anchor, it.near)
                   for lead in group for it in (lead, *lead.parts)]
-        r = ex.apply_write(replace(targets[title], source_checks=checks,
+        r = ex.apply_write(replace(targets[title], source_checks=checks, content_sources=content_sources,
                                   rebase_append=shape != layout.LOG, markdown=
             _entry_markdown(group, shape=shape, existing=bodies.get(title, ""))))
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
@@ -672,6 +674,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         it = items[i]
         judged[it.digest()] = {"kind": "new", "title": canonical}
         record = proposals.setdefault(canonical, {"asked": None, "items": []})
+        record["content_sources"] = sorted(set(record.get("content_sources", [])) | set(content_sources))
         if canonical not in state["shapes"] and canonical in said_shapes:
             state["shapes"][canonical] = layout.shape(said_shapes[canonical])
         # Matched on digest, not on the whole dict: the same lead read again
@@ -687,7 +690,7 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
             new_here.setdefault(canonical, []).append(it)
     if new_here:
         out.proposed.update(new_here)
-        r = ex.apply_write(replace(dump_target, markdown=_turn(_proposal_text(new_here))))
+        r = ex.apply_write(replace(dump_target, content_sources=content_sources, markdown=_turn(_proposal_text(new_here))))
         out.results.append(f"{'✓' if r.ok else '✗'} {workspace.DUMP} — {r.reason}")
         if r.ok:
             for title in new_here:
@@ -751,12 +754,17 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 out.declined.append(title)
                 receipts.append(f"left “{title}” alone")
                 continue
+            if 'content_sources' not in record:
+                proposals[title] = record
+                out.results.append(f"✗ {title} — proposal provenance missing; review required")
+                continue
             say(f"making “{title}” with {len(waiting)} line(s)")
             shape = _shape_for(title, {}, state)
             checks = [(source.note_id, source.expected_revision, source.anchor, source.near)
                       for lead in (*waiting, it) for source in (lead, *lead.parts)]
             r = ex.create_approved(title, _entry_markdown(waiting, shape=shape),
-                                   folder=FILING_FOLDER, source_checks=checks)
+                                   folder=FILING_FOLDER, source_checks=checks,
+                                   content_sources=record["content_sources"])
             out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
             if not r.ok:
                 proposals[title] = record            # keep the question open

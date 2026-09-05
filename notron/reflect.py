@@ -268,7 +268,8 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
         from .executor import Executor
         body_md = (workspace.SEEDS[workspace.LESSONS].split("\n")[0] + "\n\n"
                    + "\n".join(f"- {l}" for l in merged) + "\n")
-        r = Executor().apply_write(replace(target, markdown=body_md))
+        r = Executor().apply_write(replace(target, markdown=body_md, content_sources=
+            [note.id for note in (ask, lesson_note, about_note) if note is not None]))
         out["written"] = r.ok
         say(f"learned: {'; '.join(kept)}")
     elif kept:

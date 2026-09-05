@@ -893,7 +893,13 @@ def _reply(state: State) -> Write:
 def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
     """Guard runs inside Executor.apply — no write reaches Notes unjudged."""
     ex = Executor(dry_run=dry_run)
+    known_sources = {passage.note_id for passage in
+                     [*state.system_sources.values(), *state.context] if passage.note_id}
+    if state.source_note_id:
+        known_sources.add(state.source_note_id)
     for w in state.writes:
+        # Context supplied to producers is provenance, never a permission grant.
+        w.content_sources = sorted(set(w.content_sources) | known_sources)
         r = ex.apply_write(w)
         if r.alternative_text:
             state.answer = r.alternative_text + "\n\n" + r.reason

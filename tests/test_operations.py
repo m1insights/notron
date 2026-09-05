@@ -56,7 +56,8 @@ def test_payloads_are_encrypted_and_target_metadata_is_durable(tmp_path, payload
     path = tmp_path / 'ops.sqlite3'
     ledger = OperationStore(path, payload_store)
     row = ledger.prepare('r', 'op', sha256(body).hexdigest(), payload=body,
-                         source_id='source', target_id='target', expected_revision='revision')
+                         source_id='source', target_id='target', expected_revision='revision',
+                         content_source_ids=('source', 'target'))
     assert ledger.payload('op') == body
     assert row.target_id == 'target' and row.source_id == 'source'
     assert row.expected_revision == 'revision' and row.payload_ref
@@ -74,7 +75,7 @@ def test_payload_failure_does_not_prepare_operation(tmp_path, payload_store, mon
     monkeypatch.setattr(payload_store, 'write', lambda *a: (_ for _ in ()).throw(OSError('disk full')))
     from hashlib import sha256
     with pytest.raises(OSError):
-        ledger.prepare('r', 'op', sha256(b'body').hexdigest(), payload=b'body')
+        ledger.prepare('r', 'op', sha256(b'body').hexdigest(), payload=b'body', content_source_ids=())
     assert ledger.get('op') is None
 
 
@@ -99,7 +100,7 @@ def test_policy_change_purges_payload_for_standalone_operation():
     from notron import operations, library
     ledger = operations.current()
     body = b'synthetic standalone payload'
-    ledger.prepare('standalone-request', 'standalone-op', sha256(body).hexdigest(), payload=body, source_id='n1')
+    ledger.prepare('standalone-request', 'standalone-op', sha256(body).hexdigest(), payload=body, source_id='n1', content_source_ids=('n1',))
     lib = library.load()
     lib.ignore.add('n1')
     library.save(lib)
@@ -150,8 +151,9 @@ def test_v1_migration_preserves_operation_and_can_record_observation(tmp_path, p
     store.prepare('request', 'operation', 'digest', target_id='nid', expected_revision='before')
     with store.connection() as db:
         columns = {row[1] for row in db.execute('PRAGMA table_info(operations)')}
-        if 'observed_revision' in columns:
-            db.execute('ALTER TABLE operations DROP COLUMN observed_revision')
+        for column in ('observed_revision', 'content_source_ids'):
+            if column in columns:
+                db.execute(f'ALTER TABLE operations DROP COLUMN {column}')
         db.execute('PRAGMA user_version=1')
     reopened = OperationStore(path, payload_store)
     assert reopened.get('operation').expected_revision == 'before'
@@ -159,3 +161,44 @@ def test_v1_migration_preserves_operation_and_can_record_observation(tmp_path, p
     result = reopened.transition('operation', S.APPLYING, S.APPLIED, observed_revision='after')
     assert result.observed_revision == 'after'
     assert OperationStore(path, payload_store).get('operation').observed_revision == 'after'
+
+
+def test_payload_requires_complete_immutable_content_source_ids(tmp_path, payload_store):
+    from hashlib import sha256
+    ledger = OperationStore(tmp_path / 'ops.sqlite3', payload_store)
+    data = b'combined synthetic paragraphs'
+    with pytest.raises(ValueError):
+        ledger.prepare('r', 'missing', sha256(data).hexdigest(), payload=data)
+    row = ledger.prepare('r', 'op', sha256(data).hexdigest(), payload=data,
+                         source_id='first', target_id='destination',
+                         content_source_ids=('first', 'second', 'destination'))
+    assert set(row.content_source_ids) == {'first', 'second', 'destination'}
+    with pytest.raises(OperationConflict):
+        ledger.prepare('r', 'op', sha256(data).hexdigest(), payload=data,
+                       source_id='first', target_id='destination', content_source_ids=('first', 'destination'))
+
+
+def test_schema2_unknown_provenance_payload_is_purged_without_resetting_identity(tmp_path, payload_store):
+    from hashlib import sha256
+    path = tmp_path / 'legacy.sqlite3'
+    ledger = OperationStore(path, payload_store)
+    data = b'legacy mixed note content'
+    kwargs = {}
+    import inspect
+    if 'content_source_ids' in inspect.signature(ledger.prepare).parameters:
+        kwargs['content_source_ids'] = ('first', 'second')
+    row = ledger.prepare('r', 'legacy-op', sha256(data).hexdigest(), payload=data, source_id='first', **kwargs)
+    with ledger.connection() as db:
+        columns = {row[1] for row in db.execute('PRAGMA table_info(operations)')}
+        if 'content_source_ids' in columns:
+            db.execute('ALTER TABLE operations DROP COLUMN content_source_ids')
+        db.execute('PRAGMA user_version=2')
+    migrated = OperationStore(path, payload_store)
+    assert migrated.get('legacy-op').operation_id == 'legacy-op'
+    assert migrated.get('legacy-op').status == S.NEEDS_REVIEW
+    assert migrated.payload('legacy-op') is None
+    assert not (payload_store.root / (row.payload_ref + '.enc')).exists()
+    assert list(payload_store.root.glob('ledger-history-*.enc'))
+    with pytest.raises(OperationConflict):
+        migrated.prepare('r', 'legacy-op', sha256(data).hexdigest(), payload=data,
+                         source_id='first', content_source_ids=('first', 'second'))

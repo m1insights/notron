@@ -150,7 +150,7 @@ def test_revocation_purges_request_and_operation_payloads():
     envelope = observe(store)[0]
     body = b'synthetic request operation payload'
     store.operations.prepare(envelope.request_id, 'op', sha256(body).hexdigest(),
-                             payload=body, source_id='n1')
+                             payload=body, source_id='n1', content_source_ids=('n1',))
     lib = library.load()
     lib.ignore.add('n1')
     library.save(lib)

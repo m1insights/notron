@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from hashlib import sha256
 import os
+import json
 from pathlib import Path
 import sqlite3
 from uuid import uuid4
@@ -19,7 +20,7 @@ from .securestore import EncryptedStore, StorageError, private_directory
 from .paths import DATA_DIR
 
 PATH = DATA_DIR / 'operations.sqlite3'
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class OperationConflict(RuntimeError):
@@ -74,6 +75,7 @@ class Operation:
     external_id: str | None
     failure_code: str | None
     observed_revision: str | None
+    content_source_ids: tuple[str, ...] | None
 
 
 class OperationStore:
@@ -93,7 +95,7 @@ class OperationStore:
         os.chmod(self.path, 0o600)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
-            if version not in (0, 1, SCHEMA_VERSION):
+            if version not in (0, 1, 2, SCHEMA_VERSION):
                 raise StorageError('Operation schema requires explicit migration.')
             if version == 0:
                 if history_exists:
@@ -147,12 +149,25 @@ class OperationStore:
                 if db.execute('PRAGMA user_version').fetchone()[0] == 1:
                     db.execute('ALTER TABLE operations ADD COLUMN observed_revision TEXT')
                     db.execute('PRAGMA user_version=2')
+                if db.execute('PRAGMA user_version').fetchone()[0] == 2:
+                    db.execute('ALTER TABLE operations ADD COLUMN content_source_ids TEXT')
+                    # Old rows prove only one source, not complete provenance. Never
+                    # guess from arbitrary payload formats; keep identity, purge content.
+                    db.execute("UPDATE requests SET status='needs_review',failure_code='payload_missing',updated_at=? "
+                               "WHERE status IN ('prepared','running') AND request_id IN "
+                               "(SELECT request_id FROM operations WHERE payload_ref IS NOT NULL)", (now(),))
+                    db.execute("UPDATE operations SET payload_ref=NULL,status=CASE WHEN status IN ('receipted','cancelled') "
+                               "THEN status ELSE 'needs_review' END,failure_code='payload_missing',updated_at=? "
+                               "WHERE payload_ref IS NOT NULL", (now(),))
+                    db.execute('PRAGMA user_version=3')
                 db.commit()
             except BaseException:
                 db.rollback()
                 raise
         if not marker_path.exists():
             self.payload_store.write(marker, b'notron-operation-ledger-v1')
+        # Also completes physical cleanup after a crash following migration commit.
+        self.prune_payloads()
         # Persist directory entries as well as the SQLite transaction contents.
         fd = os.open(self.path.parent, os.O_RDONLY)
         try:
@@ -201,19 +216,37 @@ class OperationStore:
             return None
         values = dict(row)
         values['status'] = S(values['status'])
+        encoded = values['content_source_ids']
+        try:
+            sources = json.loads(encoded) if encoded is not None else None
+            if sources is not None and (not isinstance(sources, list) or any(identity(nid) != nid for nid in sources)):
+                raise ValueError('Invalid content provenance.')
+            values['content_source_ids'] = tuple(sources) if sources is not None else None
+        except (ValueError, TypeError):
+            raise StorageError('Invalid operation content provenance; processing paused.') from None
         return Operation(**values)
 
     def prepare(self, request_id: str, operation_id: str, payload_hash: str, *,
                 payload: bytes | None = None, source_id: str | None = None,
-                target_id: str | None = None, expected_revision: str | None = None) -> Operation:
+                target_id: str | None = None, expected_revision: str | None = None,
+                content_source_ids: tuple[str, ...] | list[str] | None = None) -> Operation:
         identity(request_id), identity(operation_id), identity(payload_hash)
+        if payload is not None and content_source_ids is None:
+            raise ValueError('Payload requires explicit complete content provenance.')
+        if content_source_ids is not None:
+            if not isinstance(content_source_ids, (tuple, list)):
+                raise ValueError('Content provenance must be a list of note IDs.')
+            content_source_ids = tuple(sorted({identity(nid) for nid in content_source_ids}))
+            if any(nid and nid not in content_source_ids for nid in (source_id, target_id)):
+                raise ValueError('Content provenance omits source or destination metadata.')
+        encoded_sources = json.dumps(content_source_ids) if content_source_ids is not None else None
         if payload is not None and sha256(payload).hexdigest() != payload_hash:
             raise OperationConflict('Operation payload does not match its digest.')
         with self.transaction() as db:
             row = db.execute('SELECT * FROM operations WHERE operation_id=?', (operation_id,)).fetchone()
             if row:
-                if (row['request_id'], row['payload_hash'], row['source_id'], row['target_id'], row['expected_revision']) != (
-                        request_id, payload_hash, source_id, target_id, expected_revision):
+                if (row['request_id'], row['payload_hash'], row['source_id'], row['target_id'], row['expected_revision'], row['content_source_ids']) != (
+                        request_id, payload_hash, source_id, target_id, expected_revision, encoded_sources):
                     raise OperationConflict('Operation identity already belongs to different work.')
                 if payload is not None and (not row['payload_ref'] or self.payload_store.read(row['payload_ref']) != payload):
                     raise OperationConflict('Operation payload cannot be replaced.')
@@ -223,10 +256,10 @@ class OperationStore:
             db.execute('INSERT OR IGNORE INTO requests(request_id,created_at,updated_at) VALUES(?,?,?)',
                        (request_id, stamp, stamp))
             db.execute('''INSERT INTO operations(operation_id,request_id,payload_hash,payload_ref,status,
-                       created_at,updated_at,source_id,target_id,expected_revision)
-                       VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                       created_at,updated_at,source_id,target_id,expected_revision,content_source_ids)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
                        (operation_id, request_id, payload_hash, ref, S.PREPARED, stamp, stamp,
-                        source_id, target_id, expected_revision))
+                        source_id, target_id, expected_revision, encoded_sources))
             return self._record(db.execute('SELECT * FROM operations WHERE operation_id=?', (operation_id,)).fetchone())
 
     def transition(self, operation_id: str, expected: S, target: S, external_id: str | None = None,
@@ -247,6 +280,16 @@ class OperationStore:
                        'WHERE operation_id=? AND status=?',
                        (target, now(), external_id, failure_code, observed_revision, operation_id, expected))
             return self._record(db.execute('SELECT * FROM operations WHERE operation_id=?', (operation_id,)).fetchone())
+
+    def prune_payloads(self):
+        """Remove orphan ciphertext under the same lock used by payload preparation."""
+        from .persistence import durable_unlink
+        with self.transaction() as db:
+            refs = {row[0] for row in db.execute(
+                'SELECT payload_ref FROM requests UNION SELECT payload_ref FROM operations UNION SELECT payload_ref FROM observations')}
+            for path in self.payload_store.root.glob('operation-*.enc'):
+                if path.stem not in refs:
+                    durable_unlink(path)
 
     def get(self, operation_id: str) -> Operation | None:
         with self.connection() as db:

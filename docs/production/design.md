@@ -560,7 +560,11 @@ the latest visible snapshot's offsets as positional proof.
 ### P02 Task 2 implemented stable-write contract (2026-09-05)
 
 `state.Write` carries `note_id`, `expected_revision` and a locally generated
-`operation_id`, plus captured anchors and optional filing source checks.
+`operation_id`, plus captured anchors, optional filing source checks and known
+`content_sources`. The executor adds every source-check ID, active request source
+and destination ID (its title/anchors are payload content). Graph producers add
+retrieved/system context; filing and reflection retain their known model inputs.
+These IDs identify content contributors; they never grant permission.
 `executor.revision(body)` is the shared SHA-256 UTF-8 body digest.
 `capture_write(...)` binds ID/current metadata and the body revision **before**
 model input; a supplied body is the exact already-read snapshot. Organizer,
@@ -575,7 +579,12 @@ an existing title cannot absorb that operation. Setup remains explicit bootstrap
 A reentrant thread lock plus a process file lock in the ledger directory encloses
 policy/target validation, durable operation preparation, candidate Guard checks,
 required encrypted undo save, final metadata/source/body/policy checks, the Notes
-mutation and its verification. Nested audit calls reuse the held lock. Final body
+mutation and its verification. Source readability is rechecked after admission
+reads, before encrypting an operation, so a concurrent revocation cannot recreate
+purged content. After final target reads, all contributing sources must still
+exist and be readable, and the operation must still be APPLYING before mutation.
+This also guards rich-source results delivered to Ask. Nested audit calls reuse
+the held lock. Final body
 changes after backup abort; local writes never run model inference under this lock.
 Notes write/create adapters set `retries=0`: a timed-out Apple mutation cannot
 bypass the revision checks through a hidden subprocess retry. Same-operation
@@ -595,7 +604,9 @@ the final boundary. Deleted, edited or ambiguous sources do not copy. Duplicate
 case-insensitive master titles are excluded; cached title-only destinations must
 be reclassified and successful judgments retain the destination ID. Explicit
 approved creation also carries persisted lead/grouped-part source checks and the
-approval anchor through both locked boundaries. Missing legacy proposal revisions
+approval anchor through both locked boundaries. Proposals persist their known
+content contributors across approval; legacy proposals without that provenance
+refuse creation. Missing legacy proposal revisions
 are not refreshed at approval; changed/missing/ambiguous sources refuse creation
 and keep the proposal pending.
 
@@ -614,13 +625,27 @@ or divergence replaces organizer/undo success wording; a planner draft is clearl
 unsaved. Existing append/insert HTML preservation checks do not prove native rich
 object fidelity.
 
-Operation schema is now **2**. The atomic supported v1→v2 migration adds nullable
-`operations.observed_revision`; existing request/operation identities, immutable
-payloads, authenticated history/generation markers and tombstones remain intact.
+Operation schema is now **3**. `OperationStore.prepare` requires an explicit
+complete `content_source_ids` list for encrypted payloads; it is immutable with
+operation identity and must include declared source/target metadata. Retention
+purges the payload and preserves a review tombstone if any contributor is deleted
+or denied, including a secondary copied source, model context, destination anchor
+or title in a successful audit entry. Generic refusal audits contain no copied
+source content. This uses available producer provenance without redesigning
+Task 5 context selection.
+
+The atomic v1→v2 migration adds nullable `observed_revision`; v2→v3 adds contributor
+metadata. Legacy operation payloads lack evidence of complete provenance, so
+migration drops their payload references, marks nonterminal operations and active
+parent requests NEEDS_REVIEW, and physically removes orphan ciphertext before
+startup returns. Interrupted cleanup resumes on next open. It never guesses
+provenance from old payloads or recreates purged payloads. IDs, hashes, observed
+revisions, terminal states, history/generation markers and tombstones survive.
 `OperationStore.transition(..., observed_revision=...)` records final observed
-hashes without putting note text in SQLite. Unknown versions still refuse. Rollback
-must keep a matched ledger/payload backup and a schema-2-compatible reader: old
-schema-1 code deliberately pauses, and no destructive downgrade/reset is provided.
+hashes without note text in SQLite. Unknown versions still refuse. Rollback must
+keep a matched ledger/payload backup and schema-3-compatible code; schema-1/2 code
+refuses schema 3. No destructive downgrade, history reset or automatic replay is
+provided.
 
 Successful Notes writes and generic blocked/review-needed outcomes attempt the
 registered Log via the same serialized, revision-checked, verified write path with

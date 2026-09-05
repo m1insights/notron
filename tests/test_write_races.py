@@ -598,3 +598,119 @@ def test_rich_confirmation_refusal_is_visible_without_model_or_source_write(fake
     assert fake_note_store.body(nid) == body and not rewrite.allowed(nid)
     assert 'separate plain-text result' in markup.to_text(fake_note_store.body(ask))
     assert state.results and requests.current().get(envelope.request_id).status == 'completed'
+
+
+@pytest.mark.parametrize("revoke_at", [1, 2])
+def test_source_revoked_during_final_target_read_is_never_copied(monkeypatch, fake_note_store, safe_executor, make_write, revoke_at):
+    from notron import operations
+    source = fake_note_store.add('First source', '<div>first source paragraph</div>')
+    target = fake_note_store.add('Destination', '<div>destination paragraph</div>')
+    write = make_write(note_id=target, mode='append', markdown='first source paragraph',
+                       source_checks=[(source, executor.revision(fake_note_store.body(source)), 'first source paragraph', 0)])
+    reads = 0
+    def read_then_revoke(nid):
+        nonlocal reads
+        if nid == target:
+            reads += 1
+            if reads == revoke_at:
+                lib = library.load(); lib.ignore.add(source); library.save(lib)
+        return fake_note_store.body(nid)
+    monkeypatch.setattr(notes, 'read_body', read_then_revoke)
+    assert not safe_executor.apply_write(write).ok
+    assert fake_note_store.writes == []
+    operation = operations.current().get(write.operation_id)
+    if revoke_at == 1:
+        assert operation is None, "revoked content must not be encrypted after the admission read"
+    else:
+        assert operation.status == operations.S.NEEDS_REVIEW
+        assert operations.current().payload(write.operation_id) is None
+
+
+def test_rich_request_source_revoked_during_inference_is_not_delivered(fake_note_store):
+    from notron import graph, requests
+    body = '<div>Ideas</div><div>original details</div><div>@notron clean this up</div><img src="cid:photo">'
+    source = fake_note_store.add('Ideas', body)
+    ask = fake_note_store.add(workspace.ASK, '<div>Ask</div>', workspace.FOLDER)
+    lib = library.load(); lib.system_notes[workspace.ASK] = ask; library.save(lib)
+    class Brain:
+        def ask(self, **kwargs):
+            lib = library.load(); lib.ignore.add(source); library.save(lib)
+            return 'Original details carefully organized in a separate plain text result.'
+    envelope = requests.create('clean this up', source='mention', note_id=source,
+                               source_revision=executor.revision(body), source_text='@notron clean this up',
+                               reply_to=('Ideas', 'Notes', 2))
+    state = graph.run_request(envelope, brain=Brain())
+    assert fake_note_store.writes == []
+    assert any(result.startswith('✗') for result in state.results)
+    assert requests.current().get(envelope.request_id).status == 'needs_review'
+
+
+@pytest.mark.parametrize('removed', ['secondary', 'destination'])
+def test_complete_operation_provenance_purges_any_deleted_contributor(removed, fake_note_store, safe_executor, make_write):
+    from notron import operations, retention
+    first = fake_note_store.add('First source', '<div>first source paragraph</div>')
+    second = fake_note_store.add('Second source', '<div>second source paragraph</div>')
+    target = fake_note_store.add('Destination', '<div>destination anchor</div>')
+    write = make_write(note_id=target, mode='append', anchor='destination anchor',
+                       markdown='first source paragraph\n\nsecond source paragraph',
+                       source_checks=[(nid, executor.revision(fake_note_store.body(nid)), text, 0)
+                                      for nid, text in [(first, 'first source paragraph'), (second, 'second source paragraph')]])
+    assert safe_executor.apply_write(write).ok
+    ledger = operations.current()
+    ref = ledger.get(write.operation_id).payload_ref
+    assert ledger.payload(write.operation_id)
+    del fake_note_store.rows[second if removed == 'secondary' else target]
+    retention.reconcile()
+    assert ledger.payload(write.operation_id) is None
+    assert not (ledger.payload_store.root / (ref + '.enc')).exists()
+    assert ledger.get(write.operation_id).status == operations.S.NEEDS_REVIEW
+
+
+def test_invalidated_applying_operation_is_checked_after_final_reads(monkeypatch, fake_note_store, safe_executor, make_write):
+    from notron import operations
+    target = fake_note_store.add('Destination', '<div>destination paragraph</div>')
+    write = make_write(note_id=target, mode='append', markdown='new paragraph')
+    reads = 0
+    def invalidate_on_final_read(nid):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            operations.current().transition(write.operation_id, operations.S.APPLYING,
+                                            operations.S.NEEDS_REVIEW, failure_code='policy_changed')
+        return fake_note_store.body(nid)
+    monkeypatch.setattr(notes, 'read_body', invalidate_on_final_read)
+    assert not safe_executor.apply_write(write).ok
+    assert fake_note_store.writes == []
+
+
+def test_writer_context_provenance_is_retained_and_revocable(fake_note_store):
+    from notron import nodes, operations, retention
+    from notron.outbound import Passage
+    from notron.state import State
+    context = fake_note_store.add('Reference', '<div>reference paragraph</div>')
+    ask = fake_note_store.add(workspace.ASK, '<div>Ask</div>', workspace.FOLDER)
+    lib = library.load(); lib.system_notes[workspace.ASK] = ask; library.save(lib)
+    class Brain:
+        def ask(self, **kwargs): return 'A derived answer from the reference paragraph.'
+    state = nodes.writer(State(request='Explain', intent='question',
+                         context=[Passage.from_note('reference paragraph', fake_note_store.get_note(context))]), brain=Brain())
+    nodes.executor(state)
+    assert state.results[0].startswith('✓')
+    operation_id = state.writes[0].operation_id
+    del fake_note_store.rows[context]
+    retention.reconcile()
+    assert operations.current().payload(operation_id) is None
+
+
+def test_success_audit_payload_tracks_note_derived_title(fake_note_store, make_write):
+    from notron import operations, retention
+    target = fake_note_store.add('Source title', '<div>original</div>')
+    log = fake_note_store.add(workspace.LOG, '<div>Log</div>', workspace.FOLDER)
+    lib = library.load(); lib.system_notes[workspace.LOG] = log; library.save(lib)
+    assert executor.Executor().apply_write(make_write(note_id=target)).ok
+    ledger = operations.current()
+    audit = next(op for op in ledger.pending() if op.target_id == log)
+    assert b'Source title' in ledger.payload(audit.operation_id)
+    del fake_note_store.rows[target]
+    retention.reconcile()
+    assert ledger.payload(audit.operation_id) is None
