@@ -52,6 +52,7 @@ def test_a_scanner_that_has_been_primed_ignores_old_tags():
 def test_the_listener_survives_notes_going_away(monkeypatch):
     """Notes quitting or a request timing out must not end the day."""
     w = watch.Watcher(brain=None)
+    monkeypatch.setattr('notron.worker.probe', lambda: None)
     calls = []
 
     class StopListener(BaseException):

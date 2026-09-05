@@ -429,6 +429,8 @@ def _title(text: str) -> str:
 # ------------------------------------------------------------------- state
 
 def _state() -> dict:
+    from .worker_migration import require_filing_ready
+    require_filing_ready()
     from .securestore import read_json
     data = read_json(STATE)
     data.setdefault("judged", {})

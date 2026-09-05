@@ -12,6 +12,7 @@ from . import graph, rewrite, workspace
 from .brain import Brain, BrainUnavailable
 from .credentials import CredentialUnavailable
 from .securestore import StorageError
+from .worker import command, maintenance
 
 
 def _brain():
@@ -45,6 +46,7 @@ def cmd_storage(args):
         migration.accept(source, target, key)
         print('Migration accepted. Legacy originals and recovery copies retired; approved-note rebuild required.')
 
+@maintenance
 def cmd_setup(args):
     print(f"\nSetting up {workspace.FOLDER} in Apple Notes\n")
     for title, state in workspace.bootstrap().items():
@@ -79,14 +81,17 @@ def cmd_agenda(args):
     print(f"  Outstanding\n\n{reminders.summary()}\n")
 
 
+@command('ask')
 def cmd_ask(args):
     brain = _brain()
     request = " ".join(args.request)
+    from . import requests
+    envelope = getattr(args, '_envelope', None) or requests.create(request, request_id=getattr(args, 'request_id', None))
 
     if getattr(args, 'quiet', False):
         # For a caller that just wants the words back — a Shortcut piping into
         # "Speak Text", say. No trace, no blank lines, no results dump.
-        state = graph.run(request, brain=brain, dry_run=args.dry_run, request_id=getattr(args, 'request_id', None))
+        state = graph.run_request(envelope, brain=brain, dry_run=args.dry_run)
         print(state.answer.strip() if state.answer else "I don't have anything to say to that.")
         return
 
@@ -95,27 +100,32 @@ def cmd_ask(args):
             print(f"  · {state.trace[-1]}")
 
     print()
-    state = graph.run(request, brain=brain, dry_run=args.dry_run, on_node=trace, request_id=getattr(args, 'request_id', None))
+    state = graph.run_request(envelope, brain=brain, dry_run=args.dry_run, on_node=trace)
     print(f"\n{state.answer or '(nothing to say)'}\n")
     for r in state.results:
         print(f"  {r}")
     print()
 
 
+@command('plan')
 def cmd_plan(args):
     args.request = ["plan my week"] if args.week else ["plan my day"]
     cmd_ask(args)
 
 
+@command('index')
 def cmd_index(args):
     from . import index
 
     print("\n  Reading your notes…")
-    stats = index.build(_brain(), on_progress=lambda m: print(f"  {m}"), force=args.rebuild)
+    from .brain import batch_deadline
+    with batch_deadline():
+        stats = index.build(_brain(), on_progress=lambda m: print(f"  {m}"), force=args.rebuild)
     print(f"\n  Indexed {stats['notes']} notes "
           f"({stats['embedded']} passages embedded, {stats['reused']} already current)\n")
 
 
+@command('care')
 def cmd_care(args):
     from . import care
 
@@ -129,6 +139,7 @@ def cmd_care(args):
     print(f"  {'\u2713' if result.ok else '\u2717'} {workspace.CARE} — {result.reason}\n")
 
 
+@command('reflect')
 def cmd_reflect(args):
     from . import reflect
 
@@ -144,11 +155,13 @@ def cmd_reflect(args):
     print()
 
 
+@command('morning')
 def cmd_morning(args):
     from . import daily
 
     print(f"\n  Notron's morning — {__import__('datetime').datetime.now():%A %d %B, %H:%M}\n")
-    out = daily.morning(_brain(), dry_run=args.dry_run, on_step=lambda m: print(f"  · {m}"))
+    out = daily.morning(_brain(), dry_run=args.dry_run, on_step=lambda m: print(f"  · {m}"),
+                        envelope=getattr(args, '_envelope', None))
     print(f"\n{out.get('plan') or ''}\n")
     if out.get("care"):
         print("  She needs something from you:")
@@ -191,18 +204,33 @@ def cmd_listen(args):
     label, project = watch.WATCH_LABEL, pathlib.Path(__file__).resolve().parents[1]
     target = pathlib.Path.home() / "Library" / "LaunchAgents" / f"{label}.plist"
 
-    if getattr(args, "status", False):
-        import json
-        print(json.dumps({"running": watch.is_running()}))
+    if any(getattr(args, name, False) for name in ('status', 'pause', 'resume')):
+        import json, sqlite3
+        from .health import HealthStore
+        try:
+            store = HealthStore()
+            if getattr(args, 'pause', False):
+                store.set_paused(True)
+            elif getattr(args, 'resume', False):
+                store.set_paused(False)
+            status = store.status(registered=watch.is_running())
+        except (StorageError, sqlite3.DatabaseError, OSError):
+            status = {'version': 1, 'state': 'error', 'reason_code': 'storage_unavailable',
+                      'heartbeat_at': None, 'last_success_at': None, 'pending_count': None, 'running': False}
+        print(json.dumps(status))
         return
 
     if args.off:
+        from .health import HealthStore
+        HealthStore().set_stop(True)
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True)
         target.unlink(missing_ok=True)
-        print("\n  Notron has stopped listening.\n")
+        print("\n  Stop requested. Foreground work will finish its current guarded job before exiting.\n")
         return
 
     if args.install:
+        from .health import HealthStore
+        HealthStore().set_stop(False)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(watch.plist(str(project / ".venv" / "bin" / "python"), str(project)))
         subprocess.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], capture_output=True)
@@ -211,25 +239,30 @@ def cmd_listen(args):
         if r.returncode != 0:
             print(f"\n  Could not start: {r.stderr.strip()}\n", file=sys.stderr)
             raise SystemExit(1)
-        print(f"\n  Notron is listening, and will keep listening after you reboot.")
+        print(f"\n  Listener registered. Check readiness with: notron listen --status")
         print(f"  Type into Notes → {workspace.FOLDER} → {workspace.ASK}, from any device.")
         print(f"  Stop her with: notron listen --off\n")
         return
 
     print()
     try:
-        watch.Watcher(_brain(), on_event=lambda m: __import__("notron.diagnostics", fromlist=["record"]).record("listener_event")).run_forever()
+        from .health import HealthStore
+        HealthStore().set_stop(False)
+        watch.Watcher(None, on_event=lambda m: __import__("notron.diagnostics", fromlist=["record"]).record("listener_event")).run_forever()
     except KeyboardInterrupt:
         print("\n  Stopped listening.\n")
 
 
+@command('file')
 def cmd_file(args):
     from . import filer, requests
 
     brain = _brain()
-    envelope = requests.create('file my brain dump', request_id=getattr(args, 'request_id', None))
+    envelope = getattr(args, '_envelope', None) or requests.create('file my brain dump', request_id=getattr(args, 'request_id', None))
     print()
-    outcome = requests.run_job(envelope, lambda: filer.run(brain, dry_run=args.dry_run,
+    from .brain import batch_deadline
+    with batch_deadline():
+        outcome = requests.run_job(envelope, lambda: filer.run(brain, dry_run=args.dry_run,
                                                           on_step=lambda m: print(f"  · {m}")),
                                dry_run=args.dry_run)
     if outcome.result is None:
@@ -372,9 +405,12 @@ def main(argv=None):
     pl.set_defaults(fn=cmd_plan)
 
     li = sub.add_parser("listen", help="watch the Ask note and answer what you type")
-    li.add_argument("--install", action="store_true", help="keep listening in the background, always")
-    li.add_argument("--off", action="store_true", help="stop listening")
-    li.add_argument("--status", action="store_true", help="is the background listener actually running? (machine-readable)")
+    control = li.add_mutually_exclusive_group()
+    control.add_argument("--install", action="store_true", help="keep listening in the background, always")
+    control.add_argument("--off", action="store_true", help="stop listening")
+    control.add_argument("--status", action="store_true", help="worker health (versioned JSON)")
+    control.add_argument("--pause", action="store_true", help="persistently pause admission after current work")
+    control.add_argument("--resume", action="store_true", help="resume after readiness checks")
     li.set_defaults(fn=cmd_listen)
 
     mo = sub.add_parser("morning", help="Notron's daily routine: catch up, plan, self-check")

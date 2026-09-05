@@ -183,6 +183,7 @@ def test_same_request_cannot_be_claimed_twice():
 def test_cli_supplied_id_reaches_real_ledger(monkeypatch, capsys):
     from notron import cli
     monkeypatch.setattr(cli, '_brain', lambda: None)
+    monkeypatch.setattr('notron.worker.probe', lambda: None)
     monkeypatch.setattr(graph, 'ORDER', ())
     monkeypatch.setattr('sys.argv', ['notron', 'ask', '--quiet', '--request-id', 'cli-supplied', 'hello'])
     cli.main()
@@ -260,6 +261,7 @@ def test_morning_source_is_not_relabeled_cli(monkeypatch):
 def test_cli_file_records_request_before_filing(monkeypatch, capsys):
     from notron import cli, filer
     monkeypatch.setattr(cli, '_brain', lambda: None)
+    monkeypatch.setattr('notron.worker.probe', lambda: None)
     seen = []
     def run(*a, **kw):
         record = requests.current().get('file-request')

@@ -17,7 +17,12 @@ from datetime import datetime
 from . import care, graph, index, notes, reflect, workspace
 
 
-def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
+def morning(brain, *, dry_run: bool = False, on_step=None, envelope=None) -> dict:
+    from .health import WorkerLock
+    if not WorkerLock.owned():
+        from .worker import submit
+        return submit('morning', {'dry_run': dry_run},
+                      lambda args: morning(brain, dry_run=args.dry_run, on_step=on_step, envelope=args._envelope))
     from . import retention
     retention.reconcile()
     def say(msg: str) -> None:
@@ -41,7 +46,9 @@ def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
     # 1. Learn anything written since yesterday.
     if not dry_run:
         say("reading what you wrote since yesterday")
-        stats = index.build(brain, on_progress=say)
+        from .brain import batch_deadline
+        with batch_deadline():
+            stats = index.build(brain, on_progress=say)
         out["indexed"] = stats
         say(f"learned {stats['embedded']} new passages")
 
@@ -51,7 +58,9 @@ def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
 
     # 2. Rebuild today's list from your notes and standing instructions.
     say("rebuilding ☀️ Today")
-    state = graph.run("plan my day", brain=brain, trigger="morning", dry_run=dry_run)
+    from . import requests
+    envelope = envelope or requests.create('plan my day', source='morning')
+    state = graph.run_request(envelope, brain=brain, dry_run=dry_run)
     out["today"] = state.results
     out["plan"] = state.answer
 

@@ -321,9 +321,62 @@ def test_sdk_ambient_headers_cannot_forward_production_secrets_to_development(mo
         assert secret not in request
 
 
-def test_inference_keeps_sdk_reasoning_timeout_budget(wire):
+def test_inference_transport_uses_remaining_interactive_deadline(wire):
     invoke('inference')
-    assert 600 in wire.timeouts
+    assert wire.timeouts
+    assert all(0 < value <= 30 for value in wire.timeouts)
+
+
+@pytest.mark.parametrize('boundary', ['inference', 'search'])
+def test_blocking_dns_is_interrupted_by_total_deadline(monkeypatch, wire, boundary):
+    import time
+    from notron import brain, research
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(brain, 'INTERACTIVE_DEADLINE', 0.05)
+    monkeypatch.setattr(brain, '_deadline_seconds', SimpleNamespace(get=lambda: 0.05))
+    monkeypatch.setattr(research, 'TIMEOUT', 0.05)
+
+    def blocked_resolution(*args, **kwargs):
+        time.sleep(1)
+        pytest.fail('deadline did not interrupt DNS')
+
+    monkeypatch.setattr(socket, 'getaddrinfo', blocked_resolution)
+    started = time.monotonic()
+    with pytest.raises(network.ProviderDeadlineError):
+        invoke(boundary)
+    assert time.monotonic() - started < 0.5
+    assert not wire.connects and not wire.requests
+
+
+@pytest.mark.parametrize('boundary', ['inference', 'search'])
+def test_slow_response_body_is_interrupted_by_total_deadline(monkeypatch, boundary):
+    import time
+    from notron import brain, research
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(brain, '_deadline_seconds', SimpleNamespace(get=lambda: 0.05))
+    monkeypatch.setattr(research, 'TIMEOUT', 0.05)
+
+    class SlowResponse:
+        status = 200
+        def getheaders(self): return [('Content-Type', 'application/json')]
+        def read(self):
+            time.sleep(1)
+            pytest.fail('deadline did not interrupt response body')
+
+    class SlowConnection:
+        def __init__(self, *args, **kwargs):
+            self.sock = SimpleNamespace(settimeout=lambda value: None)
+        def request(self, *args, **kwargs): pass
+        def getresponse(self): return SlowResponse()
+        def close(self): pass
+
+    monkeypatch.setattr(network, '_ProviderConnection', SlowConnection)
+    started = time.monotonic()
+    with pytest.raises(network.ProviderDeadlineError):
+        invoke(boundary)
+    assert time.monotonic() - started < 0.5
 
 
 @pytest.mark.parametrize('failure', ['credential', 'storage', 'policy'])

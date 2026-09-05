@@ -62,6 +62,10 @@ class Watcher:
     _failures: dict = field(default_factory=dict)  # key -> (count, last attempt at)
     _ask_id: str | None = None
     _dump_id: str | None = None
+    _runtime_ready: bool = False
+    _last_sweep: float = 0
+    _last_dump: float = 0
+    _intent_version: int = -1
 
     # A question that produced no write stays "unanswered" in the note, so the
     # next poll would send it to the model again, and again, forever — a quiet
@@ -98,12 +102,31 @@ class Watcher:
         return wrote
 
     def _worth_trying(self, key: str) -> bool:
-        count, at = self._failures.get(key, (0, 0.0))
+        from .health import HealthStore
+        from hashlib import sha256
+        with HealthStore().connection() as db:
+            row = db.execute('SELECT failures,attempted_at FROM cooldowns WHERE key_hash=?',
+                             (sha256(key.encode()).hexdigest(),)).fetchone()
+        count, at = self._failures.get(key, tuple(row) if row else (0, 0.0))
         return count < self.MAX_TRIES or time.time() - at >= self.COOLDOWN
 
     def _attempted(self, key: str, wrote: bool) -> None:
+        from .health import HealthStore
+        from hashlib import sha256
+        digest = sha256(key.encode()).hexdigest()
+        store = HealthStore()
+        with store.connection() as db:
+            if wrote:
+                db.execute('DELETE FROM cooldowns WHERE key_hash=?', (digest,))
+            else:
+                db.execute('INSERT INTO cooldowns VALUES(?,1,?) ON CONFLICT(key_hash) DO UPDATE SET '
+                           'failures=failures+1,attempted_at=excluded.attempted_at', (digest, time.time()))
+            # Retry metadata has no content or authority; keep a bounded recent window.
+            db.execute('DELETE FROM cooldowns WHERE key_hash NOT IN '
+                       '(SELECT key_hash FROM cooldowns ORDER BY attempted_at DESC LIMIT 1000)')
         if wrote:
             self._failures.pop(key, None)
+            store.success()
         else:
             count, _ = self._failures.get(key, (0, 0.0))
             self._failures[key] = (count + 1, time.time())
@@ -149,7 +172,11 @@ class Watcher:
         asks = [q for q in conversation.unanswered(body, ignore=ASK_FURNITURE) if len(q.text) >= MIN_CHARS]
         store = requests.current()
         envelopes = store.observe(self._ask_id, body, asks, source='ask',
-                                  title=workspace.ASK, folder=workspace.FOLDER)
+                                  title=workspace.ASK, folder=workspace.FOLDER,
+                                  legacy_review=self._ask_id in self.scanner.review)
+        if self._ask_id in self.scanner.review:
+            self.scanner.review.discard(self._ask_id)
+            self.scanner._save()
         for q, envelope in zip(asks, envelopes):
             record = store.get(envelope.request_id)
             from . import recovery
@@ -265,7 +292,9 @@ class Watcher:
         if not self._settled("dump", fingerprint, settle=self.dump_settle):
             return
         self._say(f"\n> [{workspace.DUMP}] quiet for {int(self.dump_settle // 60)} min — filing")
-        outcome = requests.run_job(envelope, lambda: filer.run(self.brain, on_step=lambda m: self._say(f"  filer: {m}")))
+        from .brain import batch_deadline
+        with batch_deadline():
+            outcome = requests.run_job(envelope, lambda: filer.run(self.brain, on_step=lambda m: self._say(f"  filer: {m}")))
         if outcome.result is None:
             self._say(outcome.message)
             return
@@ -273,6 +302,9 @@ class Watcher:
         for result in out.results:
             self._say(f"  {result}")
         self._say(f"\n{out.summary()}\n")
+        if outcome.status == 'completed':
+            from .health import HealthStore
+            HealthStore().success()
         self._pending.pop("dump", None)
 
     def recover_pending(self) -> bool:
@@ -301,7 +333,9 @@ class Watcher:
                     state = graph.run_request(envelope, brain=self.brain)
                     complete = state.receipt_complete
                 else:
-                    result = requests.run_job(envelope, lambda: filer.run(self.brain))
+                    from .brain import batch_deadline
+                    with batch_deadline():
+                        result = requests.run_job(envelope, lambda: filer.run(self.brain))
                     complete = result.status == 'completed'
             self._attempted(key, complete)
             return True
@@ -309,46 +343,92 @@ class Watcher:
 
     # ------------------------------------------------------------------- loop
 
-    def run_forever(self) -> None:
-        from . import retention
-        retention.require_ready()
-        # Notes may have been idle for hours. Waking it is slow exactly once.
+    def prepare_runtime(self) -> bool:
+        from . import worker
+        from .health import HealthStore
         try:
-            took = notes.warm_up()
-            if took > 5:
-                self._say(f"woke the Notes app ({took:.0f}s — it had been asleep)")
-        except Exception as e:
-            self._say(f"  (Notes did not wake: {type(e).__name__}) — trying anyway")
+            from . import credentials
+            if credentials._provider is None:
+                credentials.startup()
+            from .worker_migration import migrate_filer
+            migrate_filer()
+            brain = worker.probe()
+            if self.brain is None:
+                self.brain = brain
+            if not self.scanner.primed:
+                self.scanner.prime()
+                self.scanner.primed = True
+            worker.Queue().recover_interrupted()
+            HealthStore().update(state='ready', reason_code=None)
+            self._runtime_ready = True
+            return True
+        except Exception as exc:
+            self._runtime_ready = False
+            worker.failure(exc)
+            return False
 
-        self._say(f"listening to {workspace.ASK} — type in Notes on any device")
+    def tick(self, *, resumed=False):
+        from . import worker, audit
+        from .health import HealthStore
+        worker.require_owner()
+        store = HealthStore()
+        intent = store.row()
+        if intent['stop_requested']:
+            return
+        if intent['paused']:
+            self._runtime_ready = False
+            store.update(state='paused', reason_code='user_paused')
+            return
+        if resumed or self._intent_version != intent['intent_version']:
+            self._runtime_ready = False
+            self._pending.clear()  # Sleep/pause never makes a half-typed turn settled.
+            self._intent_version = intent['intent_version']
+            store.update(state='starting', reason_code='resuming')
+        if not self._runtime_ready and not self.prepare_runtime():
+            return
         try:
-            n = self.scanner.prime()
-            self._say(f"watching {n} notes for #notron — tag me anywhere")
-        except Exception as e:
-            self._say(f"  (couldn't survey your notes: {type(e).__name__}) — Ask note still works")
-
-        last_sweep = last_beat = last_dump = time.time()
-        while True:
-            time.sleep(self.ask_poll)
-            try:
-                from . import audit
+            # Recovery wins over fresh jobs after every restart/resume.
+            if self.recover_pending():
+                return
+            if store.paused or store.row()['stop_requested']:
+                return
+            if worker.drain_one():
+                return
+            self.check_ask()
+            if store.paused or store.row()['stop_requested']:
+                return
+            now = time.time()
+            if now - self._last_sweep >= self.sweep_every:
+                self._last_sweep = now
+                self.sweep_mentions()
+            if store.paused or store.row()['stop_requested']:
+                return
+            if not store.paused and now - self._last_dump >= self.dump_poll:
+                self._last_dump = now
+                self.check_dump()
+            if not store.paused and not store.row()['stop_requested']:
                 audit.drain()
-                self.recover_pending()
-                self.check_ask()
-                if self.scanner.primed and time.time() - last_sweep >= self.sweep_every:
-                    last_sweep = time.time()
-                    self.sweep_mentions()
-                if time.time() - last_dump >= self.dump_poll:
-                    last_dump = time.time()
-                    self.check_dump()
-                if time.time() - last_beat >= 300:
-                    last_beat = time.time()
-                    self._say(f"  still listening ({time.strftime('%H:%M')})")
-            except Exception as e:
-                # Notes quits, the machine sleeps, a request times out. None of
-                # these should end the day.
-                self._say(f"  (paused: {type(e).__name__}) — retrying")
-                time.sleep(self.ask_poll)
+            store.update(state='ready', reason_code=None)
+        except Exception as exc:
+            self._runtime_ready = False
+            worker.failure(exc)
+            self._say(f"  (paused: {type(exc).__name__}) — retrying")
+
+    def run_forever(self) -> None:
+        from .health import HealthStore, Heartbeat, WorkerLock, STALE_AFTER
+        store = HealthStore()
+        with WorkerLock() as lock:
+            if not lock.acquired:
+                self._say('A worker already owns the queue.')
+                return
+            with Heartbeat(store) as heartbeat:
+                previous = time.time()
+                self._last_sweep = self._last_dump = previous
+                while not heartbeat.failed.is_set() and not store.row()['stop_requested']:
+                    now = time.time()
+                    self.tick(resumed=now < previous or now - previous > STALE_AFTER)
+                    previous = now
+                    time.sleep(self.ask_poll)
 
 
 WATCH_LABEL = "io.m1labs.notron.listen"

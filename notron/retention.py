@@ -54,6 +54,10 @@ def apply_policy() -> None:
     marker = index.CACHE.with_name('retention.json')
     previous = read_json(marker)
     if previous.get('policy') != signature:
+        from .persistence import durable_unlink
+        # Raw migration evidence is no longer retained after its sources' access
+        # changes. The content-free worker review gate deliberately survives.
+        durable_unlink(filer.STATE.parent / 'worker-backup' / 'filer-v1.enc')
         for path in (filer.STATE, reflect.STATE):
             if path.with_suffix('.enc').exists():
                 write_json(path, {})
@@ -64,6 +68,10 @@ def apply_policy() -> None:
     from . import operations, requests
     if operations.PATH.exists():
         requests.current().purge_sources(all_content=previous.get('policy') != signature)
+    worker_path = operations.PATH.parent / 'worker.sqlite3'
+    if worker_path.exists():
+        from .worker import Queue
+        Queue().purge_revoked()
     if previous.get('policy') != signature:
         write_json(marker, {'policy': signature})
 
@@ -89,6 +97,8 @@ def reconcile() -> set[str]:
     if old is None or set(old) - live:
         removed = True
     if removed:
+        from .persistence import durable_unlink
+        durable_unlink(filer.STATE.parent / 'worker-backup' / 'filer-v1.enc')
         for path in (filer.STATE, reflect.STATE):
             if path.with_suffix('.enc').exists():
                 write_json(path, {})
@@ -110,4 +120,7 @@ def reconcile() -> set[str]:
     from . import operations, requests
     if operations.PATH.exists():
         requests.current().purge_sources(live)
+    if (operations.PATH.parent / 'worker.sqlite3').exists():
+        from .worker import Queue
+        Queue().purge_revoked()
     return live

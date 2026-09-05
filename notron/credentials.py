@@ -131,7 +131,9 @@ def storage_key() -> bytes:
 def provision_storage_key(root: Path) -> None:
     """Explicit fresh setup only. A lost key must never be silently replaced."""
     from .securestore import EncryptedStore
-    if _provider is None or get(STORAGE_KEY) is not None or (root.exists() and any(root.iterdir())):
+    from .health import control_artifacts
+    if (_provider is None or get(STORAGE_KEY) is not None
+            or (root.exists() and {p.name for p in root.iterdir()} - control_artifacts(root))):
         raise CredentialUnavailable('Storage setup requires an empty destination and no existing key.')
     key = os.urandom(32)
     _provider.put(STORAGE_KEY, key)

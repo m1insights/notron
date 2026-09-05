@@ -689,3 +689,12 @@ normalization and multi-device execution remain unverified; P06 default startup
 pause is unchanged. No provider/model/dependency changed and no real data was used.
 
 Evidence: [Task 2 handoff](handoffs/2026-09-05-P02-task-2.md).
+
+
+### P02 Task 6 implemented worker contract (2026-09-05)
+
+See the [Task 6 handoff](handoffs/2026-09-05-P02-task-6.md) for schema, migration, retention, rollback and verification details. Health JSON version 1 distinguishes live heartbeat, last completed work and queue depth; unreadable queue metadata yields an unknown count, never an invented zero. Heartbeat runs independently every five seconds, with 30-second staleness. Durable pause stops new-job admission and lets admitted guarded work finish.
+
+Worker SQLite schema 1 stores content-free health/intent/queue/cooldowns; operation SQLite remains schema 3. CLI producers share the existing request-execution lock and encrypted queue; one-shot owners drain accepted work before a race-safe lease handoff. Generic interrupted maintenance requires review. Existing ledger-backed action/receipt recovery keeps its identities and uncertainty rules. Nebius and Tavily calls have absolute interactive deadlines and independent cooldowns; provider transport requires the main worker thread.
+
+Scanner metadata version 2 preserves pending debt and flags unknown legacy Ask/tag effects for review. Encrypted filing-history backups precede migration; uncertain legacy filing is gated rather than replayed. Revocation/deletion retires raw backup and duplicated queued content while preserving non-replay tombstones. Status/pause control metadata is accepted before key provisioning only when validated as content-free with no prior jobs. Signed macOS runtime, live permission and sleep/wake qualification remain P06; no cross-Mac lease or universal exactly-once guarantee is introduced.

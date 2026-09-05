@@ -90,6 +90,8 @@ def migrate(source: Path, target: Path, key: bytes) -> dict:
         if path.exists(): raw[name] = path.read_bytes()
     if not raw: raise MigrationError('No recognized legacy caches found.')
     undo = _validate(raw)  # validate everything before publishing any content
+    from .worker_migration import legacy_summary
+    worker_history = legacy_summary(raw)
     hashes = {name: _digest(data) for name, data in raw.items()}
     private_directory(target)
     store = EncryptedStore(target, key)
@@ -112,6 +114,8 @@ def migrate(source: Path, target: Path, key: bytes) -> dict:
             raise MigrationError('Interrupted migration source changed; originals preserved.')
     else:
         names = {path.name for path in target.iterdir()}
+        from .health import control_artifacts
+        names -= control_artifacts(target)
         if names and (names != {'key-check.enc'} or store.read('key-check') != b'notron-storage-v1'):
             raise MigrationError('Migration destination must be empty or contain only its verified initialization marker.')
     store.write('migration-incomplete', json.dumps({'files': hashes, 'source': str(source)}).encode())
@@ -127,7 +131,8 @@ def migrate(source: Path, target: Path, key: bytes) -> dict:
             recovery.write(name, data)
         os.chmod(source / name, 0o600)
     private_directory(source)
-    payloads = {'index': {'outbound_version': 1, 'notes': {}}, 'undo': undo, 'filer': {}, 'reflect': {}}
+    payloads = {'index': {'outbound_version': 1, 'notes': {}}, 'undo': undo, 'filer': {}, 'reflect': {},
+                'worker-history': worker_history}
     outputs = {}
     for name, value in payloads.items():
         data = json.dumps(value).encode()

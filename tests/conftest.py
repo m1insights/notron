@@ -177,6 +177,7 @@ def _outbound_resources_are_disposable(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     for module, attr, name in (
         (brain, 'USAGE_LOG', 'usage.json'), (care, 'USAGE_LOG', 'usage.json'),
+        (brain, 'PROVIDER_STATE', 'provider.json'),
         (care, 'MOOD_FILE', 'mood.json'), (filer, 'STATE', 'filer.json'),
         (reflect, 'STATE', 'reflect.json'), (index, 'CACHE', 'index.json'),
         (index, 'VECTORS', 'vectors.npy'),

@@ -43,6 +43,7 @@ class Scanner:
 
     seen: dict[str, str] = field(default_factory=dict)   # note id -> modified stamp
     pending: set[str] = field(default_factory=set)       # notes that still owe an answer
+    review: set[str] = field(default_factory=set)        # legacy observations with unknown effects
     primed: bool = False
 
     def prime(self) -> int:
@@ -55,15 +56,30 @@ class Scanner:
         restart must not lose a tag. If you write `#notron` and the machine reboots
         before she gets to it, she still owes you an answer, and she knows it.
         """
+        from . import worker_migration
+        from .securestore import StorageError
+        saved = None
         if STATE.exists():
             try:
-                saved = json.loads(STATE.read_text())
-                self.seen = saved.get("seen", {})
-                self.pending = set(saved.get("pending", []))
-                self.primed = True
-                return len(self.seen)
-            except (OSError, ValueError):
-                pass
+                if STATE.is_symlink():
+                    raise StorageError('Unsafe scanner metadata path.')
+                raw = STATE.read_bytes()
+                saved = worker_migration.scanner_state(json.loads(raw))
+                if saved.get('version', 1) == 1:
+                    worker_migration.backup(STATE.parent, 'seen-v1', raw)
+            except (OSError, ValueError, TypeError):
+                raise StorageError('Scanner metadata requires recovery; history was preserved.') from None
+        else:
+            saved = worker_migration.imported_scanner()
+        if saved is not None:
+            worker_migration.scanner_state(saved)
+            self.seen = saved.get('seen', {})
+            self.pending = set(saved.get('pending', []))
+            self.review = (set(self.seen) | self.pending if saved.get('version', 1) == 1
+                           else set(saved.get('review', [])))
+            self._save()
+            self.primed = True
+            return len(self.seen)
 
         for n in notes.list_all_notes():
             self.seen[n.id] = n.modified
@@ -72,14 +88,11 @@ class Scanner:
         return len(self.seen)
 
     def _save(self) -> None:
-        try:
-            STATE.parent.mkdir(parents=True, exist_ok=True)
-            from .persistence import atomic_write_json
-            from .securestore import private_directory
-            private_directory(STATE.parent)
-            atomic_write_json(STATE, {"seen": self.seen, "pending": sorted(self.pending)})
-        except OSError:
-            pass
+        from .persistence import atomic_write_json
+        from .securestore import private_directory
+        private_directory(STATE.parent)
+        atomic_write_json(STATE, {'version': 2, 'seen': self.seen, 'pending': sorted(self.pending),
+                                  'review': sorted(self.review)})
 
     def changed(self) -> list:
         """Notes worth reading this pass.
@@ -103,6 +116,7 @@ class Scanner:
                 continue
             if self.seen.get(n.id) != n.modified or n.id in self.pending:
                 out.append(n)
+                self.pending.add(n.id)  # Commit read debt before the changed timestamp.
             self.seen[n.id] = n.modified
         self._save()
         return out
@@ -127,8 +141,11 @@ class Scanner:
                 self.pending.add(n.id)
             else:
                 self.pending.discard(n.id)
-            envelopes = requests.current().observe(n.id, body, asks, source='mention',
-                                                   title=n.title, folder=n.folder, modified=n.modified)
+            store = requests.current()
+            envelopes = store.observe(n.id, body, asks, source='mention',
+                                      title=n.title, folder=n.folder, modified=n.modified,
+                                      legacy_review=n.id in self.review)
+            self.review.discard(n.id)
             for q, envelope in zip(asks, envelopes):
                 found.append(Mention(
                     note_id=n.id, title=n.title, folder=n.folder,

@@ -12,6 +12,7 @@ page of blue links, which is what a model can actually use.
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -19,7 +20,7 @@ from .outbound import Passage, prepare_outbound
 from . import network
 
 ENDPOINT = network.SEARCH_URL
-TIMEOUT = 20
+TIMEOUT = 30
 
 
 class NoSearchKey(RuntimeError):
@@ -45,6 +46,25 @@ def available() -> bool:
 def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
     """Return Tavily's own summary answer plus the sources behind it."""
     query = "\n".join(prepare_outbound("search", passages))
+    from . import brain
+    deadline = time.monotonic() + TIMEOUT
+    with brain._deadline_guard(deadline):
+        brain._check_cooldown('tavily')
+        data = _search(query, limit, depth, deadline)
+
+    findings = [
+        Finding(
+            title=r.get("title", "")[:120],
+            url=r.get("url", ""),
+            snippet=(r.get("content") or "")[:800],
+        )
+        for r in data.get("results", [])
+    ]
+    return (data.get("answer") or "").strip(), findings
+
+
+def _search(query: str, limit: int, depth: str, deadline: float) -> dict:
+    from . import brain
     from . import credentials, retention
     retention.require_ready()
     endpoint = network.provider_endpoint(ENDPOINT, 'tavily')
@@ -61,20 +81,17 @@ def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic")
         "include_answer": True,
     }).encode()
 
-    with network.provider_client(endpoint) as client:
-        response = client.post(endpoint.url, content=payload, headers={"Content-Type": "application/json"}, timeout=TIMEOUT)
-        response.raise_for_status()
-        data = response.json()
+    def request():
+        # Rebuild the constrained client so each retry revalidates endpoint,
+        # credential and destination at the existing provider boundary.
+        with network.provider_client(endpoint) as client:
+            response = client.post(
+                endpoint.url, content=payload, headers={"Content-Type": "application/json"},
+                timeout=brain._remaining(deadline))
+            response.raise_for_status()
+            return response.json()
 
-    findings = [
-        Finding(
-            title=r.get("title", "")[:120],
-            url=r.get("url", ""),
-            snippet=(r.get("content") or "")[:800],
-        )
-        for r in data.get("results", [])
-    ]
-    return (data.get("answer") or "").strip(), findings
+    return brain.provider_call(request, deadline, service='tavily')
 
 
 # Domain tiers for ranking findings. Suffix-matched, so subdomains count.

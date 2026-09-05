@@ -10,6 +10,13 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import signal
+import threading
+import time
+import math
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -20,6 +27,164 @@ from . import network
 
 from .paths import DATA_DIR
 USAGE_LOG = DATA_DIR / "usage.json"
+PROVIDER_STATE = DATA_DIR / "provider.json"
+
+INTERACTIVE_DEADLINE = 30.0
+BATCH_DEADLINE = 60.0
+MAX_ATTEMPTS = 2
+_deadline_seconds: ContextVar[float] = ContextVar('brain_deadline_seconds', default=INTERACTIVE_DEADLINE)
+
+
+@contextmanager
+def batch_deadline():
+    """Give filing/index work a 60-second total provider-call budget."""
+    token = _deadline_seconds.set(BATCH_DEADLINE)
+    try:
+        yield
+    finally:
+        _deadline_seconds.reset(token)
+
+
+@contextmanager
+def _deadline_guard(deadline: float):
+    """Enforce the absolute deadline around blocking DNS on the main thread."""
+    with network.deadline(deadline):
+        if threading.current_thread() is not threading.main_thread():
+            raise network.ProviderDeadlineError(
+                'Provider calls require the deadline-capable main worker thread.')
+        def expired(signum, frame):
+            raise network.ProviderDeadlineError('Provider did not answer before its deadline.')
+
+        previous = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, expired)
+        started = time.monotonic()
+        old_timer = signal.setitimer(signal.ITIMER_REAL, max(0.001, deadline - time.monotonic()))
+        try:
+            yield
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous)
+            if old_timer[0] > 0:
+                elapsed = time.monotonic() - started
+                signal.setitimer(signal.ITIMER_REAL, max(0.001, old_timer[0] - elapsed), old_timer[1])
+
+
+_PROVIDERS = ('nebius', 'tavily')
+
+
+def _empty_retry_state() -> dict:
+    return {service: {'failures': 0, 'retry_after': 0.0} for service in _PROVIDERS}
+
+
+def _all_retry_state() -> dict:
+    if PROVIDER_STATE.is_symlink() or PROVIDER_STATE.parent.is_symlink():
+        raise network.ProviderStateError('Provider retry state is unavailable.')
+    try:
+        raw = json.loads(PROVIDER_STATE.read_text())
+    except FileNotFoundError:
+        return _empty_retry_state()
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        raise network.ProviderStateError('Provider retry state is unavailable.') from None
+    if not isinstance(raw, dict) or set(raw) != set(_PROVIDERS):
+        raise network.ProviderStateError('Provider retry state is unavailable.')
+    for service in _PROVIDERS:
+        row = raw[service]
+        if (not isinstance(row, dict) or set(row) != {'failures', 'retry_after'}
+                or isinstance(row.get('failures'), bool)
+                or not isinstance(row.get('failures'), int) or row['failures'] < 0
+                or isinstance(row.get('retry_after'), bool)
+                or not isinstance(row.get('retry_after'), (int, float))
+                or not math.isfinite(row['retry_after']) or row['retry_after'] < 0):
+            raise network.ProviderStateError('Provider retry state is unavailable.')
+        row['retry_after'] = float(row['retry_after'])
+    return raw
+
+
+def _retry_state(service: str = 'nebius') -> dict:
+    if service not in _PROVIDERS:
+        raise network.ProviderStateError('Provider retry state is unavailable.')
+    return _all_retry_state()[service]
+
+
+def _save_retry_state(service: str, failures: int, retry_after: float) -> None:
+    from .persistence import atomic_write_json
+    from .securestore import private_directory
+    PROVIDER_STATE.parent.mkdir(parents=True, exist_ok=True)
+    private_directory(PROVIDER_STATE.parent)
+    state = _all_retry_state()
+    state[service] = {'failures': failures, 'retry_after': retry_after}
+    atomic_write_json(PROVIDER_STATE, state)
+
+
+def _check_cooldown(service: str = 'nebius') -> None:
+    if _retry_state(service)['retry_after'] > time.time():
+        raise network.ProviderCooldownError('Provider is temporarily cooling down.')
+
+
+def _remaining(deadline: float) -> float:
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise network.ProviderDeadlineError('Provider did not answer before its deadline.')
+    return left
+
+
+def _status_failure(error: Exception) -> Exception:
+    from openai import APIStatusError
+    import httpx2
+    if not isinstance(error, (APIStatusError, httpx2.HTTPStatusError)):
+        return error
+    status = (error.response.status_code if isinstance(error, httpx2.HTTPStatusError)
+              else error.status_code)
+    if status in (408, 409, 429) or 500 <= status <= 599:
+        return network.ProviderConnectivityError('Provider is temporarily unavailable.')
+    return network.ProviderRejectedError(status)
+
+
+def provider_call(operation, deadline: float, *, service: str, attempts: int = MAX_ATTEMPTS,
+                  clear_on_success: bool = True):
+    """Run one safe provider operation under bounded retry and cooldown rules."""
+    for attempt in range(attempts):
+        try:
+            result = operation()
+            if clear_on_success:
+                _recovered(service)
+            return result
+        except network.ProviderCooldownError:
+            raise
+        except network.ProviderDeadlineError:
+            _failed(service)
+            raise
+        except network.ProviderConnectivityError as error:
+            failure = error
+        except Exception as error:
+            failure = _status_failure(error)
+        if isinstance(failure, network.ProviderRejectedError):
+            raise failure from None
+        if isinstance(failure, network.ProviderConnectivityError):
+            if attempt + 1 >= attempts:
+                _failed(service)
+                raise failure from None
+            delay = random.uniform(0.2, 0.5)
+            if delay >= _remaining(deadline):
+                _failed(service)
+                raise network.ProviderDeadlineError(
+                    'Provider did not answer before its deadline.') from None
+            time.sleep(delay)
+            continue
+        raise failure
+    raise AssertionError('unreachable')
+
+
+def _failed(service: str = 'nebius') -> None:
+    state = _retry_state(service)
+    failures = state['failures'] + 1
+    delay = min(60.0, 2.0 ** min(failures - 1, 5))
+    _save_retry_state(service, failures, time.time() + delay)
+
+
+def _recovered(service: str = 'nebius') -> None:
+    if _retry_state(service)['failures']:
+        _save_retry_state(service, 0, 0.0)
 
 BASE_URL = network.NEBIUS_URL
 
@@ -99,12 +264,29 @@ class Brain:
 
     def available_models(self) -> list[str]:
         """Ask the account what it can actually run — model ids drift."""
-        self._check_credentials()
-        return sorted(m.id for m in self._client.models.list().data)
+        deadline = time.monotonic() + INTERACTIVE_DEADLINE
+        with _deadline_guard(deadline):
+            _check_cooldown()
+            self._check_credentials()
+            try:
+                response = self._client.models.list(timeout=_remaining(deadline))
+            except network.ProviderDeadlineError:
+                _failed()
+                raise
+            except network.ProviderConnectivityError:
+                _failed()
+                raise
+            except Exception as error:
+                failure = _status_failure(error)
+                if isinstance(failure, network.ProviderConnectivityError):
+                    _failed()
+                raise failure from None
+            return sorted(m.id for m in response.data)
 
     def _call(self, tier: str, system: str, user: Sequence[Passage], budget: int, json_mode: bool,
-              temperature: float, purpose: Purpose):
+              temperature: float, purpose: Purpose, deadline: float | None = None):
         prepared = prepare_outbound(purpose, user)
+        deadline = deadline or (time.monotonic() + _deadline_seconds.get())
         self._check_credentials()
         kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
         resp = self._client.chat.completions.create(
@@ -115,10 +297,15 @@ class Brain:
             ],
             max_tokens=budget,
             temperature=temperature,
+            timeout=_remaining(deadline),
             **kwargs,
         )
         self._record(tier, getattr(resp, "usage", None))
         return resp.choices[0].message
+
+    def _retry_call(self, operation, deadline: float):
+        """Retry only sanitized transport failures; SDK retries stay disabled."""
+        return provider_call(operation, deadline, service='nebius')
 
     def ask(
         self,
@@ -138,16 +325,23 @@ class Brain:
         can come back completely empty. We add headroom for the thinking, and if the
         model still thinks itself out of room, we give it one bigger try.
         """
-        budget = max_tokens + REASONING_HEADROOM
-        msg = self._call(tier, system, user, budget, json_mode, temperature, purpose)
-        content = (msg.content or "").strip()
-        if content:
-            return content
-
-        if getattr(msg, "reasoning", None):
-            msg = self._call(tier, system, user, budget * 2, json_mode, temperature, purpose)
+        deadline = time.monotonic() + _deadline_seconds.get()
+        with _deadline_guard(deadline):
+            _check_cooldown()
+            budget = max_tokens + REASONING_HEADROOM
+            msg = self._retry_call(
+                lambda: self._call(tier, system, user, budget, json_mode,
+                                   temperature, purpose, deadline), deadline)
             content = (msg.content or "").strip()
-        return content
+            if content:
+                return content
+
+            if getattr(msg, "reasoning", None):
+                msg = self._retry_call(
+                    lambda: self._call(tier, system, user, budget * 2, json_mode,
+                                       temperature, purpose, deadline), deadline)
+                content = (msg.content or "").strip()
+            return content
 
     def embed(self, passages: Sequence[Passage]) -> list[list[float]]:
         """Vectorise a batch of note chunks. Batches of ~64 keep requests small."""
@@ -155,13 +349,21 @@ class Brain:
         import os as _os
 
         model = _os.environ.get("NOTRON_MODEL_EMBED", EMBED_MODEL)
-        out: list[list[float]] = []
-        for i in range(0, len(texts), 64):
-            self._check_credentials()
-            resp = self._client.embeddings.create(model=model, input=prepare_outbound("embed", passages[i : i + 64]))
-            self._record("embed", getattr(resp, "usage", None))
-            out.extend(d.embedding for d in sorted(resp.data, key=lambda d: d.index))
-        return out
+        deadline = time.monotonic() + BATCH_DEADLINE
+        with _deadline_guard(deadline):
+            _check_cooldown()
+            out: list[list[float]] = []
+            for i in range(0, len(texts), 64):
+                def request():
+                    self._check_credentials()
+                    return self._client.embeddings.create(
+                        model=model,
+                        input=prepare_outbound("embed", passages[i : i + 64]),
+                        timeout=_remaining(deadline))
+                resp = self._retry_call(request, deadline)
+                self._record("embed", getattr(resp, "usage", None))
+                out.extend(d.embedding for d in sorted(resp.data, key=lambda d: d.index))
+            return out
 
     def ask_json(self, *, system: str, user: Sequence[Passage], purpose: Purpose, tier: str = "fast", **kw) -> dict:
         """Parse a model's JSON, tolerating the three ways it usually goes wrong:

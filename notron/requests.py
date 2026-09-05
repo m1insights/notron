@@ -195,7 +195,7 @@ class RequestStore:
                     return
                 raise OperationConflict('Request state changed; processing paused.')
 
-    def observe(self, note_id, body, questions, *, source, title, folder, modified='') -> list[RequestEnvelope]:
+    def observe(self, note_id, body, questions, *, source, title, folder, modified='', legacy_review=False) -> list[RequestEnvelope]:
         """Reconcile an entire observed set, before settling or calling inference.
 
         A unique unchanged anchor follows unrelated edits. Identical copies or
@@ -311,7 +311,9 @@ class RequestStore:
                                       source_text=item['raw'], reply_to=(title, folder, item['after']),
                                       source_modified=modified,
                                       here=self._context(body) if source == 'mention' else '')
-                    self._save(db, envelope, status='needs_review' if needs_review else 'prepared')
+                    self._save(db, envelope, status='needs_review' if needs_review or legacy_review else 'prepared')
+                    if legacy_review:
+                        db.execute("UPDATE requests SET failure_code='legacy_unknown' WHERE request_id=?", (envelope.request_id,))
                 if needs_review:
                     db.execute("UPDATE requests SET status='needs_review',failure_code='ambiguous_occurrence',updated_at=? "
                                "WHERE request_id=? AND status IN ('prepared','running','needs_review')", (now(), envelope.request_id))

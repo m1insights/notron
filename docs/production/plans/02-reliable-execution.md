@@ -153,11 +153,14 @@ def test_relative_date_after_resume_requires_confirmation(delayed_request):
 
 ## Task 6 — Worker lifecycle, queue health and migration
 
+Completed 2026-09-05; [implementation, migration and rollback handoff](../handoffs/2026-09-05-P02-task-6.md). Independent review approved; 1,047 tests pass. Native signed-app/sleep-wake qualification remains P06.
+
+
 **Files:** Create `notron/health.py`, `tests/test_health.py`, `tests/test_worker_lifecycle.py`; Modify `notron/watch.py`, `notron/cli.py`, `notron/daily.py`, `notron/brain.py`, `notron/mentions.py`.
 **Consumes:** Ledger and policy; P06 consumes health JSON.
 **Produces:** `notron listen --status` versioned JSON with `state`, `heartbeat_at`, `last_success_at`, `pending_count`, `reason_code`; `--pause`/`--resume` with durable intent. Proposed states: starting, ready, paused, offline, permission_needed, error, stopped.
 
-- [ ] Add tests showing a registered but dead job is not ready, locked Keychain pauses, a long provider call cannot block heartbeat, restarting preserves pending work, and duplicate local processes cannot both claim operations.
+- [x] Add tests showing a registered but dead job is not ready, locked Keychain pauses, a long provider call cannot block heartbeat, restarting preserves pending work, and duplicate local processes cannot both claim operations.
 
 ```python
 def test_registered_job_with_expired_heartbeat_is_not_ready():
@@ -166,9 +169,9 @@ def test_registered_job_with_expired_heartbeat_is_not_ready():
                     permission_ok=True, network_ok=True) == 'error'
 ```
 
-- [ ] Make heartbeat independent of serial job execution, update every five seconds and mark stale after 30 seconds. Add finite provider deadlines (30 seconds interactive, 60 seconds filing/index batches), bounded retries with jitter, persisted cooldowns and no hidden retry on uncertain side effects. Status metadata contains no user text.
-- [ ] Install one worker lock for listener, CLI and morning operations; a second producer enqueues work rather than independently executing it. Sleep/resume triggers permission/network checks, time ambiguity policy and reconciliation before fresh jobs. Handle failure to prime mention scanning by retrying initialization, not permanently disabling it.
-- [ ] Migrate legacy seen/filer state conservatively with backup; unknown prior effects get review, not an automatic replay of all old tagged notes.
-- [ ] Run targeted lifecycle/recovery tests and `.venv/bin/python -m pytest tests -q`. Write a handoff describing schema version, migration and rollback. Commit.
+- [x] Make heartbeat independent of serial job execution, update every five seconds and mark stale after 30 seconds. Add finite provider deadlines (30 seconds interactive, 60 seconds filing/index batches), bounded retries with jitter, persisted cooldowns and no hidden retry on uncertain side effects. Status metadata contains no user text.
+- [x] Install one worker lock for listener, CLI and morning operations; a second producer enqueues work rather than independently executing it. Sleep/resume triggers permission/network checks, time ambiguity policy and reconciliation before fresh jobs. Handle failure to prime mention scanning by retrying initialization, not permanently disabling it.
+- [x] Migrate legacy seen/filer state conservatively with backup; unknown prior effects get review, not an automatic replay of all old tagged notes.
+- [x] Run targeted lifecycle/recovery tests and `.venv/bin/python -m pytest tests -q`. Write a handoff describing schema version, migration and rollback. Commit.
 
 **Exit gate:** Every crash boundary has a verified recovery path; known completed effects are not repeated; uncertain effects require review. Concurrent remote Notes edits remain a documented Apple-platform constraint.

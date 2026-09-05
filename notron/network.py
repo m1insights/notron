@@ -7,6 +7,8 @@ Neither proxies nor redirects can choose a second destination.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
+from contextvars import ContextVar
 import http.client
 import ipaddress
 import os
@@ -33,6 +35,55 @@ class NetworkPolicyError(PolicyError, OpenAIError):
     OpenAIError makes the pinned SDK propagate this policy failure unchanged.
     PolicyError remains the application's shared authority/error contract.
     """
+
+
+class ProviderConnectivityError(PolicyError, OpenAIError):
+    """A sanitized, retryable failure before a provider reply is known."""
+
+
+class ProviderDeadlineError(ProviderConnectivityError):
+    """The total budget for one logical provider operation was exhausted."""
+
+
+class ProviderCooldownError(ProviderConnectivityError):
+    """A recent provider outage is still inside its persisted backoff window."""
+
+
+class ProviderRejectedError(OpenAIError):
+    """A fixed provider rejection, such as bad credentials or an unknown model."""
+
+    def __init__(self, status_code: int):
+        self.status_code = status_code
+        super().__init__(f'Provider rejected the request (HTTP {status_code}).')
+
+
+class ProviderStateError(PolicyError, OpenAIError):
+    """Retry metadata is missing its integrity guarantees; calls must pause."""
+
+
+_DEADLINE: ContextVar[float | None] = ContextVar('provider_deadline', default=None)
+
+
+@contextmanager
+def deadline(value: float):
+    token = _DEADLINE.set(value)
+    try:
+        yield
+    finally:
+        _DEADLINE.reset(token)
+
+
+def remaining(fallback: float | None = None) -> float:
+    value = _DEADLINE.get()
+    if value is None:
+        if fallback is None:
+            raise ProviderDeadlineError('Provider deadline is unavailable.')
+        return fallback
+    import time
+    left = value - time.monotonic()
+    if left <= 0:
+        raise ProviderDeadlineError('Provider did not answer before its deadline.')
+    return left
 
 
 def _public_address(value: str) -> bool:
@@ -141,13 +192,14 @@ def _connect_public(host: str, port: int, timeout: float):
     try:
         results = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
     except OSError:
-        raise NetworkPolicyError('Provider address resolution failed.') from None
+        raise ProviderConnectivityError('Provider address resolution failed.') from None
+    remaining(timeout)
     if not public_https_url(f'https://{host}/', [r[4][0] for r in results]):
         raise NetworkPolicyError('Provider resolved to a prohibited destination.')
     for family, kind, proto, _, sockaddr in results:
         sock = socket.socket(family, kind, proto)
         try:
-            sock.settimeout(timeout)
+            sock.settimeout(remaining(timeout))
             sock.connect(sockaddr)  # numeric address from the one validated DNS result
             if sock.getpeername()[0] != sockaddr[0]:
                 raise NetworkPolicyError('Provider connection destination changed.')
@@ -157,15 +209,19 @@ def _connect_public(host: str, port: int, timeout: float):
         except Exception:
             sock.close()
             raise
-    raise NetworkPolicyError('Provider connection unavailable.')
+    raise ProviderConnectivityError('Provider connection unavailable.')
 
 
 class _ProviderConnection(http.client.HTTPSConnection):
     def connect(self):
-        raw = _connect_public(self.host, self.port, self.timeout)
+        raw = _connect_public(self.host, self.port, remaining(self.timeout))
         try:
+            raw.settimeout(remaining(self.timeout))
             self.sock = self._context.wrap_socket(raw, server_hostname=self.host)
-            self.sock.settimeout(self.write_timeout)
+            self.sock.settimeout(remaining(self.write_timeout))
+        except ssl.SSLCertVerificationError:
+            raw.close()
+            raise NetworkPolicyError('Provider certificate validation failed.') from None
         except Exception:
             raw.close()
             raise
@@ -207,23 +263,23 @@ class ProviderTransport(httpx2.BaseTransport):
         if endpoint.service == 'nebius':
             headers['Authorization'] = f'Bearer {secret}'
         timeouts = request.extensions.get('timeout', {})
-        conn = _ProviderConnection(base.hostname, 443, timeout=timeouts.get('connect', 20),
+        conn = _ProviderConnection(base.hostname, 443, timeout=remaining(timeouts.get('connect', 20)),
                                    context=ssl.create_default_context())
-        conn.write_timeout = timeouts.get('write', 20)
+        conn.write_timeout = remaining(timeouts.get('write', 20))
         try:
             conn.request(request.method, parts.path, body=request.read(), headers=headers)
-            conn.sock.settimeout(timeouts.get('read', 20))
+            conn.sock.settimeout(remaining(timeouts.get('read', 20)))
             response = conn.getresponse()
             if 300 <= response.status < 400:
                 raise NetworkPolicyError('Provider redirects are not allowed.')
             return httpx2.Response(response.status, headers=response.getheaders(), content=response.read())
         except (OSError, http.client.HTTPException):
-            raise NetworkPolicyError('Provider transport unavailable.') from None
+            raise ProviderConnectivityError('Provider transport unavailable.') from None
         finally:
             conn.close()
 
 
 def provider_client(endpoint: ProviderEndpoint) -> httpx2.Client:
-    timeout = httpx2.Timeout(600, connect=5) if endpoint.service == 'nebius' else httpx2.Timeout(20)
+    timeout = httpx2.Timeout(60, connect=5) if endpoint.service == 'nebius' else httpx2.Timeout(20)
     return httpx2.Client(transport=ProviderTransport(endpoint), trust_env=False,
                          follow_redirects=False, timeout=timeout)

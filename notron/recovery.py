@@ -102,31 +102,11 @@ def claim(record):
 
 
 def serialized(fn):
-    """A separate request mutex prevents live recovery takeover during inference.
-
-    This is not the Notes transaction lock: model calls never run under a write
-    transaction. The kernel releases the process lock on crash. Worker lifecycle
-    and scheduling leases remain a separate concern.
-    """
+    """Share worker ownership; nested graph/filing work retains the same lease."""
     from functools import wraps
     @wraps(fn)
     def run(envelope, *args, **kwargs):
-        import fcntl
-        import os
-        from .securestore import private_directory
-        root = operations.PATH.parent
-        private_directory(root)
-        # One fixed file bounds filesystem growth and serializes graph/job admission.
-        with _REQUEST_LOCK:
-            fd = os.open(root / 'request-execution.lock', os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
-                return fn(envelope, *args, **kwargs)
-            finally:
-                fcntl.flock(fd, fcntl.LOCK_UN)
-                os.close(fd)
+        from .health import WorkerLock
+        with WorkerLock(blocking=True):
+            return fn(envelope, *args, **kwargs)
     return run
-
-
-import threading
-_REQUEST_LOCK = threading.Lock()
