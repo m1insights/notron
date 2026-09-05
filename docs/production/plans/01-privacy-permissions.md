@@ -81,11 +81,20 @@ def test_direct_requests_are_filtered_too():
 
 ## Task 3 — Sensitive cache migration and retention
 
+**Status:** Implementation complete, 2026-09-04. Commit `c5801df`;
+[storage evidence](../evidence/P01-secure-storage.md) and
+[verification/handoff](../handoffs/2026-09-04-P01-task-3.md). Full Python suite:
+**489 passed**. Swift helper type-checks; signed/native Keychain and startup
+integration remain explicitly gated on P06. Default real-data processing pauses.
+Task 4 has not started. Additional task-owned integrations cover filing request
+state, search credentials, startup/executor/fallback gates, cleanup, diagnostics,
+Mac mood path, and explicit offline storage CLI commands.
+
 **Files:** Create `notron/securestore.py`, `notron/credentials.py`, `tests/test_securestore.py`, `tests/test_credentials.py`, `mac/Sources/Notron/KeychainStore.swift`; Modify `notron/index.py`, `notron/undo.py`, `notron/brain.py`, `notron/reflect.py`, `notron/care.py`, `pyproject.toml`, `uv.lock`.
 **Consumes:** Atomic persistence and policy; a Keychain-backed credential provider injected at process startup.
 **Produces:** `CredentialStore.get(name) -> bytes | None`, `put(name, value)`, `delete(name)`; `EncryptedStore(root, key).write(name, data)` / `.read(name) -> bytes`. Choose a maintained AEAD implementation (`cryptography` AESGCM), lock its version, use fresh 96-bit nonces and bind the logical filename/schema version as associated data.
 
-- [ ] Add encryption/tamper and missing-Keychain tests before implementation:
+- [x] Add encryption/tamper and missing-Keychain tests before implementation:
 
 ```python
 import pytest
@@ -101,11 +110,11 @@ def test_payload_not_plaintext_and_tampering_fails(tmp_path):
         store.read('undo')
 ```
 
-- [ ] Implement Swift Security-framework Keychain access using service `com.m1labs.notron`; return secrets only over the dedicated process pipe, never command arguments/stdout logs. The Python credential interface uses the helper; tests inject an in-memory provider. P06 provides signed identity/build integration. No production data processing until that integration passes.
-- [ ] Change index loading to an encrypted payload format; decrypt vectors into process memory rather than retaining a persistent plaintext NumPy mmap. Keep old JSON/NPY imports offline behind a validated migration and backup; invalidate stale raw caches before cloud processing. Rebuild only selected notes through Task 2.
-- [ ] Encrypt undo and request-content payloads. Write files with 0600 under a 0700 directory; suppress payloads in logs/exceptions. Retain seven days of local sanitized diagnostics. Purge ignored/deleted notes from index, undo, and caches. Credentials are cleared by explicit account/key removal.
-- [ ] Validate round-trip migration, interrupted migration, corrupt ciphertext, rotated/lost key, ignore-after-index, deleted note, and inability to access Keychain while locked. Preserve original backups locally until the user accepts migration; never delete their Notes.
-- [ ] Run securestore/credentials/privacy tests and the full suite; commit. Record native Keychain tests as pending P06 until actually run.
+- [x] Implement Swift Security-framework Keychain access using service `com.m1labs.notron`; return secrets only over the dedicated process pipe, never command arguments/stdout logs. The Python credential interface uses the helper; tests inject an in-memory provider. P06 provides signed identity/build integration. No production data processing until that integration passes.
+- [x] Change index loading to an encrypted payload format; decrypt vectors into process memory rather than retaining a persistent plaintext NumPy mmap. Keep old JSON/NPY imports offline behind a validated migration and backup; invalidate stale raw caches before cloud processing. Rebuild only selected notes through Task 2.
+- [x] Encrypt undo and request-content payloads. Write files with 0600 under a 0700 directory; suppress payloads in logs/exceptions. Retain seven days of local sanitized diagnostics. Purge ignored/deleted notes from index, undo, and caches. Credentials are cleared by explicit account/key removal.
+- [x] Validate round-trip migration, interrupted migration, corrupt ciphertext, rotated/lost key, ignore-after-index, deleted note, and inability to access Keychain while locked. Preserve original backups locally until the user accepts migration; never delete their Notes.
+- [x] Run securestore/credentials/privacy tests and the full suite; commit. Record native Keychain tests as pending P06 until actually run.
 
 ## Task 4 — Restrict outbound URL validation and provider destinations
 
