@@ -396,7 +396,9 @@ def filer(state: State, *, brain, dry_run: bool = False) -> State:
         out = filing.run(brain, dry_run=dry_run, on_step=lambda m: state.note("filer", m))
         state.answer = out.summary()
         state.writes.append(_reply(state))
-    state.receipt_complete = bool(out.ticked) and not any(r.startswith('✗') for r in out.results)
+    # Source ticks complete the request only when no separate reply is owed.
+    state.receipt_complete = (not state.writes and bool(out.ticked)
+                              and not any(r.startswith('✗') for r in out.results))
     state.results.extend(out.results)
     state.note("filer", f"{len(out.filed)} filed, {len(out.proposed)} proposed, "
                         f"{len(out.left)} left, {out.model_calls} model call(s)")
@@ -879,7 +881,8 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
         state.results.append(f"{'✓' if r.ok else '✗'} {w.title} — {r.reason}")
         if w.recovery_note_id and not r.ok:
             break
-    state.receipt_complete = all_ok or state.receipt_complete
+    # Queued replies must all verify; an earlier source receipt cannot mask failure.
+    state.receipt_complete = all_ok if state.writes else state.receipt_complete
     if all_ok and not dry_run:
         from . import operations
         store = operations.current()

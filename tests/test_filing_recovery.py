@@ -206,3 +206,125 @@ def test_lost_creation_id_never_reads_denied_same_title_notes(store, monkeypatch
     assert len([r for r in store.rows.values() if r['title'] == 'Novel']) == 2
     assert 'novel idea' in store.text(workspace.DUMP)
     assert '✓ novel idea' not in store.text(workspace.DUMP)
+
+
+def test_filing_tick_masks_failed_ask_receipt(store, monkeypatch):
+    from notron import graph, conversation
+    store.add('Supplements', '- original')
+    store.add(workspace.DUMP, 'magnesium', folder=workspace.FOLDER)
+    ask = store.add(workspace.ASK, 'file my brain dump', folder=workspace.FOLDER)
+    class Brain(FilerBrain):
+        def ask_json(self, **kw):
+            if kw['purpose'] == 'route':
+                return {'intent': 'file'}
+            return super().ask_json(**kw)
+    brain = Brain({'magnesium': {'note': 'Supplements'}})
+    original_write = notes.write_body
+    def fail_receipt(nid, body):
+        if nid == ask:
+            raise RuntimeError('simulated Notes receipt save failure')
+        original_write(nid, body)
+    monkeypatch.setattr(notes, 'write_body', fail_receipt)
+    env = requests.create('file my brain dump', request_id='final-file', source='ask',
+        note_id=ask, source_revision=requests.revision(store.read_body(ask)),
+        source_text='file my brain dump', reply_to=(workspace.ASK, workspace.FOLDER, 1))
+    state = graph.run_request(env, brain=brain)
+    assert '✓ magnesium' in store.text(workspace.DUMP)
+    assert any(r.startswith('✗') for r in state.results)
+    assert requests.current().get('final-file').status == 'needs_review'
+    assert conversation.unanswered(store.read_body(ask), ignore=(workspace.ASK,))
+    assert not state.receipt_complete
+
+
+@pytest.mark.parametrize('saved_before_error', [False, True])
+@pytest.mark.parametrize('surface', ['ask', 'mention'])
+def test_graph_watcher_restarts_failed_filing_reply_without_repeating_source_effects(store, monkeypatch, saved_before_error, surface):
+    from notron import watch, conversation
+    store.add('Supplements', '- original')
+    store.add(workspace.DUMP, 'magnesium', folder=workspace.FOLDER)
+    title, folder = (workspace.ASK, workspace.FOLDER) if surface == 'ask' else ('Scratch', 'Notes')
+    raw = 'file my brain dump' if surface == 'ask' else '@notron file my brain dump'
+    ask = store.add(title, raw, folder=folder)
+    brain = FilerBrain({'magnesium': {'note': 'Supplements'}})
+    env = requests.create('file my brain dump', request_id='filing-reply', source=surface,
+        note_id=ask, source_revision=requests.revision(store.read_body(ask)),
+        source_text=raw, reply_to=(title, folder, 1))
+    original_write = notes.write_body
+    failed = False
+    def write(nid, body):
+        nonlocal failed
+        if nid == ask and not failed:
+            failed = True
+            if saved_before_error:
+                original_write(nid, body)
+            raise OSError('receipt save acknowledgement lost')
+        original_write(nid, body)
+    monkeypatch.setattr(notes, 'write_body', write)
+    def answer(watcher):
+        return watcher._answer('file my brain dump', title=title, folder=folder,
+                               after=1, note_id=ask, envelope=env)
+    first = watch.Watcher(brain, on_event=lambda message: None)
+    assert not answer(first)
+    assert requests.current().get(env.request_id).status == 'needs_review'
+    operations.current()  # reopen SQLite and encrypted payloads
+    restarted = watch.Watcher(brain, on_event=lambda message: None)
+    assert answer(restarted) is saved_before_error
+    assert requests.current().get(env.request_id).status == ('completed' if saved_before_error else 'needs_review')
+    assert store.text('Supplements').count('magnesium') == 1
+    assert store.text(workspace.DUMP).count('✓ magnesium') == 1
+    assert sum(title == 'Supplements' for title, _ in store.writes) == 1
+    assert sum(title == workspace.DUMP for title, _ in store.writes) == 1
+    assert sum(written_title == title for written_title, _ in store.writes) == int(saved_before_error)
+    assert bool(conversation.unanswered(store.read_body(ask), ignore=(title,))) is not saved_before_error
+    if not saved_before_error:
+        key = 'recover:' + env.request_id
+        for _ in range(restarted.MAX_TRIES):
+            assert restarted.recover_pending()
+        assert restarted._failures[key][0] == restarted.MAX_TRIES
+        assert not restarted._worth_trying(key)
+        assert not restarted.recover_pending()
+        assert sum(written_title in {'Supplements', workspace.DUMP} for written_title, _ in store.writes) == 2
+    assert brain.calls == 1
+
+
+def test_graph_watcher_accepts_source_only_filing_receipt_without_extra_reply(store):
+    from notron import watch, conversation
+    store.add('Supplements', '- original')
+    raw = '@notron file this: magnesium'
+    source = store.add('Scratch', raw)
+    brain = FilerBrain({'magnesium': {'note': 'Supplements'}})
+    env = requests.create('file this: magnesium', request_id='source-only', source='mention',
+        note_id=source, source_revision=requests.revision(store.read_body(source)),
+        source_text=raw, reply_to=('Scratch', 'Notes', 1))
+    watcher = watch.Watcher(brain, on_event=lambda message: None)
+    assert watcher._answer('file this: magnesium', title='Scratch', folder='Notes', after=1,
+                           note_id=source, envelope=env)
+    assert requests.current().get(env.request_id).status == 'completed'
+    assert '✓ @notron file this: magnesium' in store.text('Scratch')
+    assert 'Notron:' not in store.text('Scratch')
+    assert sum(title == 'Scratch' for title, _ in store.writes) == 1
+    assert brain.calls == 1
+
+
+def test_partial_graph_filing_stays_incomplete_despite_successful_source_tick(store, monkeypatch):
+    from notron import graph
+    store.add('Supplements', '- original')
+    other = store.add('Other', '- original')
+    store.add(workspace.DUMP, 'magnesium\nzinc', folder=workspace.FOLDER)
+    ask = store.add(workspace.ASK, 'file my brain dump', folder=workspace.FOLDER)
+    brain = FilerBrain({'magnesium': {'note': 'Supplements'}, 'zinc': {'note': 'Other'}})
+    original_write = notes.write_body
+    def write(nid, body):
+        if nid == other:
+            raise OSError('one filing destination unavailable')
+        original_write(nid, body)
+    monkeypatch.setattr(notes, 'write_body', write)
+    env = requests.create('file my brain dump', request_id='partial-file', source='ask',
+        note_id=ask, source_revision=requests.revision(store.read_body(ask)),
+        source_text='file my brain dump', reply_to=(workspace.ASK, workspace.FOLDER, 1))
+    state = graph.run_request(env, brain=brain)
+    assert '✓ magnesium' in store.text(workspace.DUMP)
+    assert '✓ zinc' not in store.text(workspace.DUMP)
+    assert any(result.startswith('✗') for result in state.results)
+    assert not state.receipt_complete
+    assert requests.current().get(env.request_id).status == 'needs_review'
