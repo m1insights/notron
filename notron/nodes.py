@@ -861,7 +861,6 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
         known_sources.add(state.source_note_id)
     from . import recovery
     all_ok = bool(state.writes)
-    recovered_copies = []
     for w in state.writes:
         # Context supplied to producers is provenance, never a permission grant.
         w.content_sources = sorted(set(w.content_sources) | known_sources)
@@ -869,8 +868,6 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
         r = ex.apply_creation(w) if w.recovery_note_id else ex.apply_write(w)
         all_ok = all_ok and r.ok
         if r.ok:
-            if w.recovery_note_id and not dry_run:
-                recovered_copies.append(r.note_id)
             recovery.boundary('after_receipt', w.operation_id)
         if r.alternative_text:
             state.answer = r.alternative_text + "\n\n" + r.reason
@@ -884,11 +881,6 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
             break
     state.receipt_complete = all_ok or state.receipt_complete
     if all_ok and not dry_run:
-        from . import library
-        # Policy registration invalidates retained request content. Finish both
-        # the creation and its source receipt before changing the library.
-        for nid in recovered_copies:
-            library.add_home(nid)
         from . import operations
         store = operations.current()
         for op in store.pending():

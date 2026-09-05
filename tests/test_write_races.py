@@ -772,7 +772,7 @@ def test_recovery_copy_with_stale_snapshot_or_removed_confirmation_is_refused(fa
     assert not executor.Executor(audit=False).apply_creation(write).ok
 
 
-@pytest.mark.parametrize('point', ['before_receipt', 'after_external_save'])
+@pytest.mark.parametrize('point', [None, 'before_receipt', 'after_external_save'])
 def test_graph_recovery_copy_receipt_crash_resumes_without_recreation(fake_note_store, monkeypatch, point):
     from notron import graph, nodes, undo, recovery, requests, operations
     nid = fake_note_store.add('Ideas', '<div>Ideas</div><div>later words</div>')
@@ -804,18 +804,26 @@ def test_graph_recovery_copy_receipt_crash_resumes_without_recreation(fake_note_
         def ask(self, **kwargs):
             pytest.fail('undo must not infer')
         ask_json = ask
-    with pytest.raises(Crash):
-        graph.run_request(envelope, brain=NoBrain())
-    assert len(created) == 1
-    assert created[0] not in library.load().homes
-    operations.current()  # reopen the durable ledger and checkpoint
+    if point is not None:
+        with pytest.raises(Crash):
+            graph.run_request(envelope, brain=NoBrain())
+        assert len(created) == 1
+        assert created[0] not in library.load().homes
+        operations.current()  # reopen the durable ledger and checkpoint
     result = graph.run_request(envelope, brain=NoBrain())
     assert result.receipt_complete
     assert len(created) == 1
     assert fake_note_store.body(nid).count('created a separate recovery copy') == 1
     assert 'later words' in fake_note_store.body(nid)
     assert undo.peek(nid) == snapshot
-    assert created[0] in library.load().homes
+    assert created[0] not in library.load().homes
+    assert not any(line.startswith('✗') for line in result.results)
+    assert requests.current().get(envelope.request_id).status == 'completed'
+    assert all(operations.current().get(w.operation_id).status == operations.S.RECEIPTED
+               for w in result.writes)
+    graph.run_request(envelope, brain=NoBrain())
+    assert len(created) == 1
+    assert requests.current().get(envelope.request_id).status == 'completed'
 
 
 def test_dry_run_recovery_copy_keeps_snapshot_and_all_notes(fake_note_store, monkeypatch):
@@ -873,3 +881,61 @@ def test_policy_revoked_during_final_undo_snapshot_read_blocks_receipt(fake_note
     monkeypatch.setattr(undo, 'peek', revoke_on_final)
     assert not executor.Executor(audit=False).apply_write(state.writes[0]).ok
     assert fake_note_store.writes == []
+
+
+@pytest.mark.parametrize('allow_new_notes', [True, False])
+@pytest.mark.parametrize('saved, words', [
+    ('<div>Ideas</div><div>@notron remind me to call Alice tomorrow</div>',
+     ['@notron remind me to call Alice tomorrow']),
+    ('<div>Ideas</div><div>@notron file this: first thought</div>'
+     '<div><br></div><div><br></div><div>#notron remind me of second thought</div>',
+     ['@notron file this: first thought', '#notron remind me of second thought']),
+    ('<div>Ideas</div><div>context<br>@notron file this: third thought<br>more context</div>'
+     '<ul><li>untagged sibling</li><li>#NoTrOn remind me of fourth thought</li></ul>'
+     '<div>**@notron** remind me of fifth thought</div>',
+     ['context', '@notron file this: third thought', 'untagged sibling',
+      '#NoTrOn remind me of fourth thought', '@notron remind me of fifth thought']),
+])
+def test_recovery_copy_historical_commands_remain_inert_in_scanner_after_restart(
+        fake_note_store, monkeypatch, allow_new_notes, saved, words):
+    from notron import nodes, undo, mentions
+    from notron.state import State
+    nid = fake_note_store.add('Ideas', '<div>Ideas</div>')
+    lib = library.load()
+    lib.allow_new_notes = allow_new_notes
+    library.save(lib)
+    undo.save(nid, saved)
+    snapshot = undo.peek(nid)
+    command = undo.copy_command(snapshot)
+    tagged = '@notron ' + command
+    fake_note_store.set_body(nid, '<div>Ideas</div><div>later words</div><div>' + tagged + '</div>')
+    created = []
+    def create(folder, body):
+        target = uuid4().hex
+        fake_note_store.rows[target] = [notes.Note(target, undo.copy_title('Ideas', snapshot), folder, 'observed'), body]
+        created.append(target)
+        return target
+    monkeypatch.setattr(notes, 'create_note', create)
+    monkeypatch.setattr(executor.Executor, '_log', lambda *args, **kwargs: None)
+    planned = nodes.undoer(State(request=command, source=tagged, source_note_id=nid,
+        reply_to=('Ideas', 'Notes', 2), intent='undo'))
+    # A caller cannot remove the historical markers while retaining snapshot proof.
+    unmarked = replace(planned.writes[0], markdown=markup.to_text(saved))
+    assert not executor.Executor(audit=False).apply_creation(unmarked).ok
+    assert created == []
+    result = nodes.executor(planned)
+    assert result.receipt_complete
+    assert created[0] not in library.load().homes
+    assert undo.peek(nid) == snapshot
+    if not allow_new_notes:
+        library.add_home(created[0])  # a later explicit user choice must remain safe
+    scanner = mentions.Scanner(seen={nid: 'observed'}, primed=True)
+    assert scanner.scan() == []
+    recovered = markup.to_text(fake_note_store.body(created[0]))
+    for text in words:
+        assert text in recovered
+    restarted = mentions.Scanner()
+    restarted.prime()
+    fake_note_store.rows[created[0]][0] = replace(fake_note_store.get_note(created[0]), modified='changed-after-restart')
+    assert restarted.scan() == []
+    assert created[0] not in restarted.pending

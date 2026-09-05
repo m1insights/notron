@@ -155,9 +155,14 @@ def copy_title(title, snapshot):
 
 
 def copy_markdown(snapshot):
-    from . import markup
-    # Recover readable text only; unsupported Apple objects are never recreated.
-    return markup.to_text(snapshot.before_html)
+    from . import markup, notedoc
+    # Every recovered line is historical, including tags exposed only after
+    # Markdown rendering and tags inside mixed list/multiline blocks. Mark each
+    # nonblank line so the scanner cannot reactivate it under a fresh note ID.
+    # Keep the readable words and existing tag spelling for the user's reference.
+    lines = markup.to_text(snapshot.before_html).split('\n')
+    inactive = '\n'.join(notedoc.FILED + line if line.strip() else line for line in lines)
+    return 'Recovered history — ✓ marks inactive copied text.\n\n' + inactive
 
 
 ASK_REPLY = ("Tag me with @notron undo on the note you want put back — "
