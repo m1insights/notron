@@ -13,7 +13,8 @@ SERVICE = 'com.m1labs.notron'
 STORAGE_KEY = 'storage-key'
 NEBIUS_KEY = 'nebius-api-key'
 SEARCH_KEY = 'tavily-api-key'
-NAMES = frozenset({STORAGE_KEY, NEBIUS_KEY, SEARCH_KEY})
+DEV_NEBIUS_KEY = 'development-nebius-api-key'
+NAMES = frozenset({STORAGE_KEY, NEBIUS_KEY, SEARCH_KEY, DEV_NEBIUS_KEY})
 
 
 class CredentialUnavailable(RuntimeError):

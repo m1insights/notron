@@ -687,8 +687,9 @@ def planner(state: State, *, brain) -> State:
         max_tokens=1500,
     )
     title = workspace.WEEK if _is_weekly(state.request) else workspace.TODAY
-    state.writes.append(Write(title=title, markdown=body, mode="replace"))
     state.answer = body
+    _verify_links(state)
+    state.writes.append(Write(title=title, markdown=state.answer, mode="replace"))
     state.note("planner", f"drafted {title}")
     return state
 
@@ -779,50 +780,36 @@ def writer(state: State, *, brain) -> State:
     return state
 
 
-_URL = None  # compiled lazily so `import nodes` stays cheap
-
-
 def _verify_links(state: State) -> None:
-    """Drop any link the model produced from memory that does not resolve.
+    """Keep exact URLs in prepared source context; never resolve or fetch links.
 
-    Links that came in with the research or the user's notes are trusted —
-    Tavily returned them seconds ago, and a second HEAD request per link would
-    double the wait for nothing. Everything else is a link the model wrote
-    itself, and one of those has already shipped a fabricated DOI to a
-    pharmacist. Unverifiable is treated exactly like dead: only a link that
-    answered survives.
+    Grounding establishes where the citation came from, not factual correctness.
+    Model/history/diagnostic passages cannot establish their own source authority.
+    Reuse the same preparation and note permissions as the writer transport.
     """
-    global _URL
     import re
+    from .outbound import prepare_outbound
 
-    from . import research
-
-    if _URL is None:
-        # Printable ASCII only: the model wraps links in 【…】 markers, and a
-        # CJK bracket read as part of the URL once made every real citation in
-        # an answer look dead — the checker 404'd on `…/research】` four times.
-        _URL = re.compile(r"https?://[!-~]+")
-    known = "\n".join(state.web + [p.text for p in state.context]) + state.here + state.request
-    seen: list[str] = []
-    for match in _URL.findall(state.answer):
-        url = match.rstrip(".,;:!?\"')]>")
-        if url in seen or url in known:
-            continue
-        seen.append(url)
-        if len(seen) > 5:  # bound the wait; five checks is already 25s worst case
-            break
-        try:
-            alive = research.check_url(url)
-        except (CredentialUnavailable, StorageError, PolicyError):
-            raise
-        except Exception:
-            alive = False
-        if not alive:
-            gone = "(link removed — it didn't work when I checked)"
-            wrapped = f"【{url}】"
-            target = wrapped if wrapped in state.answer else url
-            state.answer = state.answer.replace(target, gone)
-            state.note("writer", f"dropped a dead link: {url}")
+    pattern = re.compile(r'(?P<open>【)?(?P<url>https?://(?:\[[^\]\s]+\])?[^\s<>"\[\]【】]*)(?P<close>】)?', re.IGNORECASE)
+    def clean(url):
+        url = url.rstrip(".,;:!?\"'>")
+        while url.endswith(')') and url.count(')') > url.count('('):
+            url = url[:-1]
+        return url
+    sources = [p for p in _prompt(state) if p.origin in ('web', 'user_request', 'note')]
+    known = {clean(match['url']) for text in prepare_outbound('write', sources)
+             for match in pattern.finditer(text)}
+    unsupported = set()
+    def replace(match):
+        raw = match['url']
+        url = clean(raw)
+        if url in known:
+            return match[0]
+        unsupported.add(url)
+        return '(citation unverifiable — link removed)' + raw[len(url):]
+    state.answer = pattern.sub(replace, state.answer)
+    if unsupported:
+        state.note('writer', f'{len(unsupported)} unsupported links removed')
 
 
 def _reply(state: State) -> Write:

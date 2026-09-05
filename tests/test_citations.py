@@ -7,8 +7,7 @@ called it "general knowledge", skipped the researcher, and the writer cited
 two papers from training memory — real ones, that time, by luck.
 
 Three fixes, one test file: the router always sends a world question to the
-researcher; the writer may not cite what it did not read; a link the model
-produced from memory is checked before it reaches a note.
+researcher; the writer may not cite what it did not read; unsupported citations are marked unverifiable without fetching them.
 """
 
 import sys, pathlib
@@ -72,97 +71,115 @@ def test_the_writer_may_not_cite_a_study_it_did_not_read():
     assert "unverified" in p
 
 
-# ------------------------------------------------ fix 3: the link checker
+# ------------------------------------------------ fix 3: local grounding only
 
-def test_a_link_the_model_made_up_is_checked_and_dropped(monkeypatch):
-    """The Cognizin answer carried a DOI one digit off from the real paper's.
-    It looked exactly as trustworthy as the correct one next to it."""
-    live = "https://doi.org/10.4236/fns.2012.36103"
-    dead = "https://doi.org/10.4236/fns.2012.33039"
-    monkeypatch.setattr(research, "check_url", lambda u, **k: u == live)
-    state = State(request="cognizin?", intent="question")
-    state = nodes.writer(state, brain=Brain(
-        answer=f"McGlade 2012 is real: {live} — see also {dead} for more."))
-    assert live in state.answer
-    assert dead not in state.answer
-    assert "removed" in state.answer.lower()
-    assert any("link" in t for t in state.trace)
+import pytest
+from notron.outbound import Passage
+from notron.policy import PolicyError
 
 
-def test_links_the_search_already_returned_are_trusted_not_rechecked(monkeypatch):
-    """Tavily gave us the URL seconds ago; a second HEAD request per link
-    would double the wait for nothing."""
+@pytest.mark.parametrize("url", [
+    "https://doi.org/invented", "http://127.0.0.1/admin",
+    "https://169.254.169.254/latest/meta-data", "https://[::1]/private",
+])
+def test_model_generated_urls_cause_zero_dns_or_http_calls(monkeypatch, url):
+    import socket, urllib.request
+    calls = []
+    def forbidden(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError("citation made a network call")
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden)
+    monkeypatch.setattr(urllib.request, "urlopen", forbidden)
+    state = State(request="synthetic question", intent="question")
+    nodes.writer(state, brain=Brain(answer=f"See {url}."))
+    assert url not in state.answer
+    assert "unverifiable" in state.answer.lower()
+    assert state.writes and calls == []
+    assert url not in " ".join(state.trace)
+
+
+def test_every_unsupported_citation_is_removed_without_five_link_limit():
+    urls = [f"https://invented.example/paper{i}" for i in range(8)]
+    state = State(request="synthetic", intent="question")
+    nodes.writer(state, brain=Brain(answer=" ".join(urls)))
+    assert all(url not in state.answer for url in urls)
+    assert "unverifiable" in state.answer
+
+
+@pytest.mark.parametrize("source", ["web", "request", "context", "here"])
+def test_exact_prepared_source_links_survive_with_cjk_or_markdown_wrappers(source):
     url = "https://examine.com/supplements/citicoline/"
-
-    def explode(u, **k):
-        raise AssertionError("a link from the research context was re-checked")
-
-    monkeypatch.setattr(research, "check_url", explode)
-    state = State(request="cognizin?", intent="question",
-                  web=[f"### Examine\ncdp-choline overview\n{url}"])
-    state = nodes.writer(state, brain=Brain(answer=f"Covered well at {url}."))
+    state = State(request="synthetic", intent="question")
+    if source == "web": state.web = [f"### Study\n{url}"]
+    elif source == "request": state.request = f"Summarize {url}"
+    elif source == "context": state.context = [Passage(url, "note", "n1")]
+    else:
+        state.here = url
+        state.source_note_id = "n1"
+    nodes.writer(state, brain=Brain(answer=f"Supported【{url}】. [Source]({url})"))
     assert url in state.answer
+    assert "unverifiable" not in state.answer
 
 
-def test_link_checking_never_costs_the_answer(monkeypatch):
-    """Offline, or a slow server: the answer still lands, minus the link —
-    an unverifiable citation is treated exactly like a dead one."""
-    def timeout(u, **k):
-        raise TimeoutError()
-
-    monkeypatch.setattr(research, "check_url", timeout)
-    state = State(request="cognizin?", intent="question")
-    state = nodes.writer(state, brain=Brain(answer="See https://example.com/paper today."))
-    assert state.answer
-    assert "https://example.com/paper" not in state.answer
-    assert state.writes, "the reply must still be written"
+def test_substring_of_known_url_is_not_grounding():
+    url = "https://example.org/paper"
+    state = State(request=f"Look at {url}-different", intent="question")
+    nodes.writer(state, brain=Brain(answer=f"See {url}."))
+    assert url not in state.answer
+    assert "unverifiable" in state.answer
 
 
-def test_a_link_wrapped_in_cjk_brackets_is_still_recognised(monkeypatch):
-    """Asked about tongkat ali, the writer cited Tavily's own URLs wrapped in
-    【…】 markers. The checker read the closing bracket as part of the URL, so
-    every link the search had returned seconds earlier looked both unknown
-    and dead — all four real citations were dropped from a correct answer."""
-    url = "https://examine.com/supplements/tongkat-ali/research"
-
-    def explode(u, **k):
-        raise AssertionError(f"re-checked a link the research returned: {u}")
-
-    monkeypatch.setattr(research, "check_url", explode)
-    state = State(request="tongkat ali?", intent="question",
-                  web=[f"### Examine\ntongkat overview\n{url}"])
-    state = nodes.writer(state, brain=Brain(answer=f"Supported【{url}】, broadly."))
-    assert url in state.answer
+def test_redacted_url_is_not_restored_from_raw_context():
+    url = "https://example.org/private"
+    state = State(request=f"password: {url}", intent="question")
+    nodes.writer(state, brain=Brain(answer=f"See {url}."))
+    assert url not in state.answer
 
 
-def test_a_dead_link_in_cjk_brackets_is_dropped_without_its_wrapper(monkeypatch):
-    monkeypatch.setattr(research, "check_url", lambda u, **k: False)
-    state = State(request="tongkat ali?", intent="question")
-    state = nodes.writer(state, brain=Brain(
-        answer="Supported【https://made.up/paper】, allegedly."))
-    assert "https://made.up/paper" not in state.answer
+def test_denied_context_cannot_ground_citations(outbound_policy):
+    url = "https://example.org/paper"
+    outbound_policy(ignored=("excluded",))
+    state = State(request="synthetic", intent="question", context=[Passage(url, "note", "excluded")])
+    with pytest.raises(PolicyError):
+        nodes.writer(state, brain=Brain(answer=url))
+
+
+def test_model_origin_in_context_cannot_ground_its_own_link():
+    url = "https://invented.example/paper"
+    state = State(request="synthetic", intent="question", context=[Passage(url, "model")])
+    nodes.writer(state, brain=Brain(answer=url))
+    assert url not in state.answer
+
+
+def test_cjk_wrapper_removed_for_unsupported_link():
+    state = State(request="synthetic", intent="question")
+    nodes.writer(state, brain=Brain(answer="Supported【https://invented.example/paper】."))
     assert "【" not in state.answer and "】" not in state.answer
 
 
-def test_check_url_believes_http_status_not_hope(monkeypatch):
-    import urllib.error, urllib.request
+def test_unsupported_prefix_does_not_corrupt_a_grounded_longer_url():
+    short = 'https://example.org/paper'
+    long = short + '/correct'
+    state = State(request=f'Use {long}', intent='question')
+    nodes.writer(state, brain=Brain(answer=f'Unsupported {short}. Supported {long}.'))
+    assert long in state.answer
+    assert f'{short}.' not in state.answer
 
-    def fake_urlopen(req, timeout=0):
-        url = req.full_url
-        if "404" in url:
-            raise urllib.error.HTTPError(url, 404, "not found", {}, None)
-        if "405" in url:
-            raise urllib.error.HTTPError(url, 405, "method not allowed", {}, None)
 
-        class R:
-            status = 200
-            def __enter__(self): return self
-            def __exit__(self, *a): return False
+def test_adjacent_markdown_citations_are_matched_individually():
+    known = 'https://example.org/known'
+    unknown = 'https://example.org/invented'
+    state = State(request=known, intent='question')
+    nodes.writer(state, brain=Brain(answer=f'[one]({known})[two]({unknown})'))
+    assert known in state.answer
+    assert unknown not in state.answer
 
-        return R()
 
-    monkeypatch.setattr(research.urllib.request, "urlopen", fake_urlopen)
-    assert research.check_url("https://doi.org/real") is True
-    assert research.check_url("https://doi.org/404") is False
-    assert research.check_url("https://stuffy.org/405-no-head") is True, \
-        "a server that refuses HEAD still proves the page exists"
+def test_planner_citations_use_the_same_local_grounding_rule():
+    known = 'https://example.org/supplied'
+    unknown = 'https://example.org/invented'
+    state = State(request=f'Plan using {known}', intent='plan')
+    nodes.planner(state, brain=Brain(answer=f'See {known} and {unknown}'))
+    assert known in state.answer
+    assert unknown not in state.answer
+    assert 'unverifiable' in state.writes[0].markdown

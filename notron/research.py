@@ -12,15 +12,13 @@ page of blue links, which is what a model can actually use.
 from __future__ import annotations
 
 import json
-import os
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import Sequence
 
 from .outbound import Passage, prepare_outbound
+from . import network
 
-ENDPOINT = "https://api.tavily.com/search"
+ENDPOINT = network.SEARCH_URL
 TIMEOUT = 20
 
 
@@ -44,33 +42,13 @@ def available() -> bool:
     return credentials.get(credentials.SEARCH_KEY) is not None
 
 
-def check_url(url: str, *, timeout: int = 5) -> bool:
-    """Does this URL actually resolve?
-
-    The writer is told to only emit links it was given, but a model told not
-    to invent links still occasionally does — seen live as a DOI one digit off
-    from the real paper's, sitting next to a correct one and looking exactly
-    as trustworthy. HEAD is enough: the question is "does this page exist",
-    not what it says.
-    """
-    request = urllib.request.Request(url, method="HEAD",
-                                     headers={"User-Agent": "notron/1.0"})
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.status < 400
-    except urllib.error.HTTPError as e:
-        # 405 means the server refuses HEAD, which still proves the page exists.
-        return e.code == 405
-    except Exception:
-        return False
-
-
 def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
     """Return Tavily's own summary answer plus the sources behind it."""
     query = "\n".join(prepare_outbound("search", passages))
     from . import credentials, retention
     retention.require_ready()
-    secret = credentials.get(credentials.SEARCH_KEY)
+    endpoint = network.provider_endpoint(ENDPOINT, 'tavily')
+    secret = credentials.get(endpoint.credential_name)
     key = secret.decode("utf-8") if secret else ""
     if not key:
         raise NoSearchKey("Search credential is not configured")
@@ -83,11 +61,10 @@ def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic")
         "include_answer": True,
     }).encode()
 
-    request = urllib.request.Request(
-        ENDPOINT, data=payload, headers={"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-        data = json.loads(response.read())
+    with network.provider_client(endpoint) as client:
+        response = client.post(endpoint.url, content=payload, headers={"Content-Type": "application/json"}, timeout=TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
 
     findings = [
         Finding(

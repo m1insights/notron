@@ -16,11 +16,12 @@ from pathlib import Path
 from typing import Sequence
 
 from .outbound import Passage, Purpose, prepare_outbound
+from . import network
 
 from .paths import DATA_DIR
 USAGE_LOG = DATA_DIR / "usage.json"
 
-BASE_URL = os.environ.get("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1/")
+BASE_URL = network.NEBIUS_URL
 
 # Tier -> model id. Non-secret configuration overrides remain environment settings.
 DEFAULT_MODELS = {
@@ -50,13 +51,20 @@ class Brain:
     def from_credentials(cls) -> "Brain":
         from . import credentials, retention
         retention.require_ready()
-        key = credentials.require(credentials.NEBIUS_KEY).decode('utf-8')
-        return cls(api_key=key, base_url=os.environ.get("NEBIUS_BASE_URL", BASE_URL))
+        endpoint = network.provider_endpoint(os.environ.get("NEBIUS_BASE_URL", BASE_URL), 'nebius')
+        key = credentials.require(endpoint.credential_name).decode('utf-8')
+        return cls(api_key=key, base_url=endpoint.url)
 
     def __post_init__(self) -> None:
         from openai import OpenAI
 
-        self._client = OpenAI(base_url=self.base_url, api_key=self.api_key)
+        from . import credentials, retention
+        retention.require_ready()
+        self._endpoint = network.provider_endpoint(self.base_url, 'nebius')
+        # Constructor-supplied keys never bypass the injected credential contract.
+        self.api_key = credentials.require(self._endpoint.credential_name).decode('utf-8')
+        self._client = OpenAI(base_url=self._endpoint.url, api_key=self.api_key,
+                              http_client=network.provider_client(self._endpoint), max_retries=0)
 
     def _record(self, tier: str, usage) -> None:
         """Keep a running tally so Notron can report what she costs to run."""
@@ -84,7 +92,8 @@ class Brain:
     def _check_credentials(self) -> None:
         from . import credentials, retention
         retention.require_ready()
-        key = credentials.require(credentials.NEBIUS_KEY).decode('utf-8')
+        endpoint = getattr(self, '_endpoint', None) or network.provider_endpoint(self.base_url, 'nebius')
+        key = credentials.require(endpoint.credential_name).decode('utf-8')
         # Check on each transport, including retries and embedding batches.
         self._client.api_key = key
 

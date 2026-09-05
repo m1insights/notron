@@ -1,9 +1,10 @@
-# P01 Task 2 outbound caller map
+# P01 outbound caller and HTTP transport map
 
-Inspected 2026-09-04 on `production/p01-task1`, based on `c3c5941`.
-Scope: all production inference, embedding and search inputs. Python 3.11+
-application; verification uses the existing Python 3.14.2 environment. No Swift
-changes. All evidence uses synthetic data and mocked Apple/provider adapters.
+Updated 2026-09-05 on `production/p01-task1`, Task 4 following `35aa233`.
+Scope: every production inference, embedding, model-listing and search transport.
+Python 3.11+ application; Python 3.14.2 tests, OpenAI SDK 3.7.0, httpx2 2.12.0,
+stdlib HTTP/TLS. The Swift credential name allowlist gains the dedicated development
+account; no native integration is enabled. See the Task 4 evidence below.
 
 ## Enforcement contract
 
@@ -43,12 +44,14 @@ its HTTP request. No production raw-string compatibility path remains.
 | `care.compose` | `Brain.ask` / `write` | Measured upkeep facts as `diagnostic`; no note bodies in these aggregate facts |
 | `index.build` | `Brain.embed` / `embed` | Entire note is prepared before chunking. Every chunk retains ID/title/timestamp. Metadata title/folder is redacted before saving |
 | `index.search` | `Brain.embed` / `embed` | Typed request passed intact from retriever; policy checked again by Brain |
+| `cli.cmd_models → Brain.available_models` | `GET /v1/models` | No user passages; secure readiness and endpoint-scoped credentials still required |
 | `nodes.researcher` | `research.search` / `search` | Current request with observed note identity when applicable; prepared before Tavily HTTP |
 
 Internal boundary calls: `Brain.ask_json → Brain.ask → Brain._call →
 _client.chat.completions.create`; empty-reasoning retry returns through `_call`.
 `Brain.embed → _client.embeddings.create` is the only embedding transport.
-`research.search → urllib.request.urlopen` is the only search transport.
+`research.search → network.provider_client → ProviderTransport` is the only search transport.
+All three SDK operations also use `ProviderTransport`; no default SDK HTTP transport remains.
 Nebius remains the inference/embedding provider: Nano
 `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`, Super
 `nvidia/nemotron-3-super-120b-a12b`, configured deep tier
@@ -87,11 +90,10 @@ rg -n '\.(ask|ask_json|embed)\(|urlopen\(|requests\.|httpx\.|OpenAI\(' notron
 /Users/m1labs/Dev/apps/juno/.venv/bin/python -m pytest tests -o addopts='' -q
 ```
 
-The first audit identifies nine inference callers, two embedding callers, one
-search caller and the two SDK transports (plus comments mentioning Brain).
-The wider audit also finds the `ask_json` wrapper, SDK initialization and existing
-citation HEAD checks. `Brain.available_models` sends no user passages. Citation
-URL validation/HEAD behavior is explicitly P01 Task 4, unchanged here.
+The original Task 2 audit identified nine inference callers, two embedding callers
+and one search caller. Task 4 additionally accounts for credentialed model listing
+and replaces both former default transports. The current exhaustive HTTP inventory
+below supersedes the old citation HEAD exception.
 
 ## Evidence and limits
 
@@ -107,8 +109,64 @@ URL validation/HEAD behavior is explicitly P01 Task 4, unchanged here.
   [Task 2 handoff](../handoffs/2026-09-04-P01-task-2.md).
 
 Redaction uses the existing supported labelled/high-entropy patterns, not a claim
-to recognize all secrets. Current and quarantined caches are still plaintext;
-Keychain/encryption, retention and revocation/deletion purges belong to Task 3.
-No real cache migration was run. URL restrictions belong to Task 4; durable
-operation recovery belongs to P02. No listener, app, provider call or deployment
-was started. No production or managed-server privacy/release gate is claimed.
+to recognize all secrets. Task 3 subsequently implemented authenticated cache
+encryption, explicit offline migration and retention/revocation purges; see
+[P01 secure storage](P01-secure-storage.md). No real migration was run.
+Task 4 network restrictions are below; durable operation recovery remains P02.
+No production or managed-server privacy/release gate is claimed.
+
+
+## Task 4: every remaining HTTP path
+
+| Entry / actual operation | Destination and wire adapter | Payload / credential boundary |
+|---|---|---|
+| All nine inference callers above → `Brain._call` → SDK `chat.completions.create` | POST `https://api.tokenfactory.nebius.com/v1/chat/completions` → `ProviderTransport` → `_ProviderConnection.request` | Prepared passages + static system instruction; current `NEBIUS_KEY` rebuilt as Authorization at the adapter |
+| `index.build`, `index.search` → `Brain.embed` → SDK `embeddings.create` | POST `https://api.tokenfactory.nebius.com/v1/embeddings` → same adapter | Every batch prepares/rechecks; same endpoint-scoped credential |
+| `cli.cmd_models` → `Brain.available_models` → SDK `models.list` | GET `https://api.tokenfactory.nebius.com/v1/models` → same adapter | No user text; same secure readiness and credential checks |
+| `nodes.researcher` → `research.search` → `httpx2.Client.post` | POST `https://api.tavily.com/search` → same adapter | Prepared query; injected `SEARCH_KEY` in JSON body; no ambient authentication headers |
+| Explicit development Nebius-compatible override | Same three Nebius methods/paths on the single configured public HTTPS host, port 443 | Requires `NOTRON_DEVELOPMENT=1` and `DEV_NEBIUS_KEY`; no production/environment/constructor-key fallback |
+| Writer/planner citation grounding | **No transport** | Exact URLs in prepared source/request/note passages; unsupported citations replaced locally |
+
+This is the complete active HTTP inventory, not just the model-input inventory.
+No `urllib.request.urlopen`, HEAD, generic fetch, async transport, WebSocket,
+Swift `URLSession`, shell curl/wget or alternative provider path remains in the
+application source. The plist DOCTYPE URLs in `watch.py`/`daily.py` are literal
+identifiers, not fetches. `research.quality` only parses domain text locally.
+`credentials.socketpair` is local pipe IPC with the Keychain helper, not HTTP.
+No managed-service endpoint is configured yet; P05 must consume these contracts.
+
+All four operations validate scheme, exact host/method/path and port before
+connecting. Query strings/fragments/userinfo and redirects are refused. The sole
+connection routine checks all DNS results, connects a numeric sockaddr without a
+second DNS lookup, checks its peer, then verifies TLS for the original service
+name. A private member of a mixed answer rejects the whole connection. Environment
+proxies cannot mount a different transport. The adapter reconstructs only fixed
+JSON headers and injected authorization, blocking SDK custom/ambient headers and
+cookie replay. No redirect can carry the Nebius header or Tavily body elsewhere.
+Late storage/credential/policy errors retain a fail-closed PolicyError subtype
+through the SDK. Automatic SDK retries are disabled; Brain's existing reasoning
+retry and embedding batches still prepare/recheck. Model IDs/settings are unchanged.
+
+Additional audit commands (run in the same worktree):
+
+```sh
+rg -n 'available_models|models\.list|chat\.completions|embeddings\.create|research.search' notron
+rg -n 'urllib|requests|httpx|httpcore|OpenAI|urlopen|urlretrieve|HTTPSConnection|HTTPConnection|socket|URLSession|curl|wget' notron mac/Sources --glob '*.py' --glob '*.swift'
+rg -n 'http|requests|urllib|curl|wget|socket|fetch\(' --glob '*.py' --glob '*.swift' --glob '*.sh' --glob '*.js' --glob '*.ts' --glob '*.html' . -g '!tests/**' -g '!docs/**'
+```
+
+Task 4 evidence: initial targeted regressions **105 failed, 20 passed** before
+implementation. Subsequent citation, SDK ambient-header, reasoning timeout and
+late secure-recheck failures were reproduced before fixes. Final commands/results
+are in the [Task 4 handoff](../handoffs/2026-09-05-P01-task-4.md). DNS rebinding,
+private/mixed results, original-name TLS, mismatched peer, redirects, proxies,
+development isolation, endpoint mutation and zero citation networking exercise
+real SDK/HTTP boundaries with fake sockets/DNS/TLS.
+
+Test isolation correction: eight existing search/privacy tests initially retained
+the old urllib mock after the transport changed. The socket guard blocked HTTP,
+but public DNS resolution of the fixed Tavily domain occurred. No provider HTTP,
+citation fetch, real credentials or user content were sent. The fixture was
+updated and the suite now globally denies unmocked DNS as well as socket connects.
+All final tests used synthetic integrations; no native Apple/Keychain/provider
+verification, listener startup, migration, deployment, merge or push occurred.

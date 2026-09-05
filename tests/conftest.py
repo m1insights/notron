@@ -162,8 +162,11 @@ def _outbound_resources_are_disposable(monkeypatch, tmp_path):
         raise AssertionError('Live network is forbidden in unit tests')
 
     monkeypatch.setattr(socket.socket, 'connect', blocked)
+    monkeypatch.setattr(socket, 'getaddrinfo', blocked)
     monkeypatch.setattr(urllib.request, 'urlopen', blocked)
     monkeypatch.delenv('NEBIUS_API_KEY', raising=False)
+    for name in ('NEBIUS_BASE_URL', 'NOTRON_DEVELOPMENT', 'OPENAI_API_KEY', 'OPENAI_ADMIN_KEY'):
+        monkeypatch.delenv(name, raising=False)
     for module, attr, name in (
         (brain, 'USAGE_LOG', 'usage.json'), (care, 'USAGE_LOG', 'usage.json'),
         (care, 'MOOD_FILE', 'mood.json'), (filer, 'STATE', 'filer.json'),
@@ -189,7 +192,7 @@ def outbound_transport(monkeypatch):
     from types import SimpleNamespace as NS
     from notron.brain import Brain
     import json
-    import urllib.request
+    from notron import network
 
     calls = NS(chat=[], embed=[], search=[], replies=[])
     def chat(**kw):
@@ -199,16 +202,20 @@ def outbound_transport(monkeypatch):
     def embed(**kw):
         calls.embed.append(kw)
         return NS(data=[NS(index=i, embedding=[1., 0.]) for i, _ in enumerate(kw['input'])], usage=None)
-    def search(request, **kw):
-        calls.search.append(json.loads(request.data))
-        class Response:
-            def __enter__(self): return self
-            def __exit__(self, *args): pass
-            def read(self): return b'{"answer":"synthetic result","results":[]}'
-        return Response()
+    class SearchConnection:
+        def __init__(self, *args, **kwargs): self.sock = NS(settimeout=lambda value: None)
+        def request(self, method, path, *, body, headers):
+            calls.search.append(json.loads(body))
+        def getresponse(self):
+            class Response:
+                status = 200
+                def getheaders(self): return [('Content-Type', 'application/json')]
+                def read(self): return b'{"answer":"synthetic result","results":[]}'
+            return Response()
+        def close(self): pass
     brain = Brain.__new__(Brain)
     brain._client = NS(chat=NS(completions=NS(create=chat)), embeddings=NS(create=embed))
-    monkeypatch.setattr(urllib.request, 'urlopen', search)
+    monkeypatch.setattr(network, '_ProviderConnection', SearchConnection)
     from notron import credentials
     credentials._provider.put(credentials.SEARCH_KEY, b'synthetic-test-key')
     return brain, calls

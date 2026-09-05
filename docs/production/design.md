@@ -326,3 +326,72 @@ it until an explicitly validated offline re-encryption/rebuild is accepted. P01
 provides no automatic rotation or legacy-key fallback. Memory erasure, a compromised
 local user account, provider retention, signed bridge behavior, and OS backups are
 not proven by unit tests. See [Task 3 evidence](evidence/P01-secure-storage.md).
+
+### P01 Task 4 implemented network contract (2026-09-05)
+
+`network.public_https_url(url: str, addresses: list[str]) -> bool` is a pure
+predicate: it neither resolves nor fetches. It requires HTTPS without URL
+credentials, well-formed public host syntax and a nonempty, entirely public
+address set. Loopback, private, unspecified, link-local/metadata, shared-address,
+multicast/reserved/documentation, IPv6 local/scoped/mapped and translation/tunnel
+addresses are refused. A public-looking DNS answer cannot launder a prohibited
+literal URL. The predicate alone never authorizes a request.
+
+`validate_provider_endpoint(url, service, *, development=False) -> str` returns
+the canonical base or raises `NetworkPolicyError`. That exception inherits the
+existing `policy.PolicyError` and the pinned SDK's `OpenAIError`, so neither SDK
+wrapping nor graph availability fallbacks convert a security refusal into a
+successful fallback. Late credential, storage and policy failures at the adapter
+are translated to this same sanitized fail-closed exception.
+
+Production endpoints are exactly `https://api.tokenfactory.nebius.com/v1/` and
+`https://api.tavily.com/search`, port 443. `ProviderTransport` enforces the actual
+request host, method and path for all four operations: Nebius POST
+`/v1/chat/completions`, POST `/v1/embeddings`, GET `/v1/models`; Tavily POST
+`/search`. Other hosts/routes, userinfo, queries, fragments and ports fail closed.
+No wildcard suffix matching, generic fetching, proxies or redirects are allowed.
+All 3xx responses stop before following even same-host/relative redirects.
+The HTTP path uses the existing OpenAI SDK over `httpx2`, with a shared
+`http.client.HTTPSConnection` adapter instead of separate default transports.
+Existing installed/locked versions are now explicit: `openai==3.7.0`,
+`httpx2==2.12.0`; no provider or model configuration changed.
+
+The adapter resolves once per connection, validates **every** returned address,
+then calls `socket.connect` with a numeric sockaddr. It checks the peer against
+that address and authenticates TLS using the original approved hostname with
+certificate/hostname validation enabled. It never resolves the hostname again
+between validation and connection. There is no remaining generic fetch. Every
+request rechecks secure readiness and credentials. Only fixed JSON headers and
+the current endpoint's injected authorization reach the wire; SDK environment
+headers, proxy authorization, organization/project headers and cookies are not
+forwarded. SDK automatic retries are disabled; the existing Brain reasoning
+retry still prepares and rechecks inputs. Nebius retains the SDK's 600-second
+read/write and five-second connection budgets; Tavily retains 20 seconds.
+
+The existing `NEBIUS_BASE_URL` override may select another public HTTPS domain
+with the same `/v1/` routes only when `NOTRON_DEVELOPMENT=1`. It requires the new
+allowlisted credential account `development-nebius-api-key` (`DEV_NEBIUS_KEY`)
+through the **same** injected `CredentialStore` and Swift name allowlist. Missing
+that key pauses, even when production or environment keys are present. Direct
+Brain constructor keys cannot bypass the store. Default Nebius uses only its
+production account, including in development mode. Changing/disabling development
+mode or removing its credential blocks an existing development client. No search
+override or managed hosted service is invented. P06 startup still refuses real
+processing; the development flag does not bypass signing, Keychain or storage.
+
+Writer and planner citations are checked locally against exact URL tokens from
+`prepare_outbound('write', ...)` over the same prompt's `web`, `user_request` and
+`note` passages. Note identity/policy and redaction are rechecked. Raw context,
+model/history/diagnostic output and mere substring matches cannot ground a URL.
+Every unsupported citation is replaced with “citation unverifiable — link
+removed,” without DNS, HEAD or any other network call, including beyond five
+links. CJK/Markdown wrappers and adjacent citations are handled locally; removing
+an unsupported URL cannot corrupt a different supported URL with the same prefix.
+Only numeric removal counts enter traces. Grounding proves provenance, not source
+truth or current reachability. `research.check_url` is removed.
+
+Verification and limits: [Task 4 handoff](handoffs/2026-09-05-P01-task-4.md) and
+[complete outbound/HTTP map](evidence/P01-outbound-map.md). Native signing/TLS/
+Keychain/provider availability remain unverified; tests use synthetic adapters.
+Tasks 1–3 policy/provenance/encryption/migration/retention protections and the P06
+signed-startup gate remain in effect. Task 5 and the P01 release gate remain open.
