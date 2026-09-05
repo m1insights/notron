@@ -130,11 +130,13 @@ def test_failed_restore_keeps_snapshot(undo_harness):
 
 ## Task 5 — Time, target ambiguity and fresh context
 
+Completed 2026-09-05; [implementation, review and verification handoff](../handoffs/2026-09-05-P02-task-5.md). Implementation `db9fc14`, review corrections `5784bf8` and `2b7176a`; 967 full-suite tests pass. Unknown-capture relative Notes dates ask explicitly; conflict approval requires restatement with an exact-event confirmation code until P03.
+
 **Files:** Modify `notron/when.py`, `notron/nodes.py`, `notron/calendar.py`, `notron/reminders.py`, `notron/filer.py`, `notron/layout.py`, `notron/index.py`; Create `tests/test_delayed_requests.py`, `tests/test_target_resolution.py`; Modify `tests/test_when.py`.
 **Consumes:** RequestEnvelope time/source confidence, ready policy, stable target IDs.
 **Produces:** `resolve_time_context(envelope, now, resumed) -> TimeContext`; target resolvers return zero/one/many candidates instead of silently selecting the first; stale-index reads refresh selected changed notes before answering.
 
-- [ ] Add a Friday capture processed Monday, a timezone change, DST overlap/nonexistent local time, explicit past time, date-only alarm, missing duration, mismatched calendar name and duplicate reminder names.
+- [x] Add a Friday capture processed Monday, a timezone change, DST overlap/nonexistent local time, explicit past time, date-only alarm, missing duration, mismatched calendar name and duplicate reminder names.
 
 ```python
 def test_relative_date_after_resume_requires_confirmation(delayed_request):
@@ -144,10 +146,10 @@ def test_relative_date_after_resume_requires_confirmation(delayed_request):
     assert result.needs_confirmation
 ```
 
-- [ ] Use aware datetimes plus `zoneinfo`; never strip UTC offsets. Resolve explicit capture times against their timezone. For unknown original capture after backlog/resume, ask a precise date before creating. Label journal filing date when capture date is unknown.
-- [ ] Preserve actual target IDs through completion. Unknown named list/calendar asks instead of defaulting; multiple candidates ask; bounded context identifies truncation and unavailable calendars. Date-only reminders explain they have no explicit timed alarm; event duration assumptions are confirmed. Reject unsupported recurrence/multi-action extraction rather than partially claiming success.
-- [ ] Refresh/validate changed-note context at query time within a bounded read budget; if unavailable, say context is incomplete. Do not treat denied EventKit access or timed-out fetch as an empty free schedule. Add deterministic overlap checks before a new event; conflicts require confirmation tied to that exact proposed event.
-- [ ] Run time/target/calendar/reminders/index tests with mocked clocks; commit.
+- [x] Use aware datetimes plus `zoneinfo`; never strip UTC offsets. Resolve explicit capture times against their timezone. For unknown original capture after backlog/resume, ask a precise date before creating. Label journal filing date when capture date is unknown.
+- [x] Preserve actual target IDs through completion. Unknown named list/calendar asks instead of defaulting; multiple candidates ask; bounded context identifies truncation and unavailable calendars. Date-only reminders explain they have no explicit timed alarm; event duration assumptions are confirmed. Reject unsupported recurrence/multi-action extraction rather than partially claiming success.
+- [x] Refresh/validate changed-note context at query time within a bounded read budget; if unavailable, say context is incomplete. Do not treat denied EventKit access or timed-out fetch as an empty free schedule. Add deterministic overlap checks before a new event; conflicts require confirmation tied to that exact proposed event.
+- [x] Run time/target/calendar/reminders/index tests with mocked clocks; commit.
 
 ## Task 6 — Worker lifecycle, queue health and migration
 
