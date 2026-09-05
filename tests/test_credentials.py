@@ -92,7 +92,9 @@ def test_keychain_bridge_uses_dedicated_pipe_and_sanitizes_errors(monkeypatch, t
     for argv, kw in calls:
         assert 'synthetic-key' not in str(argv) + str(kw)
         assert kw['stdout'] == kw['stderr'] == subprocess.DEVNULL
-        assert '--credential-fd' in argv
+        assert argv == [str(tmp_path / 'mock-helper'), '--credential-fd', str(kw['pass_fds'][0])]
+        assert not kw.get('shell', False)
+        assert kw['env'] == {'PATH': '/usr/bin:/bin'}
     assert capsys.readouterr().out == ''
     def failed(*args, **kwargs): raise OSError('synthetic-private-credential')
     monkeypatch.setattr(subprocess, 'Popen', failed)

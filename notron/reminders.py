@@ -62,9 +62,9 @@ JSON.stringify(names);
 _CREATE = """
 var store = $.EKEventStore.alloc.init;
 var r = $.EKReminder.reminderWithEventStore(store);
-r.title = %(title)s;
-r.notes = %(notes)s;
-var listName = %(list)s;
+r.title = input.title;
+r.notes = input.notes;
+var listName = input.list;
 var target = $();
 var cals = store.calendarsForEntityType($.EKEntityTypeReminder);
 for (var i = 0; i < cals.count; i++) {
@@ -73,7 +73,7 @@ for (var i = 0; i < cals.count; i++) {
 }
 if (target.isNil()) target = store.defaultCalendarForNewReminders;
 r.calendar = target;
-var iso = %(when)s;
+var iso = input.when;
 if (iso) {
   var f = $.NSDateFormatter.alloc.init;
   f.dateFormat = iso.length > 10 ? 'yyyy-MM-dd\\'T\\'HH:mm' : 'yyyy-MM-dd';
@@ -86,18 +86,18 @@ if (iso) {
 }
 var err = Ref();
 var ok = store.saveReminderCommitError(r, true, err);
-JSON.stringify(ok ? {id: ObjC.unwrap(r.calendarItemIdentifier)} : {error: 'save failed'});
+return JSON.stringify(ok ? {id: ObjC.unwrap(r.calendarItemIdentifier)} : {error: 'save failed'});
 """
 
 _COMPLETE = """
 var store = $.EKEventStore.alloc.init;
-var item = store.calendarItemWithIdentifier(%(id)s);
-if (item.isNil()) { JSON.stringify({error: 'not found'}); }
+var item = store.calendarItemWithIdentifier(input.id);
+if (item.isNil()) { return JSON.stringify({error: 'not found'}); }
 else {
   item.completed = true;
   var err = Ref();
   var ok = store.saveReminderCommitError(item, true, err);
-  JSON.stringify(ok ? {title: ObjC.unwrap(item.title)} : {error: 'save failed'});
+  return JSON.stringify(ok ? {title: ObjC.unwrap(item.title)} : {error: 'save failed'});
 }
 """
 
@@ -108,15 +108,6 @@ class Reminder:
     title: str
     list_name: str
     due: str          # ISO, or "" when undated
-
-
-def _js(value: str) -> str:
-    """A Python string as a JavaScript literal. Everything user- or model-supplied
-    goes through here — a title with a quote in it must not be able to change what
-    the script does."""
-    import json
-
-    return json.dumps(value or "")
 
 
 def lists(*, caller=None) -> list[str]:
@@ -149,9 +140,8 @@ def create(title: str, *, notes: str = "", list_name: str = "",
     A dated reminder also gets an alarm — a due date alone shows in the app but does
     not notify, and a reminder that does not buzz is just a note with a circle.
     """
-    body = _CREATE % {"title": _js(title), "notes": _js(notes),
-                      "list": _js(list_name), "when": _js(when_iso or "")}
-    out = (caller or eventkit.run)(body)
+    out = (caller or eventkit.run)(_CREATE, data={
+        "title": title, "notes": notes, "list": list_name, "when": when_iso or ""})
     if "error" in out:
         raise eventkit.EventKitError(f"could not create the reminder: {out['error']}")
     return out["id"]
@@ -160,7 +150,7 @@ def create(title: str, *, notes: str = "", list_name: str = "",
 def complete(reminder_id: str, *, caller=None) -> str:
     """Tick one off. There is deliberately no way to delete a reminder from here:
     the user's list is theirs, and 'done' must never quietly mean 'gone'."""
-    out = (caller or eventkit.run)(_COMPLETE % {"id": _js(reminder_id)})
+    out = (caller or eventkit.run)(_COMPLETE, data={"id": reminder_id})
     if "error" in out:
         raise LookupError(f"could not tick that off: {out['error']}")
     return out["title"]

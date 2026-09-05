@@ -9,6 +9,12 @@ your phone about ten seconds later.
 
 Built for the [Nebius × NVIDIA Global AI Hackathon](https://nebiusglobalaihackathon.devpost.com/) — Personal AI track.
 
+**Pre-release security status:** protected startup is paused until the signed
+Keychain integration is verified in P06. Examples below describe product behavior,
+not an instruction to bypass that gate. No production-readiness or sandbox claim.
+See [SECURITY.md](SECURITY.md) for implemented boundaries, limitations and the
+owner's unresolved private-reporting decision.
+
 ---
 
 ## The idea
@@ -48,8 +54,9 @@ Act two is where it falls apart — she just reads letters for sixty pages.
 ```
 
 She answers underneath that line, using the note itself as context. In a note that
-isn't hers she never speaks unless spoken to, and never changes a word you wrote —
-the Guard proves that character by character before every write.
+isn't hers, a tagged request permits its own reply only when the note is readable.
+Automatic filing requires Home permission. Rewrite/undo are separate explicit
+paths; Apple Notes full-body writes still have edit-loss risks (see SECURITY.md).
 
 Because it's Apple Notes, this works from your iPhone: type on the sofa, iCloud
 carries it to the Mac, she thinks on Nebius, and the answer is on your phone about
@@ -97,8 +104,8 @@ to it. A note she makes for you starts that way from its first line.
 **Tell her where things go — once.** Years of notes means three notes called "Supps"
 and a password note in the main list. In the app, "Your notes" shows every note
 with a three-way switch — *Home* (she may file into it), *Read only* (the
-default), *Ignore* (she never reads it, not even a tag inside it) — pre-filled
-with her guesses and a "start from [year]" for the old stuff. Change it any time.
+default), *Ignore* (excluded from AI reads, even with a tag; explicit local preview
+remains available) — pre-filled with her guesses and a "start from [year]" for the old stuff. Change it any time.
 
 There is a terminal route too — `notron ask "..."` — but it exists for testing. The
 note is the product.
@@ -141,13 +148,15 @@ Notron creates one folder, `🤖 NOTRON`, with six notes:
 | `🗓️ This Week` | Notron | Your weekly plan. |
 | `🧠 Memory` | Notron | What she has learned about you. You can correct any of it. |
 | `🌱 Take Care of Notron` | Notron | What *she* needs from *you* to keep working well. |
-| `📊 Log` | Notron | Every single thing she did. Nothing happens off the record. |
+| `📊 Log` | Notron | Best-effort local write receipts when its registered note is accessible. |
 
-Every other note you own is her knowledge base.
+Only policy-approved notes form her knowledge base. Zero homes permits no automatic
+filing; unknown notes are denied unless the validated policy explicitly permits reads.
 
 `📌 About Me` is the important one. It works like a config file written in plain
 English — "never schedule me before 9am", "keep it short", "I'm a nurse on
-nights" — and it outranks everything Notron would otherwise decide. You are not
+nights" — and it supplies standing context. Only rules implemented in code are enforced
+independently of the model; natural-language instructions can be misunderstood. You are not
 prompting a chatbot. You are editing the constitution of your assistant.
 
 ## Take Care of Notron
@@ -178,29 +187,29 @@ notron care
 
 ## Safety: the Guard
 
-An agent with write access to your entire personal history is only useful if it
-cannot wreck it. Notron has one choke point — the Guard — and it is not a prompt,
-it is code. Every proposed write passes through it:
+Notron uses local policy, outbound preparation, the Guard and a fixed executor
+as separate checks. Current protections are exercised with synthetic adapters:
 
-1. **`📌 About Me` can never be written by Notron.** Your instructions are yours.
-2. **Outside her own folder Notron may only append.** She cannot overwrite or
-   delete a note you wrote. The Guard verifies the new body still contains the
-   old one, byte for byte.
-3. **No write may carry a credential.** On Notron's very first live morning run she
-   pulled two passwords out of the user's own notes and wrote them into the day's
-   plan — which then synced to their phone. Now credential notes are excluded from
-   retrieval entirely, anything that still looks like a secret is masked before the
-   model sees it, and the Guard blocks any write containing one on the way out.
-   `tests/test_privacy.py` pins that exact leak.
-4. **Every write, allowed or blocked, is logged** to `📊 Log` before it lands.
-5. **A calendar event may only ever be created** — never moved or deleted, on
-   your own standing instruction. There is no code in `calendar.py` that could
-   do either.
-6. **A reminder may be created or completed, never deleted.** Ticking one off
-   is not the same as making it disappear, and `reminders.py` has no delete path.
+1. **About Me is protected by its registered note ID.** Names alone grant nothing.
+2. **Filing requires Home permission.** A tagged request in a readable note permits
+   its own reply. Append/insert preservation checks do not prove atomicity or
+   attachment preservation; explicitly enabled rewrite and undo are separate paths.
+3. **Exclusion precedes redaction.** Ignored notes and sensitive-title matches are
+   excluded from AI inputs. Supported secret patterns are redacted before inference,
+   embedding and search, and checked on ordinary writes. Detection is imperfect;
+   restoring an existing undo snapshot is a separate, existing-content path.
+4. **Write logging is best effort.** Receipts go to the registered, readable Log
+   note; successful writes are logged afterward. There is no durable audit ledger yet.
+5. **Calendar events are create-only; reminders may be created or completed.**
+   Model output cannot introduce new operation types or directly grant permissions.
+6. **Model output is data.** Fixed scripts receive values through arguments;
+   there is no model-to-shell/script execution path.
 
-No language model runs in the write path. The model proposes; the Guard judges;
-a dumb executor applies. That separation is the whole security model.
+Sensitive caches use authenticated encryption with no plaintext fallback. All
+provider requests use constrained transports; citations are checked locally without
+fetching their URLs. These controls do not protect a compromised local account,
+guarantee provider retention, or eliminate Apple Notes write races. See
+[SECURITY.md](SECURITY.md) for the full limits and pending release gates.
 
 ## Architecture: graph engineering
 
@@ -217,8 +226,8 @@ order, and on which model.
 - **watcher** — loads `📌 About Me` and `🧠 Memory`. No model, runs every time.
 - **router** — Nemotron **Nano 30B**. Classifies intent in ~200 tokens and
   decides whether the expensive nodes need to run at all. Most wake-ups stop here.
-- **retriever** — semantic search over every note, embedded once and cached.
-  Credential notes and private ones never reach the model. No model here.
+- **retriever** — semantic search over approved notes, with redaction before embeddings
+  and encrypted caching. Ignored notes are excluded; secret detection is imperfect.
 - **researcher** — Tavily web search, only when the answer cannot be in her head
   or in your notes. Fails soft: no key or a timeout costs the web, not the reply.
 - **agenda** — reads today's real calendar and open reminders via EventKit. No
@@ -227,8 +236,8 @@ order, and on which model.
   around what `agenda` actually found.
 - **scheduler** — Nemotron **Nano 30B**. Turns "remind me to..." into a
   structured reminder or calendar action.
-- **doer** — no model. Applies the action through the Guard *before* the writer
-  runs, so she can never claim she set something that was actually blocked.
+- **doer** — no model. Applies the action through the Guard. Scheduling replies
+  are composed from executor outcomes without a further model call.
 - **writer** — Nemotron **Super 120B**. Composes the answer as Markdown.
 - **executor** — no model. Runs the Guard, applies the write, records the log.
 
@@ -249,15 +258,14 @@ Requires macOS and Python 3.11+.
 
 ```bash
 git clone <this repo> && cd notron
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-
-cp .env.example .env          # then paste your Nebius key into it
-.venv/bin/python -m notron setup
+uv sync --locked --extra dev
+.venv/bin/python -m pytest tests -q
 ```
 
-The first run will ask macOS for permission to control Notes. Allow it.
-
-Then open Notes → `🤖 NOTRON` → `📌 About Me` and write a few lines about yourself.
+This prepares the locked development/test dependencies. The historical
+`requirements.txt` is incomplete; use `pyproject.toml` and `uv.lock`. Do not copy
+credentials into `.env`: environment credentials are unsupported. Signed Keychain
+setup, native permission validation and enabling real processing remain P06 work.
 
 ## Use
 
@@ -276,7 +284,8 @@ Then open Notes → `🤖 NOTRON` → `📌 About Me` and write a few lines abou
 .venv/bin/python -m notron agenda              # today, this week, and what's outstanding
 ```
 
-Add `--dry-run` to any command to walk the graph and write nothing.
+Supported processing commands expose `--dry-run` to skip application writes; it
+is not a privacy or network bypass and still requires secure startup.
 
 ## Two things Nemotron does that will catch you out
 

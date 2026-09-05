@@ -64,28 +64,28 @@ def test_creating_an_event_sends_both_ends():
     seen = {}
 
     def spy(body, **kw):
-        seen["body"] = body
+        seen["data"] = kw["data"]
         return {"id": "uid-1", "calendar": "Home"}
 
     uid = cal.create("Dentist", start_iso="2026-09-03T14:00",
                      end_iso="2026-09-03T15:00", caller=spy)
     assert uid == "uid-1"
-    assert "2026-09-03T14:00" in seen["body"]
-    assert "2026-09-03T15:00" in seen["body"]
+    assert seen["data"]["start"] == "2026-09-03T14:00"
+    assert seen["data"]["end"] == "2026-09-03T15:00"
 
 
 def test_an_event_with_no_end_time_gets_a_sensible_hour():
     seen = {}
     cal.create("Coffee", start_iso="2026-09-03T14:00",
-               caller=lambda body, **kw: (seen.setdefault("b", body), {"id": "u", "calendar": "x"})[1])
-    assert "2026-09-03T15:00" in seen["b"]
+               caller=lambda body, **kw: (seen.setdefault("data", kw["data"]), {"id": "u", "calendar": "x"})[1])
+    assert seen["data"]["end"] == "2026-09-03T15:00"
 
 
 def test_an_end_before_the_start_is_corrected_not_saved():
     seen = {}
     cal.create("Backwards", start_iso="2026-09-03T14:00", end_iso="2026-09-03T13:00",
-               caller=lambda body, **kw: (seen.setdefault("b", body), {"id": "u", "calendar": "x"})[1])
-    assert "2026-09-03T15:00" in seen["b"]
+               caller=lambda body, **kw: (seen.setdefault("data", kw["data"]), {"id": "u", "calendar": "x"})[1])
+    assert seen["data"]["end"] == "2026-09-03T15:00"
 
 
 def test_an_unusable_start_is_refused_before_anything_is_saved():

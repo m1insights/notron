@@ -56,9 +56,9 @@ class EventKitError(RuntimeError):
     pass
 
 
-def _osascript(script: str, timeout: int) -> str:
+def _osascript(script: str, timeout: int, *args: str) -> str:
     proc = subprocess.run(
-        ["osascript", "-l", "JavaScript", "-"],
+        ["osascript", "-l", "JavaScript", "-", *args],
         input=script, capture_output=True, text=True, timeout=timeout,
     )
     if proc.returncode != 0:
@@ -66,11 +66,19 @@ def _osascript(script: str, timeout: int) -> str:
     return proc.stdout.strip()
 
 
-def run(body: str, *, timeout: int = DEFAULT_TIMEOUT, runner=None) -> dict | list:
-    """Run one JXA snippet whose final expression is a JSON string."""
+def run(body: str, *, data: dict | None = None, timeout: int = DEFAULT_TIMEOUT, runner=None) -> dict | list:
+    """Run trusted JXA only. Dynamic bodies return JSON inside a fixed run handler.
+
+    User/model fields travel in one JSON argv value, never executable source.
+    Static no-data readers retain their final-expression convention.
+    """
     caller = runner or _osascript
     try:
-        raw = caller(PRELUDE + body, timeout)
+        if data is None:
+            raw = caller(PRELUDE + body, timeout)
+        else:
+            script = PRELUDE + 'function run(argv) {\nvar input = JSON.parse(argv[0]);\n' + body + '\n}'
+            raw = caller(script, timeout, json.dumps(data, allow_nan=False))
     except subprocess.TimeoutExpired as e:
         raise EventKitError(f"EventKit did not answer within {timeout}s") from e
     except Exception as e:

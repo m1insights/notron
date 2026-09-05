@@ -297,21 +297,15 @@ def is_running(runner=None) -> bool:
 
 
 def plist(python: str, project: str) -> str:
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>{WATCH_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{python}</string><string>-m</string><string>notron</string><string>listen</string>
-  </array>
-  <key>WorkingDirectory</key><string>{project}</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>/dev/null</string>
-  <key>StandardErrorPath</key><string>/dev/null</string>
-</dict>
-</plist>
-"""
+    import plistlib
+
+    return plistlib.dumps({
+        "Label": WATCH_LABEL,
+        "ProgramArguments": [python, "-m", "notron", "listen"],
+        "WorkingDirectory": project,
+        "RunAtLoad": True,
+        "KeepAlive": True,
+        "ThrottleInterval": 10,
+        "StandardOutPath": "/dev/null",
+        "StandardErrorPath": "/dev/null",
+    }).decode("utf-8")

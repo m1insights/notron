@@ -298,6 +298,11 @@ def scheduler(state: State, *, brain) -> State:
         state.answer = "I couldn't turn that into a supported reminder or calendar action."
         state.note("scheduler", "rejected unsupported operation")
         return state
+    if any(out.get(field) is not None and not isinstance(out[field], str)
+           for field in ("title", "when", "ends", "where", "notes")):
+        state.answer = "I couldn't turn that into a supported reminder or calendar action."
+        state.note("scheduler", "rejected nontext action fields")
+        return state
     action = Action(
         kind=out.get("kind") or ("event" if state.intent == "schedule" else "reminder"),
         op=out.get("op") or "create",

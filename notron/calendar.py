@@ -32,8 +32,8 @@ DEFAULT_MINUTES = 60
 _WINDOW = """
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
-var start = $.NSDate.dateWithTimeIntervalSinceNow(-86400 * %(back)d);
-var end = $.NSDate.dateWithTimeIntervalSinceNow(86400 * %(days)d);
+var start = $.NSDate.dateWithTimeIntervalSinceNow(-86400 * input.back);
+var end = $.NSDate.dateWithTimeIntervalSinceNow(86400 * input.days);
 var pred = store.predicateForEventsWithStartDateEndDateCalendars(start, end, cals);
 var events = store.eventsMatchingPredicate(pred);
 var f = $.NSDateFormatter.alloc.init;
@@ -49,7 +49,7 @@ for (var i = 0; i < events.count; i++) {
     location: e.location.isNil() ? '' : ObjC.unwrap(e.location)
   });
 }
-JSON.stringify(rows);
+return JSON.stringify(rows);
 """
 
 _NAMES = """
@@ -63,13 +63,13 @@ JSON.stringify(names);
 _CREATE = """
 var store = $.EKEventStore.alloc.init;
 var e = $.EKEvent.eventWithEventStore(store);
-e.title = %(title)s;
-e.notes = %(notes)s;
+e.title = input.title;
+e.notes = input.notes;
 var f = $.NSDateFormatter.alloc.init;
 f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mm';
-e.startDate = f.dateFromString(%(start)s);
-e.endDate = f.dateFromString(%(end)s);
-var wanted = %(calendar)s;
+e.startDate = f.dateFromString(input.start);
+e.endDate = f.dateFromString(input.end);
+var wanted = input.calendar;
 var target = $();
 var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
 for (var i = 0; i < cals.count; i++) {
@@ -80,7 +80,7 @@ if (target.isNil()) target = store.defaultCalendarForNewEvents;
 e.calendar = target;
 var err = Ref();
 var ok = store.saveEventSpanCommitError(e, $.EKSpanThisEvent, true, err);
-JSON.stringify(ok ? {id: ObjC.unwrap(e.eventIdentifier),
+return JSON.stringify(ok ? {id: ObjC.unwrap(e.eventIdentifier),
                      calendar: ObjC.unwrap(target.title)} : {error: 'save failed'});
 """
 
@@ -98,19 +98,12 @@ class Event:
         return parse(self.start)
 
 
-def _js(value: str) -> str:
-    import json
-
-    return json.dumps(value or "")
-
-
 def names(*, caller=None) -> list[str]:
     return (caller or eventkit.run)(_NAMES)
 
 
 def window(*, back: int = 0, days: int = 7, caller=None) -> list[Event]:
-    body = _WINDOW % {"back": back, "days": days}
-    rows = (caller or eventkit.run)(body)
+    rows = (caller or eventkit.run)(_WINDOW, data={"back": int(back), "days": int(days)})
     events = [Event(calendar=r.get("calendar", ""), title=r.get("title", ""),
                     start=r.get("start", ""), end=r.get("end", ""),
                     location=r.get("location", ""))
@@ -168,12 +161,11 @@ def create(title: str, *, start_iso: str, end_iso: str | None = None,
     if end <= start:
         end = start + timedelta(minutes=DEFAULT_MINUTES)
 
-    body = _CREATE % {
-        "title": _js(title), "notes": _js(notes), "calendar": _js(calendar_name),
-        "start": _js(start.strftime("%Y-%m-%dT%H:%M")),
-        "end": _js(end.strftime("%Y-%m-%dT%H:%M")),
-    }
-    out = (caller or eventkit.run)(body)
+    out = (caller or eventkit.run)(_CREATE, data={
+        "title": title, "notes": notes, "calendar": calendar_name,
+        "start": start.strftime("%Y-%m-%dT%H:%M"),
+        "end": end.strftime("%Y-%m-%dT%H:%M"),
+    })
     if "error" in out:
         raise eventkit.EventKitError(f"could not create the event: {out['error']}")
     return out["id"]

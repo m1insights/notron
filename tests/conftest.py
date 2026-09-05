@@ -236,3 +236,15 @@ def _task3_storage(monkeypatch, tmp_path, _outbound_resources_are_disposable):
     monkeypatch.setattr(diagnostics, 'ROOT', tmp_path / 'diagnostics')
     monkeypatch.setattr(retention, 'LEGACY_ROOT', tmp_path / 'legacy-repository')
     return provider
+
+
+@pytest.fixture(autouse=True)
+def _native_subprocesses_require_mocks(monkeypatch):
+    """A missed EventKit/helper/launchctl mock must never touch the host account."""
+    import subprocess
+
+    def blocked(*args, **kwargs):
+        raise AssertionError('Native subprocesses require a synthetic adapter in unit tests')
+
+    monkeypatch.setattr(subprocess, 'run', blocked)
+    monkeypatch.setattr(subprocess, 'Popen', blocked)

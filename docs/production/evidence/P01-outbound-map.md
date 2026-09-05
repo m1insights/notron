@@ -1,4 +1,4 @@
-# P01 outbound caller and HTTP transport map
+# P01 outbound caller, HTTP and subprocess map
 
 Updated 2026-09-05 on `production/p01-task1`, Task 4 following `35aa233`.
 Scope: every production inference, embedding, model-listing and search transport.
@@ -170,3 +170,52 @@ citation fetch, real credentials or user content were sent. The fixture was
 updated and the suite now globally denies unmocked DNS as well as socket connects.
 All final tests used synthetic integrations; no native Apple/Keychain/provider
 verification, listener startup, migration, deployment, merge or push occurred.
+
+## Task 5: complete subprocess and auxiliary boundary inventory
+
+Updated 2026-09-05. The four HTTP operations above are unchanged. No additional
+application HTTP caller was found. Static plist DOCTYPE identifiers are now emitted
+by `plistlib`; they do not trigger a fetch. Dependency/advisory downloads during
+this task are tooling traffic, documented separately in the
+[security report](P01-security-boundaries.md), not application/provider calls.
+
+| Boundary / every caller | Executable and input separation | Evidence / remaining limit |
+|---|---|---|
+| `notes.warm_up`, `folders`, `folder_at`, `ensure_folder`, `read_body`, `write_body`, `show_note`, `create_note`; `permissions.check` Notes probe → `applescript.run` → `_osascript` | `['osascript', '-', *args]`; fixed AppleScript stdin, folder/index/ID/body argv; no shell | Real Notes builders and lock wrapper exercised with fake subprocess; metadata fixtures cover listing/resolution. Lock is a script-request lock, not an Apple transaction |
+| `calendar.names`, `calendar.window`, `calendar.create`; `reminders.lists`, `open_items`, `create`, `complete`; `permissions._read` → `eventkit.run` → `_osascript` | `['osascript', '-l', 'JavaScript', '-', *args]`; fixed JXA stdin. Dynamic calls use one JSON argv object and `JSON.parse(argv[0])` in a fixed `run` handler. No string interpolation of fields, eval or shell | Scheduler → executor → actual adapters exercised with malicious synthetic model fields and mocked subprocess. Static readers keep final-expression JSON; dynamic handlers return JSON. JXA/ObjC runtime behavior remains native-unverified |
+| `credentials.KeychainStore.get/put/delete` → `_request` → `Popen` | Explicit helper path, `--credential-fd`, numeric FD only; name/operation/value JSON over inherited local socketpair; no secret argv, inherited environment or stdout/stderr | Actual pipe protocol exercised with a fake helper process; allowlisted names/Swift dispatch. Helper path/signature validation is P06, not active startup |
+| `cli.cmd_schedule`: off bootout; install bootout + bootstrap (three call sites) | `launchctl` argv, fixed label and UID, single plist path argument; structured `ProgramArguments` from `daily.plist` | Fake subprocess/temp home covers both branches. No launchd job loaded |
+| `cli.cmd_listen`: off bootout; install bootout + bootstrap (three call sites) | Same fixed argv; `watch.plist` serializes Python path, `-m`, `notron`, `listen` | Fake subprocess/temp home; special-character paths round-trip without extra argv. P06 portable runtime still pending |
+| `watch.is_running` | `['launchctl', 'print', 'gui/<uid>/<fixed label>']` | Fake subprocess; proves registration query, not listener health |
+| `mac/Sources/Notron/Core.swift: Core.run` → Foundation `Process` | Explicit executableURL; `['-m', 'notron'] + args`, optional JSON stdin; no shell | Read-only native source audit. Callers: AskNotronIntent (ask/quiet/request), Library (scan/peek/open/save), Onboarding (permissions/listen install/status), RewriteDefault (fixed enum default). Development paths/env still mutable and unsigned, gated P06 |
+| launchd → Python module | Plist arrays for `morning` / `listen`; no shell wrapper; stdout/stderr `/dev/null` | Parsed hostile-path plist regressions. `credentials.startup` still refuses before protected processing |
+
+There are **10 Python subprocess call sites and one Swift Process boundary**.
+No `shell=True`, `os.system`, dynamic Python eval/exec, `do shell script`, JXA
+`doShellScript`, NSAppleScript, shell curl/wget or alternate process executor was
+found in application source. `scripts/bootstrap.py` and `scripts/demo_guard.py`
+call existing Python APIs directly; neither was executed. The Swift Keychain
+helper calls Security APIs directly, not subprocesses. Onboarding opens a fixed
+`x-apple.systempreferences:` pane through NSWorkspace; it is not an HTTP fetch or
+model-selected URL. Swift Package.swift has no external package dependencies.
+
+Argument separation is not sandboxing: process arguments may expose personal text
+to local process inspection. `osascript` and `launchctl` use PATH lookup; developer
+Python/helper paths are trusted startup configuration. A compromised local account
+can replace code, environment or policy. AskNotronIntent currently lacks an end-of-
+options `--` before its single request argument, so `--help` can select CLI help;
+this does not create shell source or another subcommand, and portable native CLI
+invocation should be corrected/tested in P06. No native safety claim is made.
+
+Reproduction (source audit supplements, never substitutes for behavioral tests):
+
+```sh
+rg -n 'subprocess|Popen|os.system|popen|exec\(|eval\(|Process\(|executableURL|doShellScript|do shell script|NSAppleScript|NSTask' notron mac scripts --glob '*.py' --glob '*.swift'
+rg -n 'run\(|eventkit|Core.run|ProgramArguments' notron/notes.py notron/permissions.py notron/calendar.py notron/reminders.py notron/credentials.py notron/cli.py notron/watch.py notron/daily.py mac/Sources
+rg -n 'urllib|requests|httpx|httpcore|OpenAI|urlopen|urlretrieve|HTTPSConnection|HTTPConnection|socket|URLSession|curl|wget' notron mac/Sources scripts --glob '*.py' --glob '*.swift'
+```
+
+The new default pytest collection includes `test_security_boundaries.py`.
+Global test guards deny unmocked subprocesses, DNS and socket connections; only
+explicit synthetic adapters override them. No native applications, credentials,
+private cache, live providers or citations were accessed in Task 5.

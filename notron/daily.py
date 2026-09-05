@@ -69,27 +69,14 @@ PLIST_LABEL = "io.m1labs.notron.morning"
 
 
 def plist(python: str, project: str, hour: int, minute: int) -> str:
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>{PLIST_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{python}</string>
-    <string>-m</string>
-    <string>notron</string>
-    <string>morning</string>
-  </array>
-  <key>WorkingDirectory</key><string>{project}</string>
-  <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key><integer>{hour}</integer>
-    <key>Minute</key><integer>{minute}</integer>
-  </dict>
-  <key>StandardOutPath</key><string>/dev/null</string>
-  <key>StandardErrorPath</key><string>/dev/null</string>
-  <key>RunAtLoad</key><false/>
-</dict>
-</plist>
-"""
+    import plistlib
+
+    return plistlib.dumps({
+        "Label": PLIST_LABEL,
+        "ProgramArguments": [python, "-m", "notron", "morning"],
+        "WorkingDirectory": project,
+        "StartCalendarInterval": {"Hour": hour, "Minute": minute},
+        "RunAtLoad": False,
+        "StandardOutPath": "/dev/null",
+        "StandardErrorPath": "/dev/null",
+    }).decode("utf-8")

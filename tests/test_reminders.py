@@ -42,12 +42,12 @@ def test_creating_a_reminder_sends_an_iso_date_the_script_can_use():
     seen = {}
 
     def spy(body, **kw):
-        seen["body"] = body
+        seen["data"] = kw["data"]
         return {"id": "x-new"}
 
     rid = reminders.create("Call the pharmacy", when_iso="2026-09-03T09:00", caller=spy)
     assert rid == "x-new"
-    assert "2026-09-03T09:00" in seen["body"]
+    assert seen["data"]["when"] == "2026-09-03T09:00"
 
 
 def test_completing_a_reminder_never_deletes_it():

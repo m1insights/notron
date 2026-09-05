@@ -1,0 +1,22 @@
+name: Synthetic Python security and regression tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  python:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install locked test dependencies in the disposable runner
+        run: |
+          python -m pip install uv==0.9.22
+          uv sync --frozen --extra dev --no-install-project --python 3.12
+      - name: Security boundaries and full Python suite (synthetic adapters only)
+        run: .venv/bin/python -m pytest tests -o addopts='' -q

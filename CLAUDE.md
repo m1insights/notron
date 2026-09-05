@@ -43,7 +43,7 @@ is specced in `docs/design/04-onboarding-flow.md`.
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 361 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # synthetic fixtures; no live API key/network
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron ask "..."       # one-shot, for testing
@@ -65,7 +65,9 @@ is specced in `docs/design/04-onboarding-flow.md`.
 **A listener started from a tool-run shell dies the moment that shell returns.**
 Hours were lost to this: the code looked broken because every test listener was
 being killed after printing its startup lines. Use `notron listen --install`
-(launchd) for anything that must outlive the command, and read `.notron/listen.log`.
+(launchd) only after the P06 signed startup gate passes. Current background
+stdout/stderr are discarded; `.notron/listen.log` is a historical plaintext path,
+not a current diagnostic source.
 
 **Do not run other Notes commands while the listener is working.** Notes serves one
 script request at a time; a slow query from a second process wedges the app for
@@ -115,14 +117,20 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 ## Invariants — do not break these
 
 1. **`📌 About Me` is never written by Notron.** It is the user's instruction note.
-2. **Outside `🤖 NOTRON` she may only add, never rewrite.** `notedoc.preserves` proves
+2. **Outside `🤖 NOTRON`, ordinary filing/replies preserve existing text.**
+   Explicit rewrite/restore paths are described below; none is an atomic Apple
+   write. `notedoc.preserves` checks the candidate body, proving
    character by character that every original character survives, in order, and
    that new text landed between elements rather than inside a sentence.
 3. **No model runs in the write path.** The model proposes, the Guard judges in
    plain code, a dumb executor applies. Nothing calls `notes.write_body` except
    `Executor`.
-4. **Every write, allowed or blocked, is logged** to `📊 Log`.
-5. **Credentials and private notes never reach the model.** See `privacy.py`.
+4. **Write receipts are best effort** in the registered, readable `📊 Log`.
+   Successful writes log afterward; inaccessible logs and crashes can leave gaps.
+   P02 owns durable operation records.
+5. **Policy exclusions precede outbound redaction.** Every model/search/embedding
+   input uses `outbound.py`; supported secret patterns are filtered by `privacy.py`.
+   Redaction cannot recognize every secret. See `SECURITY.md` for limits.
 6. **A calendar event may only ever be created.** No move, no delete, no update —
    there is no code in `calendar.py` that could do it.
 7. **A reminder may be created or completed, never deleted.** Done is not gone.
@@ -133,7 +141,8 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
    a proposal in the dump and a wait for `yes`; it never guesses a bucket, never
    creates a note unasked. Lines that look like credentials are never filed and
    never shown to the model.
-9. **An ignored note is never read.** `library.user_notes()` is the only way the core
+9. **An ignored note is excluded from AI reads.** Explicit user-requested local
+   preview remains separately authorized. `library.user_notes()` is the way the core
    lists the user's notes; `index`, `retrieval`, `mentions`, `care` and `filer` all
    go through it, and `index.search` re-checks at query time because the index may
    be older than the choice.
@@ -210,21 +219,18 @@ closes a 700× gap — use `notron/eventkit.py`.
 - EventKit reads are asynchronous and JXA has no `await`. A script that does not
   pump `NSRunLoop.runModeBeforeDate` exits before the callback fires and returns
   nothing, every time, with no error.
-- Do not replace the JXA scripts with a compiled Swift helper. EventKit access is
-  granted per binary, and an unsigned binary's identity changes on every rebuild —
-  so every edit to Notron would re-prompt, and a background listener can never answer
-  a prompt. `osascript` inherits the terminal's stable identity.
+- The historical prototype used JXA and Terminal permission grants instead of a
+  compiled Swift helper. Signed identity and EventKit/Automation prompt behavior
+  must be verified in P06; Python tests do not establish native permission safety.
 - A dated reminder needs an explicit `EKAlarm`. A due date alone shows in the app
   but does not notify, and a reminder that does not buzz is a note with a circle.
-- **A write is a full-body overwrite, and nothing locks the note while she
-  thinks.** `append`/`insert` build `new_body` from a body read at the start of
-  `_apply`; the model's thinking time sits in the gap after that read, unlocked,
-  and the user can keep typing in the very note being answered. Writing the
-  stale body back silently eats or mangles whatever they typed in that window —
-  seen live as a sentence cut off mid-word and Notron answering the garble next
-  pass. `_apply` now re-reads immediately before writing and skips the write if
-  the note moved; the watcher retries next poll. `replace` is exempt — its
-  `new_body` comes from the model's output, not from `old_body`.
+- **Apple Notes writes replace a whole body and are non-atomic.** Append/insert/mark
+  reread immediately before writing and skip changed bodies, reducing the stale
+  body risk after `_apply` begins. Organizer inference occurs before `_apply`,
+  so that check does not cover the entire model interval. Replace/restore lack
+  that final revision check and can lose intervening edits. P02 owns revision-aware
+  writes, rich-content checks and recovery; even those cannot eliminate the final
+  multi-device read/write race.
 
 ## The Brain Dump (`filer.py`)
 
@@ -251,8 +257,8 @@ is a run boundary set in code; within a run the model may hang lines under a lea
 ## Your notes (`library.py`)
 
 Once per note the user says **home** (the Filer may file into it), **read only**
-(default) or **ignore** (never read — not for filing, not for questions, not even a
-tag). Choices live in `.notron/library.json` keyed by note id; the Mac app's "Your
+(default) or **ignore** (excluded from AI reads, including tags; a user may still
+explicitly preview it locally). Choices live in `.notron/library.json` keyed by note id; the Mac app's "Your
 notes" window writes it (it lists notes via `notron library scan`), `notron library`
 edits it from the terminal. A "start from [year]" cutoff applies only to notes the
 user never looked at (`decided`); a row they flipped wins. Zero homes means zero
@@ -287,7 +293,8 @@ deliberate carve-outs, both gated to a single chokepoint. **`organizer`**
 whole note, cleaned; by default the result lands *underneath* what the user
 wrote, exactly like any other reply, plus one line offering to keep that note
 clean in place next time. That offer must be answered with a tagged
-`@notron yes` — outside her folder nothing untagged is ever read — and only
+`@notron yes` — outside her folder a reply requires an explicit tag, while
+policy-approved retrieval can read untagged content — and only
 then does `rewrite.allow(note.id)` fire, which is the only thing that ever
 sets `Write.rewrite_allowed = True`, which is the only thing that lets
 `guard.check`'s outside-folder block pass a `replace`. A `yes` only confirms
@@ -327,8 +334,9 @@ quiet day costs zero calls); Super proposes ≤3 lessons, each forced to quote t
 transcript verbatim (string-checked in code); a **separate** Nano call verifies
 them against 📌 About Me and the existing lessons; the Guard writes the survivors
 to 📖 Lessons (capped at 12). Every prompt then carries the lessons *below* the
-standing instructions — About Me always wins, and the user can delete any lesson
-by editing the note. Run record: `.notron/reflect.json`, append-only.
+standing instructions — the model is instructed to prioritize About Me, without a
+guarantee, and the user can delete lessons by editing the note. Current reflection
+state uses encrypted Application Support storage; `.notron/reflect.json` is legacy.
 
 ## The Ask-note chat contract
 
@@ -358,3 +366,13 @@ by editing the note. Run record: `.notron/reflect.json`, append-only.
   `applescript.run`; live work that day also left fourteen junk `📊 Log` notes
   in that library. A test must never be able to touch the real one.
 - User-facing strings are plain and warm. She is an assistant, not a pet.
+
+## P01 security contract
+
+Read `SECURITY.md` and `docs/production/evidence/P01-security-boundaries.md` before
+changing trust boundaries. Model output remains data: scheduler fields are validated,
+operation types are fixed, dynamic JXA uses JSON argv, and AppleScript uses argv.
+No arbitrary tool, policy grant, or executable source may come from model output.
+No sandbox or production-readiness claim; P06 signed startup still pauses real
+processing. Private reporting route and provider retention remain release decisions.
+Tests globally block unmocked subprocesses, DNS and socket connections.

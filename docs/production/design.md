@@ -394,4 +394,49 @@ Verification and limits: [Task 4 handoff](handoffs/2026-09-05-P01-task-4.md) and
 [complete outbound/HTTP map](evidence/P01-outbound-map.md). Native signing/TLS/
 Keychain/provider availability remain unverified; tests use synthetic adapters.
 Tasks 1–3 policy/provenance/encryption/migration/retention protections and the P06
-signed-startup gate remain in effect. Task 5 and the P01 release gate remain open.
+signed-startup gate remain in effect. Task 5 evidence and remaining release gates
+are recorded below.
+
+### P01 Task 5 implemented security-boundary contract (2026-09-05)
+
+The existing `Passage`, policy, credential, network and encrypted-storage contracts
+remain authoritative and unchanged. Model routing/answers cannot add operation
+kinds, directly grant permission, or select executable source. `scheduler` validates
+that present title/where/notes/when/ends fields are strings or null before building
+an existing `Action`; kind/op remain limited to reminder create/complete and event
+create. Extra response keys are ignored, never copied into policy or request state.
+This does not guarantee correct model interpretation of user intent.
+
+`eventkit.run(body, *, data: dict | None = None, timeout=30, runner=None)` accepts
+trusted source constants only. Dynamic calendar window/create and reminder
+create/complete use `data` as one JSON argv value; a fixed `function run(argv)`
+parses it into `input`. Dynamic bodies explicitly return JSON; no-data readers
+retain their static final-expression JSON contract. `_osascript(script, timeout,
+*args)` passes argv directly with no shell. Injected dynamic runners receive the
+script, timeout and serialized argument; injected calendar/reminder callers receive
+the fixed body plus `data=`. There is no model/raw-text script entry point.
+AppleScript continues fixed stdin + argv. Launchd builders use `plistlib.dumps`
+with fixed `ProgramArguments`; paths cannot inject XML or additional arguments.
+
+`tests/test_security_boundaries.py` exercises production model parsing, nodes,
+executor and subprocess construction with hostile synthetic inputs. Existing
+credential tests exercise real local pipe IPC with a fake helper. Global pytest
+guards deny unmocked subprocess run/Popen as well as DNS/socket connections.
+A checked-in CI workflow runs the default suite with frozen lock dependencies;
+local tests are verified, hosted CI has not run. Swift/JXA execution, signed identity
+and permissions are not proven by this test suite.
+
+[SECURITY.md](../../SECURITY.md) and the
+[security report](evidence/P01-security-boundaries.md) describe the threat model,
+subprocess/HTTP inventory and pip-audit 2.10.1 results for every registry package
+version in uv.lock. No known advisories were returned; build tooling, interpreter,
+OS, future updater and unpublished vulnerabilities remain outside that result.
+No dependency/provider/model changes were made.
+
+P01 Tasks 1–5 implementation and synthetic regressions are complete. The owner
+has not established a documented private vulnerability reporting route; that is
+an explicit public-release blocker. Compromised local accounts, imperfect redaction,
+untrusted model instructions, provider retention and Apple Notes non-atomic writes
+remain limitations. P02 reliability, P05 hosted tenant isolation, P06 signed/native
+startup/distribution and P07 independent security/release evidence remain open.
+Default real processing stays paused; no sandbox or production-readiness claim.
