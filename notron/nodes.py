@@ -615,98 +615,55 @@ def _offer_precedes(body_html: str, before: int) -> bool:
 # ------------------------------------------------------------------- Undoer
 
 def undoer(state: State, *, brain=None) -> State:
-    """No model. Puts a note back the way it was before her last write to it.
-
-    One step back, per note (`undo.py`), and the saved copy is consumed as it is
-    used — so a second "undo" in a row says there is nothing to undo rather than
-    bouncing the note between two versions.
-    """
+    """Prepare a proven restore or explicitly confirmed recovery copy; never pop."""
     if state.intent != "undo" or state.reply_to is None:
         return state
     title, folder, _ = state.reply_to
     if title == workspace.ASK:
-        # The Ask note is the conversation itself, not a thing that was
-        # written — "undo" said here has no note to point at. Design doc:
-        # ask which one rather than guess (guessing would mean restoring the
-        # Ask note's own body, discarding the whole conversation, while
-        # reporting a "done" that has nothing to do with what the user meant).
-        state.answer = ("Tag me with @notron undo on the note you want put back — "
-                        "from here I can't tell which one.")
-        state.writes.append(_reply(state))
-        state.note("undoer", "asked in the Ask note — no note named")
+        state.answer = undo.ASK_REPLY
+        reply = _reply(state)
+        snapshot = undo.peek(reply.note_id) if reply.note_id else None
+        state.writes.append(replace(reply, undo_reply=True,
+            snapshot_id=snapshot.snapshot_id if snapshot else None))
         return state
     nid = state.source_note_id or policy.request_note_id()
     note = notes.get_note(nid) if nid else notes.unique_note(folder, title)
     if note is None:
-        # No note means nothing to put back — and nowhere to say so either,
-        # since `_reply` anchors inside this very note. Popping the slot here
-        # would spend the one step back on a write that could never land.
         state.answer = "Nothing to undo here."
         state.note("undoer", "no such note")
         return state
-
     if not policy.current().readable(note):
         raise policy.PolicyError('Undo target is no longer readable.')
-    target = capture_write(title, folder=folder, note_id=note.id, mode='restore')
-    _bind_reply(state)
-    old = undo.pop(note.id)
-    if old:
+    body = notes.read_body(note.id)
+    target = capture_write(title, folder=folder, note_id=note.id, body=body, mode='restore')
+    snapshot = undo.peek(note.id)
+    if snapshot and state.request.strip() == undo.copy_command(snapshot):
+        command = '@notron ' + undo.copy_command(snapshot)
+        hits = [line for line in notedoc.lines(body) if line.text.strip() == command]
+        if len(hits) == 1:
+            from .requests import revision
+            state.writes.append(Write(title=undo.copy_title(note.title, snapshot),
+                folder=folder if folder != workspace.FOLDER else 'Notes', mode='append',
+                markdown=undo.copy_markdown(snapshot), recovery_note_id=note.id,
+                snapshot_id=snapshot.snapshot_id, content_sources=[note.id],
+                source_checks=[(note.id, revision(body), command, hits[0].block)]))
+            state.answer = undo.COPY_REPLY
+            creation = state.writes[-1]
+            state.writes.append(replace(_reply(state), undo_reply=True,
+                snapshot_id=snapshot.snapshot_id, recovery_receipt_id=creation.operation_id,
+                operation_id=creation.operation_id + ':receipt'))
+            state.note('undoer', 'confirmed recovery copy')
+            return state
+    if snapshot and snapshot.after_revision == target.expected_revision:
         state.answer = "Done — put it back the way it was."
-        # `markdown` carries the note's own saved HTML here, not Markdown —
-        # `Executor.restore` puts it back verbatim (see `state.Write`) — with her
-        # one line of receipt rendered onto the end of it. That is deliberate,
-        # twice over. It is one write, not two: `restore` saves no undo slot, so
-        # a second write would fill the slot with the body she just put back and
-        # leave the note one step behind itself. And the receipt has to sit at
-        # the *end* of the restored note rather than under the line that asked
-        # for the undo, because that line is gone along with everything else she
-        # wrote over — what is back is the note as it stood before her last
-        # write, and whatever the user had said in it then is unanswered all
-        # over again. Without a turn after it the watcher hands it straight back
-        # and she redoes the very write that was just undone.
-        #
-        # A trailing turn only closes the *last* one of those — two tagged asks
-        # separated by a real gap (`conversation.MAX_GAP`) are still two turns,
-        # and only the final one sits next to what comes after it. So every
-        # unanswered tagged turn the restored body holds gets ticked first, the
-        # same primitive the Filer already relies on to stop a filed line being
-        # re-asked forever (`conversation.unanswered` treats a ticked turn as
-        # answered). Outside her folder only — inside it (☀️ Today, the Ask
-        # note) nothing is tagged, and re-answering a restored question there is
-        # the ordinary, correct thing to do, not a loop to close.
-        if folder != workspace.FOLDER:
-            # `notedoc.texts` (what `conversation.unanswered` reads) prefixes
-            # every list item with "• " for display; `notedoc.find_line` (what
-            # `mark_lines` matches against) compares the bare <li> text — the
-            # same prefix the Filer already strips for the same reason
-            # (filer.py). Without stripping it here, a tagged line inside a
-            # bulleted note never matches and never gets ticked.
-            #
-            # Known remaining gap, not closed here: `notedoc.blocks()` treats
-            # a whole <ul> as one block, so a tagged line sharing a list with
-            # untagged siblings still reads as unanswered even once ticked —
-            # `conversation.unanswered`'s filed-check tests the whole block's
-            # text, not the one line inside it. Pre-existing and deeper than
-            # this fix (a block-vs-line granularity mismatch between notedoc
-            # and conversation.py); see test_the_undoer_ticks_a_tagged_line_
-            # written_as_its_own_bullet for what this does and doesn't close.
-            marks = [
-                (line.strip().removeprefix("• "), q.after, " → put back")
-                for q in conversation.unanswered(old, ignore=(title,), require_tag=True)
-                for line in q.text.split("\n")
-                if conversation.TAG.search(line)
-            ]
-            old, _ = notedoc.mark_lines(old, marks)
-        state.writes.append(replace(target,
-            markdown=old + markup.to_html(conversation.turn(state.answer)),
-        ))
+        state.writes.append(replace(target, snapshot_id=snapshot.snapshot_id, restore_receipt=True,
+            markdown=undo.restore_body(snapshot, note.title, note.folder, True)))
     else:
-        # Nothing moved, so her turn goes under the line that asked, like any
-        # other reply. A turn with no visible answer reads as unanswered next
-        # pass, and she is asked to undo again, and again.
-        state.answer = "Nothing to undo here."
-        state.writes.append(_reply(state))
-    state.note("undoer", "restored" if old else "nothing saved for this note")
+        state.answer = undo.offer_text(snapshot)
+        state.writes.append(replace(_reply(state), undo_reply=True,
+            snapshot_id=snapshot.snapshot_id if snapshot else None))
+    state.note("undoer", "restore prepared" if state.writes[-1].mode == "restore"
+               else "recovery offered" if snapshot else "nothing saved for this note")
     return state
 
 
@@ -904,13 +861,16 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
         known_sources.add(state.source_note_id)
     from . import recovery
     all_ok = bool(state.writes)
+    recovered_copies = []
     for w in state.writes:
         # Context supplied to producers is provenance, never a permission grant.
         w.content_sources = sorted(set(w.content_sources) | known_sources)
         recovery.boundary('before_receipt', w.operation_id)
-        r = ex.apply_write(w)
+        r = ex.apply_creation(w) if w.recovery_note_id else ex.apply_write(w)
         all_ok = all_ok and r.ok
         if r.ok:
+            if w.recovery_note_id and not dry_run:
+                recovered_copies.append(r.note_id)
             recovery.boundary('after_receipt', w.operation_id)
         if r.alternative_text:
             state.answer = r.alternative_text + "\n\n" + r.reason
@@ -920,8 +880,15 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
             if draft:
                 state.answer += "\n\nUnsaved draft:\n" + draft
         state.results.append(f"{'✓' if r.ok else '✗'} {w.title} — {r.reason}")
+        if w.recovery_note_id and not r.ok:
+            break
     state.receipt_complete = all_ok or state.receipt_complete
     if all_ok and not dry_run:
+        from . import library
+        # Policy registration invalidates retained request content. Finish both
+        # the creation and its source receipt before changing the library.
+        for nid in recovered_copies:
+            library.add_home(nid)
         from . import operations
         store = operations.current()
         for op in store.pending():

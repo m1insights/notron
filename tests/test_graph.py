@@ -263,12 +263,14 @@ def _a_note_of_theirs(monkeypatch, body="<div>Parking Garages</div><div>12 Trini
 
 def test_undo_walks_the_whole_graph_without_ever_asking_the_model(monkeypatch):
     """Tagged on one of their own notes, "undo" is answered by plain code from
-    end to end: the router reads the word, the undoer pops the saved copy, and
+    end to end: the router reads the word, the undoer peeks the saved copy, and
     the writer stands aside instead of paying for a second reply."""
     from notron import undo
+    from notron.requests import revision
 
     _a_note_of_theirs(monkeypatch)
-    monkeypatch.setattr(undo, "pop", lambda note_id: "<div>the way it was</div>")
+    monkeypatch.setattr(undo, "peek", lambda note_id: undo.Snapshot(
+        "snapshot", "<div>the way it was</div>", revision(nodes.notes.read_body(note_id)), "written"))
     brain = FakeBrain()
     state = graph.run("undo", brain=brain, trigger="notes", dry_run=True,
                       reply_to=("Parking Garages", "Notes", 3), source_note_id="n1")

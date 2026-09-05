@@ -54,7 +54,8 @@ def test_a_write_to_an_existing_note_saves_its_old_body(monkeypatch):
     before = live['body']
     result = ex_mod.Executor(audit=False).append('Some Note', 'more text', folder='Notes')
     assert result.ok
-    assert ex_mod.undo._load() == {'n1': before}
+    assert ex_mod.undo.peek('n1').before_html == before
+    assert ex_mod.undo.peek('n1').after_revision == ex_mod.revision(live['body'])
 
 
 def test_a_refused_write_saves_no_undo(monkeypatch):
@@ -66,6 +67,8 @@ def test_a_refused_write_saves_no_undo(monkeypatch):
 def test_restore_writes_the_body_back_verbatim(monkeypatch):
     live = in_note(monkeypatch, workspace.TODAY)
     original = '<div>Today</div><div>*original* — her words, not markdown</div>'
+    ex_mod.undo.save('n1', original, ex_mod.revision(live['body']), 'previous')
+    ex_mod.undo.promote('n1', 'previous')
     result = ex_mod.Executor(audit=False).restore(workspace.TODAY, original)
     assert result.ok and live['writes'] == [original]
 
@@ -80,7 +83,9 @@ def test_replace_outside_her_folder_needs_the_opt_in(monkeypatch):
 
 
 def test_a_restore_saves_no_undo_slot(monkeypatch):
-    in_note(monkeypatch, workspace.TODAY)
+    live = in_note(monkeypatch, workspace.TODAY)
+    ex_mod.undo.save('n1', '<div>original</div>', ex_mod.revision(live['body']), 'previous')
+    ex_mod.undo.promote('n1', 'previous')
     assert ex_mod.Executor(audit=False).restore(workspace.TODAY, '<div>original</div>').ok
     assert ex_mod.undo._load() == {}
 
@@ -107,3 +112,219 @@ def test_a_folder_she_cannot_see_never_multiplies_the_log_note(monkeypatch):
     for _ in range(14):
         ex_mod.Executor()._log('synthetic operation')
     assert created == []
+
+
+def test_restore_without_snapshot_proof_is_refused(monkeypatch):
+    live = in_note(monkeypatch, workspace.TODAY)
+    assert not ex_mod.Executor(audit=False).restore(workspace.TODAY, '<div>arbitrary</div>').ok
+    assert live['writes'] == []
+
+
+def _saved_write(monkeypatch):
+    live = in_note(monkeypatch, workspace.TODAY)
+    before = live['body']
+    ex = ex_mod.Executor(audit=False)
+    assert ex.replace(workspace.TODAY, 'new plan').ok
+    return ex, live, before, ex_mod.undo.peek('n1')
+
+
+def test_failed_restore_keeps_snapshot(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    def fail(*args):
+        raise OSError('synthetic restore failure')
+    monkeypatch.setattr(ex_mod.notes, 'write_body', fail)
+    assert not ex.restore(workspace.TODAY, before).ok
+    assert ex_mod.undo.peek('n1') == snapshot
+
+
+def test_successful_restore_consumes_only_after_verification_and_second_undo_refuses(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    assert ex.restore(workspace.TODAY, before).ok
+    assert live['body'] == before
+    assert ex_mod.undo.peek('n1') is None
+    assert not ex.restore(workspace.TODAY, before).ok
+    assert len(live['writes']) == 2
+
+
+def test_intervening_edit_even_undo_command_never_overwritten(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    live['body'] += '<div>@notron undo</div>'
+    edited = live['body']
+    assert not ex.restore(workspace.TODAY, before).ok
+    assert live['body'] == edited
+    assert ex_mod.undo.peek('n1') == snapshot
+
+
+def test_dry_run_keeps_snapshot(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    assert ex_mod.Executor(audit=False, dry_run=True).restore(workspace.TODAY, before).ok
+    assert ex_mod.undo.peek('n1') == snapshot
+    assert len(live['writes']) == 1
+
+
+def test_final_refusal_preserves_prior_snapshot(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    save = ex_mod.undo.save
+    def edit(*args):
+        saved = save(*args)
+        live['body'] += '<div>new user words</div>'
+        return saved
+    monkeypatch.setattr(ex_mod.undo, 'save', edit)
+    assert not ex.replace(workspace.TODAY, 'another plan').ok
+    assert ex_mod.undo.peek('n1') == snapshot
+    assert len(live['writes']) == 1
+
+
+def test_restore_crash_after_effect_reconciles_without_second_write(monkeypatch):
+    from notron import recovery
+    from dataclasses import replace
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    write = replace(ex_mod.capture_write(workspace.TODAY, mode='restore'),
+                    markdown=before, snapshot_id=snapshot.snapshot_id)
+    class Crash(BaseException):
+        pass
+    def crash(name, oid):
+        if name == 'after_external_save':
+            raise Crash()
+    monkeypatch.setattr(recovery, 'boundary', crash)
+    import pytest
+    with pytest.raises(Crash):
+        ex.apply_write(write)
+    assert ex_mod.undo.peek('n1') == snapshot
+    monkeypatch.setattr(recovery, 'boundary', lambda *args: None)
+    assert ex.apply_write(write).ok
+    assert live['body'] == before
+    assert len(live['writes']) == 2
+    assert ex_mod.undo.peek('n1') is None
+
+
+def test_evidence_save_failure_before_mutation_preserves_previous_snapshot(monkeypatch):
+    from notron import recovery
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    def disk_full(*args):
+        raise OSError('synthetic evidence write failure')
+    monkeypatch.setattr(recovery, 'put', disk_full)
+    assert not ex.replace(workspace.TODAY, 'another plan').ok
+    assert ex_mod.undo.peek('n1') == snapshot
+    assert len(live['writes']) == 1
+
+
+def test_undo_receipt_flag_cannot_skip_destructive_backup(monkeypatch):
+    from dataclasses import replace
+    live = in_note(monkeypatch, workspace.TODAY)
+    write = replace(ex_mod.capture_write(workspace.TODAY, mode='replace'),
+                    markdown='destructive', undo_reply=True)
+    assert not ex_mod.Executor(audit=False).apply_write(write).ok
+    assert live['writes'] == []
+
+
+def test_restore_body_and_snapshot_cannot_be_substituted(monkeypatch):
+    from dataclasses import replace
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    write = replace(ex_mod.capture_write(workspace.TODAY, mode='restore'),
+                    markdown=before, snapshot_id=snapshot.snapshot_id)
+    assert not ex.apply_write(replace(write, markdown='<div>forged</div>')).ok
+    assert not ex.apply_write(replace(write, operation_id='wrong-proof', snapshot_id='wrong')).ok
+    assert ex_mod.undo.peek('n1') == snapshot
+    assert len(live['writes']) == 1
+
+
+def test_post_restore_divergence_keeps_snapshot(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    def divergent(nid, body):
+        live['body'] = body + '<div>new remote words</div>'
+        live['writes'].append(body)
+    monkeypatch.setattr(ex_mod.notes, 'write_body', divergent)
+    assert not ex.restore(workspace.TODAY, before).ok
+    assert ex_mod.undo.peek('n1') == snapshot
+    assert 'new remote words' in live['body']
+
+
+def test_snapshot_storage_failure_after_verified_restore_can_finish_without_replay(monkeypatch):
+    from dataclasses import replace
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    write = replace(ex_mod.capture_write(workspace.TODAY, mode='restore'),
+                    markdown=before, snapshot_id=snapshot.snapshot_id)
+    consume = ex_mod.undo.consume
+    def disk_full(*args):
+        raise OSError('synthetic snapshot consume failure')
+    monkeypatch.setattr(ex_mod.undo, 'consume', disk_full)
+    assert not ex.apply_write(write).ok
+    assert ex_mod.undo.peek('n1') == snapshot
+    monkeypatch.setattr(ex_mod.undo, 'consume', consume)
+    assert ex.apply_write(write).ok
+    assert ex_mod.undo.peek('n1') is None
+    assert len(live['writes']) == 2
+
+
+def test_backup_save_then_failure_keeps_previous_snapshot(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    save = ex_mod.undo.save
+    def saved_then_failed(*args):
+        save(*args)
+        raise OSError('synthetic completion failure')
+    monkeypatch.setattr(ex_mod.undo, 'save', saved_then_failed)
+    assert not ex.replace(workspace.TODAY, 'another plan').ok
+    assert ex_mod.undo.peek('n1') == snapshot
+    assert len(live['writes']) == 1
+
+
+def test_snapshot_replaced_during_restore_preparation_refuses_old_proof(monkeypatch):
+    from notron import recovery
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    def replace_snapshot(name, oid):
+        if name == 'before_applying':
+            ex_mod.undo.save('n1', '<div>newer backup</div>')
+    monkeypatch.setattr(recovery, 'boundary', replace_snapshot)
+    assert not ex.restore(workspace.TODAY, before).ok
+    assert len(live['writes']) == 1
+    assert ex_mod.undo.peek('n1').before_html == '<div>newer backup</div>'
+
+
+def test_revoked_restore_purges_snapshot_and_never_writes(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    lib = library.load()
+    lib.ignore.add('n1')
+    library.save(lib)
+    assert not ex.restore(workspace.TODAY, before).ok
+    assert ex_mod.undo.peek('n1') is None
+    assert len(live['writes']) == 1
+
+
+def test_rich_saved_body_is_never_restored_as_lossy_html(monkeypatch):
+    ex, live, before, snapshot = _saved_write(monkeypatch)
+    rich = '<div>old</div><object data="cid:attachment"></object>'
+    ex_mod.undo.save('n1', rich, ex_mod.revision(live['body']), 'rich-write')
+    ex_mod.undo.promote('n1', 'rich-write')
+    snapshot = ex_mod.undo.peek('n1')
+    result = ex.restore(workspace.TODAY, rich)
+    assert not result.ok and 'rich' in result.reason
+    assert ex_mod.undo.peek('n1') == snapshot
+    assert len(live['writes']) == 1
+
+
+def test_crashed_write_retains_actual_preimage_until_verified_reconciliation(monkeypatch):
+    from notron import recovery
+    live = in_note(monkeypatch, workspace.TODAY)
+    before = live['body']
+    ex = ex_mod.Executor(audit=False)
+    write = ex_mod.capture_write(workspace.TODAY, mode='replace')
+    write.markdown = 'new plan'
+    class Crash(BaseException):
+        pass
+    def crash(name, oid):
+        if name == 'after_external_save':
+            raise Crash()
+    monkeypatch.setattr(recovery, 'boundary', crash)
+    import pytest
+    with pytest.raises(Crash):
+        ex.apply_write(write)
+    snapshot = ex_mod.undo.peek('n1')
+    assert snapshot.before_html == before
+    assert snapshot.after_revision is None  # uncertain effect cannot authorize a restore
+    assert not ex.replace(workspace.TODAY, 'another plan').ok
+    assert ex_mod.undo.peek('n1') == snapshot
+    monkeypatch.setattr(recovery, 'boundary', lambda *args: None)
+    assert ex.apply_write(write).ok
+    assert ex_mod.undo.peek('n1').after_revision == ex_mod.revision(live['body'])
+    assert len(live['writes']) == 1

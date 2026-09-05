@@ -76,6 +76,11 @@ def no_such_note(monkeypatch):
                         lambda note_id: pytest.fail("read a note that does not exist"))
 
 
+def _snapshot(body):
+    from notron.requests import revision
+    return undo.Snapshot('synthetic-snapshot', body, revision(nodes.notes.read_body('n1')), 'written')
+
+
 def _state(request="", after=3, **kw):
     return State(request=request, source_note_id="n1", reply_to=(NOTE, FOLDER, after), **kw)
 
@@ -147,7 +152,7 @@ def test_filing_still_wins_over_a_tidy_up():
 # ------------------------------------------------------------------ the undoer
 
 def test_the_undoer_restores_what_she_wrote_over(monkeypatch, note_in_notes):
-    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: "<div>the user's own words</div>")
+    monkeypatch.setattr(nodes.undo, "peek", lambda note_id: _snapshot("<div>the user's own words</div>"))
     state = nodes.undoer(_state("undo", intent="undo"))
 
     assert state.writes[0].mode == "restore"
@@ -162,7 +167,7 @@ def test_the_receipt_rides_along_inside_the_restore(monkeypatch, note_in_notes):
     line that asked would land in the middle, leaving whatever the user had said
     before her last write unanswered — so the watcher hands it back and she
     redoes the very write that was just undone."""
-    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: "<div>old</div>")
+    monkeypatch.setattr(nodes.undo, "peek", lambda note_id: _snapshot("<div>old</div>"))
     state = nodes.undoer(_state("undo", intent="undo"))
 
     assert [w.mode for w in state.writes] == ["restore"]
@@ -183,7 +188,7 @@ def test_the_undoer_ticks_every_open_tagged_turn_not_just_the_last(monkeypatch, 
         "<div><br></div><div><br></div><div><br></div>"   # a real break: > MAX_GAP
         "<div>12 Trinity — $18</div>"
     )
-    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: old_body)
+    monkeypatch.setattr(nodes.undo, "peek", lambda note_id: _snapshot(old_body))
     state = nodes.undoer(_state("undo", intent="undo"))
 
     landed = state.writes[0].markdown
@@ -212,7 +217,7 @@ def test_the_undoer_ticks_a_tagged_line_written_as_its_own_bullet(monkeypatch, n
         "<div><br></div><div><br></div><div><br></div>"
         "<div>Beacon St — $22</div>"
     )
-    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: old_body)
+    monkeypatch.setattr(nodes.undo, "peek", lambda note_id: _snapshot(old_body))
     state = nodes.undoer(_state("undo", intent="undo"))
 
     landed = state.writes[0].markdown
@@ -223,7 +228,7 @@ def test_the_undoer_ticks_a_tagged_line_written_as_its_own_bullet(monkeypatch, n
 def test_the_undoer_says_nothing_to_undo_when_the_slot_is_empty(monkeypatch, note_in_notes):
     """One level, consumed on use: undo twice in a row is a plain sentence, not
     an error and not a bounce between two versions."""
-    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: None)
+    monkeypatch.setattr(nodes.undo, "peek", lambda note_id: None)
     state = nodes.undoer(_state("undo", intent="undo"))
 
     assert "nothing to undo" in state.answer.lower()
@@ -235,7 +240,7 @@ def test_the_undoer_leaves_a_note_that_is_gone_completely_alone(monkeypatch, no_
     anchors inside the very note that no longer exists. Popping the slot here
     would spend the one step back on a write that could never land."""
     popped = []
-    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: popped.append(note_id))
+    monkeypatch.setattr(nodes.undo, "peek", lambda note_id: popped.append(note_id))
     state = nodes.undoer(_state("undo", intent="undo"))
 
     assert state.writes == []
@@ -249,7 +254,7 @@ def test_undo_in_the_ask_note_asks_which_note_instead_of_guessing(monkeypatch, n
     that has nothing to do with what the user meant. Design doc: ask which
     note rather than guess."""
     popped = []
-    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: popped.append(note_id))
+    monkeypatch.setattr(nodes.undo, "peek", lambda note_id: popped.append(note_id))
     state = State(request="undo", reply_to=(workspace.ASK, workspace.FOLDER, 3), intent="undo")
     out = nodes.undoer(state)
 
@@ -461,7 +466,7 @@ def test_neither_node_writes_to_notes_itself(monkeypatch, note_in_notes):
     monkeypatch.setattr(nodes.notes, "create_note",
                         lambda folder, body: pytest.fail("a node created a note directly"))
     monkeypatch.setattr(nodes.rewrite, "allowed", lambda note_id: True)
-    monkeypatch.setattr(nodes.undo, "pop", lambda note_id: "<div>old</div>")
+    monkeypatch.setattr(nodes.undo, "peek", lambda note_id: _snapshot("<div>old</div>"))
 
     nodes.organizer(_state("clean this up", intent="organize"), brain=FakeBrain())
     nodes.undoer(_state("undo", intent="undo"))
@@ -510,3 +515,36 @@ def test_the_opt_in_reaches_the_guard_and_only_when_it_was_set(dispatched):
         Write(title=workspace.TODAY, mode="replace", markdown="y"),
     ]))
     assert dispatched == [("replace", NOTE, True), ("replace", workspace.TODAY, False)]
+
+
+def test_new_undo_command_offers_recovery_without_consuming_snapshot(note_in_notes):
+    from notron.requests import revision
+    undo.save('n1', '<div>previous words</div>', revision(note_in_notes['body']), 'written')
+    undo.promote('n1', 'written')
+    snapshot = undo.peek('n1')
+    note_in_notes['body'] += '<div>@notron undo</div>'
+    state = nodes.undoer(_state('undo', intent='undo'))
+    assert [w.mode for w in state.writes] == ['insert']
+    assert 'recovery copy' in state.answer
+    assert snapshot.snapshot_id in state.answer
+    assert state.writes[0].undo_reply
+    assert undo.peek('n1') == snapshot
+
+
+def test_copy_confirmation_binds_exact_snapshot_and_source(note_in_notes):
+    undo.save('n1', '<div>previous words</div>')
+    snapshot = undo.peek('n1')
+    command = 'undo recovery copy ' + snapshot.snapshot_id
+    note_in_notes['body'] += '<div>@notron ' + command + '</div>'
+    state = nodes.undoer(_state(command, intent='undo'))
+    assert state.writes[0].recovery_note_id == 'n1'
+    assert state.writes[0].snapshot_id == snapshot.snapshot_id
+    assert state.writes[0].note_id is None
+    assert 'previous words' in state.writes[0].markdown
+    assert undo.peek('n1') == snapshot
+
+
+def test_wrong_copy_confirmation_does_not_create(note_in_notes):
+    undo.save('n1', 'earlier')
+    state = nodes.undoer(_state('undo recovery copy wrong-snapshot', intent='undo'))
+    assert all(not w.recovery_note_id for w in state.writes)

@@ -21,8 +21,9 @@ was there and from guarantee 3's secret scan (that text was already live in
 the note; refusing to restore it would leave you stuck with what she wrote
 over it). `check` cannot prove that a `restore` body really is what the note
 held before — it trusts the caller entirely for that mode, the same way it
-trusts every caller's `old_body`. Only `undo.pop`'s saved copy, fed through
-`Executor.restore`, is meant to reach here as one. And `rewrite_allowed` lets
+trusts every caller's `old_body`. The executor requires `undo.peek` snapshot
+identity, matching post-write revision and exact saved body (plus its controlled
+receipt) before passing a restore here. And `rewrite_allowed` lets
 a `replace` land outside her folder only on a note you have explicitly opted
 into rewrite-in-place.
 """

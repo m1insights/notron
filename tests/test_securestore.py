@@ -73,7 +73,7 @@ def test_undo_and_request_state_are_encrypted(tmp_path):
     undo.save('n1', '<div>synthetic-private-original</div>')
     filer._save({'judged': {}, 'proposals': {'synthetic-private-request': {'items': []}}, 'shapes': {}}, dry_run=False)
     reflect._record({}, 'digest', {'lessons': ['synthetic-private-lesson']}, False)
-    assert undo.pop('n1') == '<div>synthetic-private-original</div>'
+    assert undo.peek('n1').before_html == '<div>synthetic-private-original</div>'
     for path in tmp_path.glob('*'):
         if path.is_file():
             assert b'synthetic-private' not in path.read_bytes()
@@ -91,7 +91,7 @@ def test_ignore_purges_index_undo_and_request_caches(outbound_policy):
     reflect._record({}, 'digest', {'lessons': ['synthetic']}, False)
     outbound_policy(ignored=('approved',))
     assert index._load() == {}
-    assert undo.pop('approved') is None
+    assert undo.peek('approved') is None
     assert filer._state()['proposals'] == {}
     assert reflect._state() == {}
 
@@ -103,7 +103,7 @@ def test_deleted_cleanup_removes_durable_content(monkeypatch, outbound_policy):
     monkeypatch.setattr(notes, 'list_all_notes', lambda: [])
     retention.reconcile()
     assert index._load() == {}
-    assert undo.pop('approved') is None
+    assert undo.peek('approved') is None
 
 
 def test_diagnostics_exclude_content_and_expire_after_seven_days(tmp_path):
@@ -166,7 +166,7 @@ def test_current_sensitive_title_purges_previously_ordinary_cached_note(monkeypa
     monkeypatch.setattr(notes, 'list_all_notes', lambda: [notes.Note('n1', 'Passwords', 'Notes', '')])
     retention.reconcile()
     assert index._load() == {}
-    assert undo.pop('n1') is None
+    assert undo.peek('n1') is None
 
 
 def test_listener_releases_ignored_in_memory_requests(monkeypatch):

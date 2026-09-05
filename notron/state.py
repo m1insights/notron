@@ -34,6 +34,11 @@ class Write:
     source_checks: list[tuple[str, str, str, int]] = field(default_factory=list)
     rebase_append: bool = True  # False when layout depends on the captured body
     marks: list[tuple[str, int, str]] = field(default_factory=list)
+    snapshot_id: str | None = None  # restore/recovery proof, validated by executor
+    restore_receipt: bool = False
+    recovery_receipt_id: str | None = None
+    undo_reply: bool = False       # undo receipts must not refill the slot
+    recovery_note_id: str | None = None  # explicit recovery-copy creation source
     rewrite_allowed: bool = False   # replace mode: the user has opted this one
                                     # note into being rewritten in place
 

@@ -49,13 +49,13 @@ def test_missing_and_rotated_storage_key_block_all_boundaries(outbound_transport
     undo.save('n1', 'synthetic original')
     _task3_storage.delete(credentials.STORAGE_KEY)
     passages = [Passage('synthetic', 'user_request')]
-    for call in (lambda: brain.embed(passages), lambda: research.search(passages), lambda: undo.pop('n1')):
+    for call in (lambda: brain.embed(passages), lambda: research.search(passages), lambda: undo.peek('n1')):
         with pytest.raises(credentials.CredentialUnavailable): call()
     _task3_storage.put(credentials.STORAGE_KEY, b'x' * 32)
     with pytest.raises(IntegrityError): brain.embed(passages)
     assert not calls.embed and not calls.search
     _task3_storage.put(credentials.STORAGE_KEY, bytes(range(32)))
-    assert undo.pop('n1') == 'synthetic original'
+    assert undo.peek('n1').before_html == 'synthetic original'
 
 
 def test_keychain_bridge_uses_dedicated_pipe_and_sanitizes_errors(monkeypatch, tmp_path, capsys):

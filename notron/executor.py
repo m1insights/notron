@@ -105,8 +105,10 @@ class Executor:
         return self.apply_write(capture_write(title, folder=folder, mode='mark', marks=marks))
 
     def restore(self, title, raw_html_body, *, folder=workspace.FOLDER):
-        return self.apply_write(replace(capture_write(title, folder=folder, mode='restore'),
-                                        markdown=raw_html_body))
+        target = capture_write(title, folder=folder, mode='restore')
+        snapshot = undo.peek(target.note_id) if target.note_id else None
+        return self.apply_write(replace(target, markdown=raw_html_body,
+                                        snapshot_id=snapshot.snapshot_id if snapshot else None))
 
     def create_approved(self, title, body_markdown, *, folder, source_checks=(), content_sources=(), operation_id=None):
         # Creation is a distinct explicit operation, never a title-selected append.
@@ -210,6 +212,8 @@ class Executor:
             return self._permitted(current_note, write.mode, write.rewrite_allowed)
         if not creation and not permitted(note):
             return result(False, 'note missing or note policy denied access')
+        if write.undo_reply and write.mode not in ('append', 'insert'):
+            return result(False, 'undo receipts must preserve the live body')
         content_sources = self._content_sources(write)
         if not self.dry_run:
             store = operations.current()
@@ -225,6 +229,7 @@ class Executor:
                 if not prior.payload_ref or not self._content_readable(prior.content_source_ids or ()):
                     return result(False, 'operation content unavailable; review required')
                 if prior.status in (operations.S.APPLIED, operations.S.RECEIPTED):
+                    self._finish_snapshot(write)
                     return result(True, 'already applied; no write repeated', observed=prior.observed_revision, note_id=prior.external_id)
                 if prior.status == operations.S.APPLYING or (prior.status == operations.S.NEEDS_REVIEW and
                                                              prior.failure_code == 'unknown_outcome'):
@@ -239,6 +244,7 @@ class Executor:
                     if note and evidence and revision(notes.read_body(note.id)) == evidence['revision']:
                         store.transition(write.operation_id, prior.status, operations.S.APPLIED,
                                          external_id=note.id, observed_revision=evidence['revision'])
+                        self._finish_snapshot(write)
                         return result(True, 'reconciled; no write repeated', observed=evidence['revision'], note_id=note.id)
                     if prior.status == operations.S.APPLYING:
                         store.transition(write.operation_id, prior.status, operations.S.NEEDS_REVIEW,
@@ -246,6 +252,34 @@ class Executor:
                     else:
                         store.record_inconclusive_review(write.operation_id)
                 return result(False, 'operation requires review; no write repeated', observed=prior.observed_revision)
+        if write.undo_reply:
+            from . import conversation
+            snapshot = undo.peek(write.note_id)
+            valid_identity = (snapshot.snapshot_id if snapshot else None) == write.snapshot_id
+            expected = undo.ASK_REPLY if write.title == workspace.ASK else undo.offer_text(snapshot)
+            if write.recovery_receipt_id:
+                expected = undo.COPY_REPLY
+                if not self.dry_run:
+                    prior_copy = operations.current().get(write.recovery_receipt_id)
+                    saved = recovery.get(write.recovery_receipt_id) if prior_copy else None
+                    if (not prior_copy or prior_copy.status not in (operations.S.APPLIED, operations.S.RECEIPTED)
+                            or not saved or not saved.get('creation')
+                            or saved['write'].get('recovery_note_id') != write.note_id
+                            or saved['write'].get('snapshot_id') != write.snapshot_id):
+                        return result(False, 'recovery copy has not been verified')
+            if (not valid_identity or write.mode != 'insert'
+                    or write.markdown != conversation.turn(expected)):
+                return result(False, 'undo receipt does not match its saved snapshot')
+        if write.recovery_note_id:
+            snapshot = undo.peek(write.recovery_note_id)
+            source = notes.get_note(write.recovery_note_id)
+            if (not creation or not snapshot or not source or snapshot.snapshot_id != write.snapshot_id
+                    or write.markdown != undo.copy_markdown(snapshot)
+                    or write.title != undo.copy_title(source.title, snapshot)
+                    or len(write.source_checks) != 1
+                    or write.source_checks[0][0] != source.id
+                    or write.source_checks[0][2] != '@notron ' + undo.copy_command(snapshot)):
+                return result(False, 'explicit recovery-copy confirmation and saved snapshot are required')
         if creation and not permitted(note):
             return result(False, 'creation target exists or policy denied access')
         if not self._content_readable(content_sources) or not self._sources_current(write):
@@ -278,6 +312,13 @@ class Executor:
                                  failure_code=code, observed_revision=observed)
             return result(False, reason, observed=observed, alternative=alternative)
 
+        if write.mode == 'restore':
+            snapshot = undo.peek(write.note_id)
+            if (not snapshot or snapshot.snapshot_id != write.snapshot_id
+                    or not snapshot.after_revision
+                    or snapshot.after_revision != write.expected_revision
+                    or write.markdown != undo.restore_body(snapshot, note.title, note.folder, write.restore_receipt)):
+                return refuse('saved snapshot proof or post-write revision does not match; use a recovery copy')
         unchanged = revision(old) == write.expected_revision
         if write.mode in ('replace', 'restore') and not unchanged:
             return refuse('the note changed since this result was prepared', observed=revision(old))
@@ -316,18 +357,21 @@ class Executor:
         if self.dry_run:
             return result(True, 'dry run — nothing written')
         try:
-            if note and write.mode != 'restore':
-                undo.save(note.id, old)
+            if note and write.mode != 'restore' and not write.undo_reply:
+                undo.save(note.id, old, revision(new), write.operation_id)
         except Exception:
+            if note:
+                undo.discard(note.id, write.operation_id)
             return refuse('required backup failed; nothing written', 'write_failed')
-        # Commit APPLYING before the external effect, then make final checks.
-        if store.get(write.operation_id).status != operations.S.PREPARED:
-            return result(False, 'note policy changed during preparation; nothing written')
-        recovery.put(op.request_id, write.operation_id + ':evidence',
-                     {'revision': revision(new)}, content_sources)
-        recovery.boundary('before_applying', write.operation_id)
-        store.transition(write.operation_id, operations.S.PREPARED, operations.S.APPLYING)
+        attempted = False
         try:
+            # Commit APPLYING before the external effect, then make final checks.
+            if store.get(write.operation_id).status != operations.S.PREPARED:
+                return result(False, 'note policy changed during preparation; nothing written')
+            recovery.put(op.request_id, write.operation_id + ':evidence',
+                         {'revision': revision(new)}, content_sources)
+            recovery.boundary('before_applying', write.operation_id)
+            store.transition(write.operation_id, operations.S.PREPARED, operations.S.APPLYING)
             current_note = notes.get_note(note.id) if note else None
             if not permitted(current_note) or (note and current_note and
                     (current_note.title, current_note.folder) != (note.title, note.folder)):
@@ -344,6 +388,12 @@ class Executor:
                                  failure_code='revision_conflict', observed_revision=revision(current_body))
                 return result(False, 'the note changed during write preparation; nothing written',
                               observed=revision(current_body))
+            if write.mode == 'restore' or write.recovery_note_id or write.undo_reply:
+                latest = undo.peek(write.recovery_note_id or write.note_id)
+                if (latest.snapshot_id if latest else None) != write.snapshot_id:
+                    store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
+                                     failure_code='source_changed')
+                    return result(False, 'saved snapshot changed during preparation; nothing written')
             if not permitted(current_note):
                 if store.get(write.operation_id).status == operations.S.APPLYING:
                     store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
@@ -357,6 +407,7 @@ class Executor:
             if store.get(write.operation_id).status != operations.S.APPLYING:
                 return result(False, 'operation invalidated before mutation; nothing written')
             # Apple exposes no CAS. Remote edits after this read remain a final race.
+            attempted = True
             if note:
                 notes.write_body(note.id, new)
                 nid = note.id
@@ -371,15 +422,26 @@ class Executor:
             recovery.boundary('before_external_id', write.operation_id)
             store.transition(write.operation_id, operations.S.APPLYING, operations.S.APPLIED,
                              external_id=nid, observed_revision=observed)
+            self._finish_snapshot(write)
         except Exception:
             # Do not retry: a timeout or failure after applying may have landed.
             if store.get(write.operation_id).status == operations.S.APPLYING:
                 store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
                                  failure_code='unknown_outcome')
             return result(False, 'write outcome uncertain; review required')
+        finally:
+            if not attempted and note:
+                undo.discard(note.id, write.operation_id)
         if note and note.folder != workspace.FOLDER and write.mode in ('append', 'insert') and not policy.current().can_file(note.id):
             policy.consume_reply()
         return result(True, 'written', observed=observed, note_id=nid)
+
+    @staticmethod
+    def _finish_snapshot(write):
+        if write.mode == 'restore':
+            undo.consume(write.note_id, write.snapshot_id)
+        elif write.note_id and not write.undo_reply:
+            undo.promote(write.note_id, write.operation_id)
 
     def do(self, action, *, about: str = "", request: str = "", content_sources=()) -> WriteResult:
         """Commit intent before EventKit; reconcile uncertain saves without replay."""

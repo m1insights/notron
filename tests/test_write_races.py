@@ -242,8 +242,8 @@ def test_edit_during_backup_is_checked_before_final_write(monkeypatch, fake_note
     write = make_write(note_id=nid)
     original_save = executor.undo.save
     live = '<div>Ideas</div><div>edited during backup</div>'
-    def save_then_edit(target, body):
-        original_save(target, body)
+    def save_then_edit(target, body, *proof):
+        original_save(target, body, *proof)
         fake_note_store.set_body(target, live)
     monkeypatch.setattr(executor.undo, 'save', save_then_edit)
     assert not safe_executor.apply_write(write).ok
@@ -310,8 +310,8 @@ def test_policy_revoked_during_backup_refuses_write(monkeypatch, fake_note_store
     nid = fake_note_store.add('Ideas', '<div>old</div>')
     write = make_write(note_id=nid)
     original = executor.undo.save
-    def save_then_revoke(target, body):
-        original(target, body)
+    def save_then_revoke(target, body, *proof):
+        original(target, body, *proof)
         lib = library.load()
         lib.ignore.add(target)
         library.save(lib)
@@ -371,12 +371,12 @@ def test_two_local_executors_serialize_read_modify_write(monkeypatch, fake_note_
     in_backup, release = threading.Event(), threading.Event()
     original = executor.undo.save
     calls = []
-    def hold_first(target, body):
+    def hold_first(target, body, *proof):
         calls.append(body)
         if len(calls) == 1:
             in_backup.set()
             assert release.wait(3)
-        original(target, body)
+        original(target, body, *proof)
     monkeypatch.setattr(executor.undo, 'save', hold_first)
     with ThreadPoolExecutor(max_workers=2) as pool:
         a = pool.submit(executor.Executor(audit=False).apply_write, first)
@@ -486,8 +486,8 @@ def test_rename_during_backup_never_resurrects_old_title(monkeypatch, fake_note_
     nid = fake_note_store.add('Ideas', '<div>original</div>')
     write = make_write(note_id=nid)
     original = executor.undo.save
-    def save_then_rename(target, body):
-        original(target, body)
+    def save_then_rename(target, body, *proof):
+        original(target, body, *proof)
         fake_note_store.move(target, 'Renamed', 'Archive')
     monkeypatch.setattr(executor.undo, 'save', save_then_rename)
     assert not safe_executor.apply_write(write).ok
@@ -715,3 +715,161 @@ def test_success_audit_payload_omits_note_derived_title(fake_note_store, make_wr
     del fake_note_store.rows[target]
     retention.reconcile()
     assert ledger.payload(audit.operation_id) is not None
+
+
+def test_confirmed_recovery_copy_preserves_later_words_and_original_snapshot(fake_note_store, monkeypatch):
+    from notron import nodes, undo
+    from notron.state import State
+    before = '<div>Ideas</div><div>original details</div>'
+    nid = fake_note_store.add('Ideas', before)
+    undo.save(nid, before)
+    snapshot = undo.peek(nid)
+    fake_note_store.set_body(nid, '<div>Ideas</div><div>later user words</div><div>@notron undo</div>')
+    def state(command):
+        return State(request=command, source='@notron ' + command, source_note_id=nid,
+                     reply_to=('Ideas', 'Notes', 2), intent='undo')
+    monkeypatch.setattr(executor.Executor, '_log', lambda *args, **kwargs: None)
+    offered = nodes.executor(nodes.undoer(state('undo')))
+    assert offered.receipt_complete
+    assert 'later user words' in fake_note_store.body(nid)
+    assert undo.peek(nid) == snapshot
+    command = 'undo recovery copy ' + snapshot.snapshot_id
+    fake_note_store.set_body(nid, fake_note_store.body(nid) + '<div>@notron ' + command + '</div>')
+    created = []
+    def create(folder, body):
+        target = uuid4().hex
+        fake_note_store.rows[target] = [notes.Note(target, undo.copy_title('Ideas', snapshot), folder, 'observed'), body]
+        created.append(target)
+        return target
+    monkeypatch.setattr(notes, 'create_note', create)
+    planned = nodes.undoer(state(command))
+    assert len(planned.writes) == 2  # creation plus a receipt; receipt cannot refill undo
+    result = nodes.executor(planned)
+    assert result.receipt_complete
+    assert len(created) == 1
+    assert 'original details' in fake_note_store.body(created[0])
+    assert 'later user words' in fake_note_store.body(nid)
+    assert undo.peek(nid) == snapshot
+    nodes.executor(planned)
+    assert len(created) == 1
+
+
+def test_recovery_copy_with_stale_snapshot_or_removed_confirmation_is_refused(fake_note_store, monkeypatch):
+    from notron import nodes, undo
+    from notron.state import State
+    nid = fake_note_store.add('Ideas', '<div>Ideas</div>')
+    undo.save(nid, '<div>saved version</div>')
+    snapshot = undo.peek(nid)
+    command = 'undo recovery copy ' + snapshot.snapshot_id
+    fake_note_store.set_body(nid, '<div>Ideas</div><div>@notron ' + command + '</div>')
+    state = nodes.undoer(State(request=command, source_note_id=nid, reply_to=('Ideas', 'Notes', 1), intent='undo'))
+    write = state.writes[0]
+    monkeypatch.setattr(notes, 'create_note', lambda *args: pytest.fail('must not create'))
+    fake_note_store.set_body(nid, '<div>Ideas</div><div>confirmation removed</div>')
+    assert not executor.Executor(audit=False).apply_creation(write).ok
+    fake_note_store.set_body(nid, '<div>Ideas</div><div>@notron ' + command + '</div>')
+    undo.save(nid, '<div>different version</div>')
+    assert not executor.Executor(audit=False).apply_creation(write).ok
+
+
+@pytest.mark.parametrize('point', ['before_receipt', 'after_external_save'])
+def test_graph_recovery_copy_receipt_crash_resumes_without_recreation(fake_note_store, monkeypatch, point):
+    from notron import graph, nodes, undo, recovery, requests, operations
+    nid = fake_note_store.add('Ideas', '<div>Ideas</div><div>later words</div>')
+    undo.save(nid, '<div>Ideas</div><div>saved original</div>')
+    snapshot = undo.peek(nid)
+    command = 'undo recovery copy ' + snapshot.snapshot_id
+    tagged = '@notron ' + command
+    fake_note_store.set_body(nid, fake_note_store.body(nid) + '<div>' + tagged + '</div>')
+    envelope = requests.create(command, request_id='recovery-copy-request', source='mention',
+        note_id=nid, source_text=tagged, source_revision=executor.revision(fake_note_store.body(nid)),
+        reply_to=('Ideas', 'Notes', 2))
+    created = []
+    def create(folder, body):
+        target = uuid4().hex
+        fake_note_store.rows[target] = [notes.Note(target, undo.copy_title('Ideas', snapshot), folder, 'observed'), body]
+        created.append(target)
+        return target
+    monkeypatch.setattr(notes, 'create_note', create)
+    monkeypatch.setattr(executor.Executor, '_log', lambda *args, **kwargs: None)
+    class Crash(BaseException):
+        pass
+    hit = []
+    def fail(name, oid):
+        if name == point and oid.endswith(':receipt') and not hit:
+            hit.append(oid)
+            raise Crash()
+    monkeypatch.setattr(recovery, 'boundary', fail)
+    class NoBrain:
+        def ask(self, **kwargs):
+            pytest.fail('undo must not infer')
+        ask_json = ask
+    with pytest.raises(Crash):
+        graph.run_request(envelope, brain=NoBrain())
+    assert len(created) == 1
+    assert created[0] not in library.load().homes
+    operations.current()  # reopen the durable ledger and checkpoint
+    result = graph.run_request(envelope, brain=NoBrain())
+    assert result.receipt_complete
+    assert len(created) == 1
+    assert fake_note_store.body(nid).count('created a separate recovery copy') == 1
+    assert 'later words' in fake_note_store.body(nid)
+    assert undo.peek(nid) == snapshot
+    assert created[0] in library.load().homes
+
+
+def test_dry_run_recovery_copy_keeps_snapshot_and_all_notes(fake_note_store, monkeypatch):
+    from notron import nodes, undo
+    from notron.state import State
+    nid = fake_note_store.add('Ideas', '<div>Ideas</div>')
+    undo.save(nid, '<div>saved original</div>')
+    snapshot = undo.peek(nid)
+    command = 'undo recovery copy ' + snapshot.snapshot_id
+    fake_note_store.set_body(nid, '<div>Ideas</div><div>@notron ' + command + '</div>')
+    state = nodes.undoer(State(request=command, source='@notron ' + command,
+        source_note_id=nid, reply_to=('Ideas', 'Notes', 1), intent='undo'))
+    monkeypatch.setattr(notes, 'create_note', lambda *args: pytest.fail('dry run created a note'))
+    before = fake_note_store.body(nid)
+    result = nodes.executor(state, dry_run=True)
+    assert result.receipt_complete
+    assert fake_note_store.body(nid) == before
+    assert undo.peek(nid) == snapshot
+    assert fake_note_store.writes == []
+
+
+def test_ask_undo_receipt_preserves_existing_snapshot(fake_note_store, monkeypatch):
+    from notron import nodes, undo
+    from notron.state import State
+    nid = fake_note_store.add(workspace.ASK, '<div>Ask</div><div>undo</div>', workspace.FOLDER)
+    lib = library.load()
+    lib.system_notes[workspace.ASK] = nid
+    library.save(lib)
+    undo.save(nid, '<div>earlier Ask</div>')
+    snapshot = undo.peek(nid)
+    monkeypatch.setattr(executor.Executor, '_log', lambda *args, **kwargs: None)
+    state = nodes.undoer(State(request='undo', source='undo', source_note_id=nid,
+        reply_to=(workspace.ASK, workspace.FOLDER, 1), intent='undo'))
+    result = nodes.executor(state)
+    assert result.receipt_complete
+    assert undo.peek(nid) == snapshot
+    assert "can't tell which one" in fake_note_store.body(nid)
+
+
+def test_policy_revoked_during_final_undo_snapshot_read_blocks_receipt(fake_note_store, monkeypatch):
+    from notron import nodes, undo
+    from notron.state import State
+    nid = fake_note_store.add('Ideas', '<div>Ideas</div><div>@notron undo</div>')
+    state = nodes.undoer(State(request='undo', source='@notron undo', source_note_id=nid,
+        reply_to=('Ideas', 'Notes', 1), intent='undo'))
+    original = undo.peek
+    reads = []
+    def revoke_on_final(target):
+        reads.append(target)
+        if len(reads) == 2:
+            lib = library.load()
+            lib.ignore.add(nid)
+            library.save(lib)
+        return original(target)
+    monkeypatch.setattr(undo, 'peek', revoke_on_final)
+    assert not executor.Executor(audit=False).apply_write(state.writes[0]).ok
+    assert fake_note_store.writes == []
