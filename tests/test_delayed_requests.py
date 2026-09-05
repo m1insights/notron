@@ -172,3 +172,85 @@ def test_each_week_is_recurring_not_one_supported_action():
         def ask_json(self,**kw):return {'kind':'reminder','title':'Call','when':'2026-09-09T10:00'}
     result=nodes.scheduler(State(request='Remind me each week to Call',intent='remind'),brain=Brain())
     assert not result.actions
+
+
+@pytest.mark.parametrize('expression', ['in two weeks', 'in a week', 'in an hour', 'in a few days', 'a week from now'])
+def test_worded_relative_request_requires_original_capture_before_scheduler(expression):
+    class Brain:
+        def ask_json(self, **kw):
+            pytest.fail('unknown capture must be clarified before inference')
+    request = envelope(text=f'Remind me {expression} to call Sam')
+    result = nodes.scheduler(State(request=request.text, envelope=request, intent='remind', resumed=True), brain=Brain())
+    assert not result.actions and 'original capture date is unknown' in result.answer
+
+
+@pytest.mark.parametrize('expression', ['in two weeks', 'in a week'])
+def test_resumed_prepared_worded_relative_request_cannot_create(expression, monkeypatch, monday_clock):
+    from dataclasses import asdict
+    from notron import requests, recovery, operations, reminders, executor
+    request = envelope(text=f'Remind me {expression} to call Sam')
+    requests.current().capture(request)
+    requests.current().claim(request.request_id)
+    action = Action('reminder', 'create', 'Call Sam', when='2026-09-21T10:00-04:00', target_id='inbox', timezone='America/New_York')
+    saved = []
+    monkeypatch.setattr(reminders, 'create', lambda *a, **kw: saved.append(kw) or 'unexpected-save')
+    with requests.execution(request):
+        recovery.put(request.request_id, action.operation_id, {'action': asdict(action)}, [])
+        result = executor.Executor(audit=False).do(action, request=request.text, resumed=True)
+    assert not result.ok and result.needs_confirmation
+    assert not saved
+    assert operations.current().get(action.operation_id).status == operations.S.CANCELLED
+
+
+@pytest.mark.parametrize('request_text,ends', [
+    ('Schedule a visit to 123 Main Street on September 9 at 10am', '2026-09-09T11:00Z'),
+    ('Schedule a visit September 9 from 10am to 11am', '2026-09-09T12:00Z'),
+    ('Schedule a visit September 9 from 10:00 until 11:30', '2026-09-09T11:00Z'),
+])
+def test_address_or_mismatched_temporal_end_cannot_authorize_duration(request_text, ends):
+    class Brain:
+        def ask_json(self, **kw):
+            return {'kind':'event', 'title':'Visit', 'when':'2026-09-09T10:00Z', 'ends':ends}
+    result = nodes.scheduler(State(request=request_text, intent='schedule'), brain=Brain())
+    assert not result.actions and ('duration' in result.answer or 'end' in result.answer)
+
+
+def test_resumed_address_without_duration_does_not_save_event(monkeypatch, monday_clock):
+    from dataclasses import asdict
+    from notron import requests, recovery, operations, calendar, executor
+    request = envelope(text='Schedule a visit to 123 Main Street on September 9 at 10am', captured_at=FRIDAY)
+    requests.current().capture(request)
+    requests.current().claim(request.request_id)
+    action = Action('event', 'create', 'Visit', when='2026-09-09T10:00+00:00', ends='2026-09-09T11:00+00:00', target_id='work', timezone='UTC')
+    saved = []
+    monkeypatch.setattr(calendar, 'overlaps', lambda *a, **kw: [])
+    monkeypatch.setattr(calendar, 'create', lambda *a, **kw: saved.append(kw) or 'unexpected-save')
+    with requests.execution(request):
+        recovery.put(request.request_id, action.operation_id, {'action':asdict(action)}, [])
+        result = executor.Executor(audit=False).do(action, request=request.text, resumed=True)
+    assert not result.ok and result.needs_confirmation and 'duration' in result.reason
+    assert not saved
+    assert operations.current().get(action.operation_id).status == operations.S.CANCELLED
+
+
+@pytest.mark.parametrize('text,start,end,zone', [
+    ('Schedule Call from 10am to 11am', '2026-09-09T10:00Z', '2026-09-09T11:00Z', 'UTC'),
+    ('Schedule Call from 14:00 until 15:30', '2026-09-09T14:00Z', '2026-09-09T15:30Z', 'UTC'),
+    ('Schedule Call ends at noon', '2026-09-09T10:00-04:00', '2026-09-09T12:00-04:00', 'America/New_York'),
+    ('Schedule Call ends at midnight', '2026-09-09T23:00Z', '2026-09-10T00:00Z', 'UTC'),
+    ('Schedule Call until 2026-09-09T11:00-04:00', '2026-09-09T14:00Z', '2026-09-09T15:00Z', 'UTC'),
+])
+def test_supported_end_evidence_is_validated_as_the_requested_instant(text, start, end, zone):
+    assert when.duration_explicit(text)
+    assert when.duration_error(text, start, end, zone) == ''
+
+
+@pytest.fixture
+def monday_clock(monkeypatch):
+    from notron import executor
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return MONDAY.astimezone(tz) if tz else MONDAY.replace(tzinfo=None)
+    monkeypatch.setattr(executor, 'datetime', Clock)
+    monkeypatch.setattr(guard, 'datetime', Clock)

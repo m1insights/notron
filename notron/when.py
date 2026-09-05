@@ -78,7 +78,14 @@ def resolve_time_context(envelope, now: datetime, resumed: bool = False) -> Time
     zone = ZoneInfo(envelope.timezone)
     reference = (envelope.captured_at or envelope.observed_at).astimezone(zone)
     current = now.astimezone(zone)
-    relative = bool(re.search(r"\b(today|tomorrow|tonight|yesterday|next|this|in \d+|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", envelope.text, re.I))
+    # Detection does not resolve these phrases: word/article quantities still
+    # depend on the unknown capture reference and must ask for an exact date.
+    relative = bool(re.search(
+        r"\b(today|tomorrow|tonight|yesterday|next|this|in\s+\d+|from now|later|soon|hence|"
+        r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b|"
+        r"\b(?:in|after|within)\s+(?:\w+[\s-]+){0,5}"
+        r"(?:seconds?|minutes?|hours?|days?|weeks?|fortnights?|months?|years?)\b",
+        envelope.text, re.I))
     uncertain = envelope.captured_at is None and relative
     return TimeContext(reference, current, envelope.timezone, uncertain,
                        "The original capture date is unknown. What exact date (YYYY-MM-DD) and time should I use?" if uncertain else "",
@@ -119,18 +126,57 @@ def relative_date_error(value: str | None, envelope) -> str:
     return ""
 
 
+_DURATION = re.compile(
+    r"\b(\d+(?:\.\d+)?|an?|one|two|three|half)\s*(hours?|hrs?|minutes?|mins?)\b", re.I)
+# A destination number is not an end time. Supported clock forms require a
+# colon or am/pm; a complete ISO timestamp and noon/midnight are also explicit.
+_END_TIME = re.compile(
+    r"\b(?:to|until|ends?(?:\s+at)?)\s+(?P<end>"
+    r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?|"
+    r"(?:[01]?\d|2[0-3]):[0-5]\d(?:\s*[ap]m)?|"
+    r"(?:1[0-2]|[1-9])\s*[ap]m|noon|midnight)(?![\w:])", re.I)
+
+
 def duration_explicit(text: str) -> bool:
     """Conservative evidence of a requested duration/end; never model permission."""
-    return bool(re.search(r"\b(?:for\s+)?(?:\d+(?:\.\d+)?|an?|one|two|three|half)\s*(?:hours?|hrs?|minutes?|mins?)\b|\b(?:to|until|ends?(?:\s+at)?)\s+(?:\d|noon|midnight)", text, re.I))
+    return bool(_DURATION.search(text) or _END_TIME.search(text))
 
 
 def duration_error(text: str, start: str, end: str, timezone_name: str) -> str:
-    match = re.search(r"\b(\d+(?:\.\d+)?|an?|one|two|three|half)\s*(hours?|hrs?|minutes?|mins?)\b", text, re.I)
-    if not match:
-        return ""
-    words = {'a':1, 'an':1, 'one':1, 'two':2, 'three':3, 'half':0.5}
-    number = words.get(match[1].lower())
-    amount = number if number is not None else float(match[1])
-    expected = amount * (3600 if match[2].lower().startswith(('h',)) else 60)
-    actual = resolve_local(end, timezone_name).timestamp() - resolve_local(start, timezone_name).timestamp()
-    return "The proposed event duration does not match your requested duration. Confirm exact start and end times." if actual != expected else ""
+    durations, ends = list(_DURATION.finditer(text)), list(_END_TIME.finditer(text))
+    if len(durations) > 1 or len(ends) > 1:
+        return "I found multiple duration or end-time references. Confirm one exact start and end."
+    if durations:
+        match = durations[0]
+        words = {'a':1, 'an':1, 'one':1, 'two':2, 'three':3, 'half':0.5}
+        number = words.get(match[1].lower())
+        amount = number if number is not None else float(match[1])
+        expected = amount * (3600 if match[2].lower().startswith('h') else 60)
+        actual = resolve_local(end, timezone_name).timestamp() - resolve_local(start, timezone_name).timestamp()
+        if actual != expected:
+            return "The proposed event duration does not match your requested duration. Confirm exact start and end times."
+    if ends:
+        value = ends[0]['end']
+        if parse(value) is not None:
+            expected_end = resolve_local(value, timezone_name)
+        else:
+            clock = value.lower().replace(' ', '')
+            if clock in ('noon', 'midnight'):
+                hour, minute = (12 if clock == 'noon' else 0), 0
+            else:
+                period = clock[-2:] if clock.endswith(('am', 'pm')) else ''
+                digits = clock[:-2] if period else clock
+                hour, _, minute = digits.partition(':')
+                hour, minute = int(hour), int(minute or 0)
+                if period:
+                    if not 1 <= hour <= 12:
+                        return "Confirm an unambiguous end time."
+                    hour = hour % 12 + (12 if period == 'pm' else 0)
+            local_start = resolve_local(start, timezone_name).astimezone(ZoneInfo(timezone_name))
+            wall_end = datetime(local_start.year, local_start.month, local_start.day, hour, minute)
+            if wall_end <= local_start.replace(tzinfo=None):
+                wall_end += timedelta(days=1)
+            expected_end = resolve_local(wall_end.isoformat(), timezone_name)
+        if expected_end.timestamp() != resolve_local(end, timezone_name).timestamp():
+            return "The proposed event end does not match your requested end time. Confirm exact start and end times."
+    return ""
