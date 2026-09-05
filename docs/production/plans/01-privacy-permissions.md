@@ -18,7 +18,7 @@
 
 ## Task 1 — Explicit policy state and zero-home semantics
 
-**Status:** Complete, 2026-09-04. Implementation commit `2b3914d`; [verification and handoff](../handoffs/2026-09-04-P01-task-1.md). Required boundary integrations also touch the executor, watcher, graph, setup, CLI, Brain/search readiness gates, system-note readers, and Mac save transport; no Task 2 passage preparation is implemented.
+**Status:** Complete, 2026-09-04. Implementation commit `2b3914d`; [verification and handoff](../handoffs/2026-09-04-P01-task-1.md). Required boundary integrations also touch the executor, watcher, graph, setup, CLI, Brain/search readiness gates, system-note readers, and Mac save transport; Task 1 itself did not implement Task 2 passage preparation.
 
 **Files:** Modify `notron/library.py`, `notron/filer.py`, `notron/index.py`, `notron/mentions.py`, `notron/rewrite.py`, `tests/test_library.py`, `tests/test_filer.py`; Create `notron/policy.py`, `notron/persistence.py`, `tests/test_policy.py`, `tests/test_persistence.py`.
 **Consumes:** Existing Library JSON with homes/ignore/decided/chosen_at.
@@ -55,12 +55,14 @@ def test_corrupt_policy_is_not_a_fresh_install(tmp_path):
 
 ## Task 2 — All model/search inputs carry provenance
 
+**Status:** Complete, 2026-09-04. Implementation commit `e37bd3d`; [caller map](../evidence/P01-outbound-map.md) and [verification/handoff](../handoffs/2026-09-04-P01-task-2.md). Final full suite: 453 passed. No Task 3 work started.
+
 **Files:** Create `notron/outbound.py`, `tests/test_outbound.py`; Modify `notron/brain.py`, `notron/nodes.py`, `notron/index.py`, `notron/retrieval.py`, `notron/research.py`, `notron/filer.py`, `notron/reflect.py`, `notron/care.py`, `notron/watch.py`, `tests/test_privacy.py`, `tests/conftest.py`.
 **Consumes:** `Passage`, `Purpose`, `PolicyError`, validated policy from Task 1.
 **Produces:** `prepare_outbound(purpose, passages)` as specified in the design; Brain accepts provenance-tagged user passages and composes text only after preparation. `research.search` prepares the query before HTTP.
 
-- [ ] Reproduce the observed leak with a mocked embedding transport and a synthetic `password: synthetic-example-only` in an ordinary approved note. Assert the secret is absent from both transport arguments and saved cache, not merely absent from the final answer.
-- [ ] Add this boundary test, with policy setup and network adapter fixtures shared by `tests/test_outbound.py`:
+- [x] Reproduce the observed leak with a mocked embedding transport and a synthetic `password: synthetic-example-only` in an ordinary approved note. Assert the secret is absent from both transport arguments and saved cache, not merely absent from the final answer.
+- [x] Add this boundary test, with policy setup and network adapter fixtures shared by `tests/test_outbound.py`:
 
 ```python
 from notron.outbound import Passage, prepare_outbound
@@ -71,11 +73,11 @@ def test_direct_requests_are_filtered_too():
     assert 'synthetic-example-only' not in '\n'.join(safe)
 ```
 
-- [ ] Run `.venv/bin/python -m pytest tests/test_outbound.py tests/test_privacy.py -q` and inspect the failing transport-level assertions.
-- [ ] Change Brain's public API to consume tagged passages; `_call` remains the only inference transport. Separate static system instructions from user-derived About Me, lessons, memory, history and agenda. Convert every caller; no raw-string escape hatch for production callers. Apply the same preparation to direct routing, organizer, filer candidate titles/glimpses, reflection, search and embeddings.
-- [ ] Reject note-origin passages without IDs and ignored IDs even if the caller supplies their text. Strip unsafe data before formatting; reject unknown origin/purpose. Keep selection locally authoritative in managed Mac mode; the server cannot infer a full local policy from raw prompts.
-- [ ] Add malicious retrieved-text fixtures requesting a secret, new tool or permission change. Assert allowed operation types and policy are unchanged, independently of whether the model obeys the text.
-- [ ] Use `rg -n 'brain\.(ask|ask_json|embed)|research.search|chat.completions|embeddings.create' notron` to enumerate and account for every caller in `docs/production/evidence/P01-outbound-map.md`. Run all privacy/research/graph tests, then the full Python suite. Commit.
+- [x] Run `.venv/bin/python -m pytest tests/test_outbound.py tests/test_privacy.py -q` and inspect the failing transport-level assertions.
+- [x] Change Brain's public API to consume tagged passages; `_call` remains the only inference transport. Separate static system instructions from user-derived About Me, lessons, memory, history and agenda. Convert every caller; no raw-string escape hatch for production callers. Apply the same preparation to direct routing, organizer, filer candidate titles/glimpses, reflection, search and embeddings.
+- [x] Reject note-origin passages without IDs and ignored IDs even if the caller supplies their text. Strip unsafe data before formatting; reject unknown origin/purpose. Keep selection locally authoritative in managed Mac mode; the server cannot infer a full local policy from raw prompts.
+- [x] Add malicious retrieved-text fixtures requesting a secret, new tool or permission change. Assert allowed operation types and policy are unchanged, independently of whether the model obeys the text.
+- [x] Use `rg -n 'brain\.(ask|ask_json|embed)|research.search|chat.completions|embeddings.create' notron` to enumerate and account for every caller in `docs/production/evidence/P01-outbound-map.md`. Run all privacy/research/graph tests, then the full Python suite. Commit.
 
 ## Task 3 — Sensitive cache migration and retention
 
