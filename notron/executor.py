@@ -114,6 +114,10 @@ class Executor:
                       mode='append', source_checks=list(source_checks), content_sources=list(content_sources))
         if operation_id:
             write.operation_id = operation_id
+        return self.apply_creation(write)
+
+    def apply_creation(self, write: Write) -> WriteResult:
+        """Apply an exact write prepared by the explicit creation approval path."""
         return self._execute(write, creation=True)
 
     def _permitted(self, note, mode, rewrite_allowed=False):
@@ -225,13 +229,13 @@ class Executor:
                 if prior.status == operations.S.APPLYING or (prior.status == operations.S.NEEDS_REVIEW and
                                                              prior.failure_code == 'unknown_outcome'):
                     evidence = recovery.get(write.operation_id + ':evidence')
-                    if creation and evidence:
-                        # Local verification of this explicitly approved creation:
-                        # title alone never establishes identity; the full body hash
-                        # includes an opaque reference unique to this operation.
-                        matches = [n for n in notes.list_notes(folder) if n.title == write.title
-                                   and revision(notes.read_body(n.id)) == evidence['revision']]
-                        note = matches[0] if len(matches) == 1 else None
+                    if creation:
+                        # Approval authorizes verification of a durably known
+                        # created ID, not reading arbitrary same-title bodies.
+                        # Without that ID Apple metadata cannot establish ownership.
+                        note = notes.get_note(prior.external_id) if prior.external_id else None
+                        if note and (note.folder != folder or note.title != write.title):
+                            note = None
                     if note and evidence and revision(notes.read_body(note.id)) == evidence['revision']:
                         store.transition(write.operation_id, prior.status, operations.S.APPLIED,
                                          external_id=note.id, observed_revision=evidence['revision'])

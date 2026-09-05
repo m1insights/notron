@@ -663,7 +663,27 @@ def _prepare_file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
     items = _fold(items, parts_of)
 
     from dataclasses import asdict
-    return {'items': [it.as_dict() for it in items], 'state': state,
+    from hashlib import sha256
+    from . import requests
+    envelope = requests.active_request()
+    by_master = {}
+    for i, (kind, title) in sorted(verdicts.items()):
+        if kind == 'note':
+            by_master.setdefault(title, []).append(i)
+    copies = {}
+    for title, indexes in by_master.items():
+        group = [items[i] for i in indexes]
+        shape = _shape_for(title, said_shapes, state)
+        checks = [(it.note_id, it.expected_revision, it.anchor, it.near)
+                  for lead in group for it in (lead, *lead.parts)]
+        target = targets[title]
+        if envelope:
+            target.operation_id = envelope.request_id + ':copy:' + sha256(
+                (target.note_id or target.operation_id).encode()).hexdigest()[:16]
+        copies[title] = asdict(replace(target, source_checks=checks,
+            content_sources=content_sources, rebase_append=shape != layout.LOG,
+            markdown=_entry_markdown(group, shape=shape, existing=bodies.get(title, ''))))
+    return {'version': 2, 'copies': copies, 'items': [it.as_dict() for it in items], 'state': state,
             'targets': {title: asdict(w) for title, w in targets.items()}, 'bodies': bodies,
             'candidates': [asdict(m) for m in candidates], 'content_sources': content_sources,
             'verdicts': {str(i): v for i, v in verdicts.items()}, 'said_shapes': said_shapes,
@@ -687,14 +707,13 @@ def _file(ex, brain, items, state, out, *, extra_marks=None, on_step=None):
         state.update(plan['state'])
         out.left = [(Item.from_dict(it), reason) for it, reason in plan['left']]
     items = [Item.from_dict(it) for it in plan['items']]
-    targets = {title: Write(**w) for title, w in plan['targets'].items()}
-    if plan_id:
-        for i, w in enumerate(targets.values()):
-            w.operation_id = envelope.request_id + ':copy:' + str(i)
-    bodies = plan['bodies']
+    if plan.get('version') != 2 or 'copies' not in plan:
+        out.results.append('✗ saved filing plan lacks exact writes; review required')
+        return
+    copies = {title: Write(**w) for title, w in plan['copies'].items()}
     known = {m['title']: Master(**m) for m in plan['candidates']}
     content_sources = plan['content_sources']
-    verdicts = {int(i): v for i, v in plan['verdicts'].items()}
+    verdicts = {int(i): v for i, v in sorted(plan['verdicts'].items(), key=lambda pair: int(pair[0]))}
     said_shapes = plan['said_shapes']
     extra_marks = {tuple(k): v for k, v in plan['extra_marks']}
     judged, proposals = state['judged'], state['proposals']
@@ -705,7 +724,7 @@ def _file(ex, brain, items, state, out, *, extra_marks=None, on_step=None):
         dump_target.operation_id = envelope.request_id + ':proposal'
     # 2. Copy into existing notes, then tick — only what actually landed.
     by_master: dict[str, list[int]] = {}
-    for i, (kind, title) in verdicts.items():
+    for i, (kind, title) in sorted(verdicts.items()):
         if kind == "note":
             by_master.setdefault(title, []).append(i)
     marks: dict[tuple, list[tuple[str, int, str]]] = {
@@ -713,20 +732,16 @@ def _file(ex, brain, items, state, out, *, extra_marks=None, on_step=None):
     for title, idxs in by_master.items():
         master = known[title]
         group = [items[i] for i in idxs]
-        shape = _shape_for(title, said_shapes, state)
-        checks = [(it.note_id, it.expected_revision, it.anchor, it.near)
-                  for lead in group for it in (lead, *lead.parts)]
+        write = copies[title]
         from . import operations
         from .executor import revision
-        prior = operations.current().get(targets[title].operation_id) if not ex.dry_run else None
+        prior = operations.current().get(write.operation_id) if not ex.dry_run else None
         if prior and prior.status in (operations.S.APPLIED, operations.S.RECEIPTED) and (
                 not notes.get_note(master.note_id) or
                 revision(notes.read_body(master.note_id)) != prior.observed_revision):
             out.results.append('✗ filing copy identity changed; review required')
             return
-        r = ex.apply_write(replace(targets[title], source_checks=checks, content_sources=content_sources,
-                                  rebase_append=shape != layout.LOG, markdown=
-            _entry_markdown(group, shape=shape, existing=bodies.get(title, ""))))
+        r = ex.apply_write(write)
         out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
         if not r.ok:
             for it in group:
@@ -740,7 +755,7 @@ def _file(ex, brain, items, state, out, *, extra_marks=None, on_step=None):
     # 3. Propose new notes — once per title. Later lines for the same title
     #    join the pending proposal quietly rather than asking again.
     new_here: dict[str, list[Item]] = {}
-    for i, (kind, title) in verdicts.items():
+    for i, (kind, title) in sorted(verdicts.items()):
         if kind != "new":
             continue
         canonical = pending_titles.get(title.casefold(), title)
@@ -801,12 +816,41 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
         state.clear()
         state.update(plan['state'])
     items = _bind_items(items)
-    if plan_id and not plan and not ex.dry_run and state['proposals']:
-        sources = {it.note_id for lead in items for it in (lead, *lead.parts) if it.note_id}
-        for proposal in state['proposals'].values():
-            sources.update(proposal.get('content_sources', []))
-        recovery.put(envelope.request_id, plan_id,
-                     {'items': [it.as_dict() for it in items], 'state': state}, sources)
+    from dataclasses import asdict
+    from .state import Write
+    if not plan:
+        creations = {}
+        for approval in items:
+            said = _said(approval.text)
+            if said not in YES and not said.startswith('yes '):
+                continue
+            named = said[4:].strip() if said.startswith('yes ') else ''
+            chosen = [title for title in state['proposals']
+                      if not named or title.casefold() in named or named in title.casefold()]
+            for title in sorted(chosen or state['proposals']):
+                record = state['proposals'][title]
+                if title in creations or 'content_sources' not in record:
+                    continue
+                waiting = [Item.from_dict(d) for d in record.get('items', [])]
+                shape = _shape_for(title, {}, state)
+                checks = [(it.note_id, it.expected_revision, it.anchor, it.near)
+                          for lead in (*waiting, approval) for it in (lead, *lead.parts)]
+                write = Write(title=title, folder=FILING_FOLDER, mode='append',
+                              markdown=_entry_markdown(waiting, shape=shape),
+                              source_checks=checks, content_sources=record['content_sources'])
+                if envelope:
+                    write.operation_id = envelope.request_id + ':create_copy:' + sha256(title.encode()).hexdigest()[:16]
+                creations[title] = asdict(write)
+        plan = {'version': 2, 'creations': creations,
+                'items': [it.as_dict() for it in items], 'state': state}
+        if plan_id and not ex.dry_run and state['proposals']:
+            sources = {it.note_id for lead in items for it in (lead, *lead.parts) if it.note_id}
+            for proposal in state['proposals'].values():
+                sources.update(proposal.get('content_sources', []))
+            recovery.put(envelope.request_id, plan_id, plan, sources)
+    if plan.get('version') != 2 or 'creations' not in plan:
+        out.results.append('✗ saved approval plan lacks exact writes; review required')
+        return []
     new_homes = []
     proposals: dict = state["proposals"]
     judged: dict = state["judged"]
@@ -829,8 +873,7 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
             out.left.append((it, "nothing was waiting on a yes"))
             continue
         chosen = [t for t in proposals if not named or t.casefold() in named or named in t.casefold()]
-        if not chosen:
-            chosen = list(proposals)
+        chosen = sorted(chosen or proposals)
         receipts: list[str] = []
         receipt_sources: set[str] = set()
         for title in chosen:
@@ -853,14 +896,7 @@ def _approve(ex, items: list[Item], state: dict, out: Outcome, *, on_step=None) 
                 receipts.append(f"left “{title}” alone")
                 continue
             say(f"making “{title}” with {len(waiting)} line(s)")
-            shape = _shape_for(title, {}, state)
-            checks = [(source.note_id, source.expected_revision, source.anchor, source.near)
-                      for lead in (*waiting, it) for source in (lead, *lead.parts)]
-            r = ex.create_approved(title, _entry_markdown(waiting, shape=shape),
-                                   folder=FILING_FOLDER, source_checks=checks,
-                                   content_sources=record["content_sources"],
-                                   operation_id=(envelope.request_id + ':create_copy:' +
-                                       sha256((title + it.digest()).encode()).hexdigest()[:16]) if envelope else None)
+            r = ex.apply_creation(Write(**plan['creations'][title]))
             out.results.append(f"{'✓' if r.ok else '✗'} {title} — {r.reason}")
             if not r.ok:
                 proposals[title] = record            # keep the question open

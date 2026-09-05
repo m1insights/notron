@@ -1,6 +1,6 @@
 # P02 Task 3 implementation report
 
-Status: implemented; ready for independent review. Worktree `production/p01-task1`,
+Status: implementation plus review-round-1 corrections complete; ready for re-review. Worktree `production/p01-task1`,
 base `8426142`. No roadmap status changed. Python/SQLite/AES-GCM with existing
 AppleScript/JXA/EventKit adapters; no dependency, provider or model changes.
 No real Notes, Calendar, Reminders, network, Keychain, listener or native app ran.
@@ -33,14 +33,17 @@ No real Notes, Calendar, Reminders, network, Keychain, listener or native app ra
   Interrupted writes reconcile only an exact observed body hash, never text/title
   similarity. An inconclusive read records a review decision; later matching text
   does not automatically clear it. Verified/APPLIED writes never repeat the write.
-- Filing persists classification, captured targets/layout, grouped items and
-  contributors before copying. Stable `copy` and `source_receipt` identities allow
+- Filing version-2 plans persist classification and fully rendered, bound copy
+  Writes (operation IDs, markdown/date/layout, target revisions and source checks),
+  grouped items and contributors before copying. Stable `copy` and `source_receipt` identities allow
   replaying known suboperations. Destination copy identity must still be verifiable
   before source marking; a changed destination pauses for review. Original Brain
   Dump text remains, with only the existing validated tick/receipt additions.
 - Explicit approved creation has its own persisted approval plan and `create_copy`
-  identity. The created body contains an opaque operation reference and is matched
-  using the complete expected body hash, not its title alone. New-home registration
+  identity and its exact rendered creation Write. The created body contains an
+  opaque operation reference. A durably known created ID can be verified using its
+  complete expected body hash. If the returned ID was lost, recovery pauses for
+  review without scanning any same-title candidate bodies. New-home registration
   is deferred until both the copied source and approval line receipts are verified.
   Those receipts derive their titles from persisted approved proposal provenance;
   they do not read the newly created note as model/context input. Registration still
@@ -120,3 +123,50 @@ git diff --check
   Task 6, and undo snapshot lifecycle remains Task 4. Graph serialization uses
   dataclass fields so Task 4 can extend Write without a second bespoke format.
 - Only local commits are intended. No merge, push, deployment or publication.
+
+
+## Review round 1 correction (supersedes original recovery claims where noted)
+
+The independent review identified three reproduced defects in `fb8db5e`; all three
+were accepted and corrected. This section supersedes the original verification
+count and any implication that lost creation IDs can always be reconciled.
+
+- **R1:** JSON key sorting changed destination traversal order after reopen, while
+  operation IDs had been assigned afterward by positional index. Exact copy Writes
+  and destination-bound operation IDs now persist before the first effect. Recovery
+  consumes them directly. Verdict indices and multi-proposal receipt order are also
+  canonical, so serialization cannot change suboperation construction order.
+- **R2:** The original creation-reconciliation body scan crossed P01's read boundary.
+  It is removed. Only a durably recorded created ID can receive narrow verification;
+  a lost returned ID requires NEEDS_REVIEW without title-candidate body reads or a
+  second creation. Both unselected and explicitly ignored same-title regressions
+  confirm no denied read. Original lines remain. Existing creation crash tests now
+  expect conservative review after save / before returned-ID persistence, and
+  successful repair where the ID was already durable.
+- **R3:** Copy and approved-creation plans now retain their complete rendered Writes
+  before effects, including the original date, layout, source checks and operation
+  ID. Neither path calls `_entry_markdown` during replay. Next-day tests cover
+  retries before APPLYING and after verified copying / before source receipts.
+  Old plan payloads without the version-2 exact-write bindings pause for review;
+  there is no migration that guesses their identities or rerenders their content.
+
+Six core review regressions were first run against `fb8db5e`: **6 failed**, exposing
+both R1 variants, R2 unselected/ignored reads, and R3 existing/created journal copies.
+All six passed after correction. Two additional pre-APPLYING midnight variants
+extend coverage. No real Apple apps, user data, provider or network calls occurred.
+
+Verification after corrections:
+
+```sh
+/Users/m1labs/Dev/apps/juno/.venv/bin/python -m pytest tests/test_action_recovery.py tests/test_filing_recovery.py tests/test_filer.py tests/test_executor.py tests/test_write_races.py -o addopts='' -q
+# 207 passed in 12.23s; exit 0
+/Users/m1labs/Dev/apps/juno/.venv/bin/python -m pytest tests -o addopts='' -q
+# 847 passed in 15.45s; exit 0 (+8 this review round, +49 over baseline)
+git diff --check
+# exit 0
+```
+
+Remaining limits are conservative review for lost creation IDs and other uncertain
+Apple outcomes, the existing final non-atomic write race, P01 post-registration
+purging, and deferred native validation. No known accepted review finding is left
+unaddressed. Root owns subsequent independent review and combined handoff/roadmap.
