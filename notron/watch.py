@@ -123,6 +123,8 @@ class Watcher:
 
     def check_ask(self) -> None:
         policy.require_ready()
+        from . import retention
+        retention.require_ready()
         # A note's id is stable, so look it up once rather than listing the
         # folder every few seconds — each listing is a request Notes must serve.
         if self._ask_id is None:
@@ -162,6 +164,22 @@ class Watcher:
             return              # one at a time; the note has moved underneath us
 
     def sweep_mentions(self) -> None:
+        from . import retention
+        live = retention.reconcile()
+        if self._ask_id not in live:
+            self._ask_id = None
+        if self._dump_id not in live:
+            self._dump_id = None
+        def retain(key):
+            if key.startswith('tag:'): return key[4:] in live
+            if key.startswith('ask:'): return self._ask_id is not None
+            if key == 'dump': return self._dump_id is not None
+            return False
+        self._pending = {key: value for key, value in self._pending.items() if retain(key)}
+        self._failures = {key: value for key, value in self._failures.items() if retain(key)}
+        if hasattr(self.scanner, 'seen'):
+            self.scanner.seen = {nid: stamp for nid, stamp in self.scanner.seen.items() if nid in live}
+            self.scanner.pending.intersection_update(live)
         found = self.scanner.scan()
         if found:
             self._say(f"  {len(found)} note(s) mention me")
@@ -192,6 +210,8 @@ class Watcher:
         never wakes the model.
         """
         policy.require_ready()
+        from . import retention
+        retention.require_ready()
         if self._dump_id is None:
             note = notes.find_note(workspace.FOLDER, workspace.DUMP)
             if not note:
@@ -225,6 +245,8 @@ class Watcher:
     # ------------------------------------------------------------------- loop
 
     def run_forever(self) -> None:
+        from . import retention
+        retention.require_ready()
         # Notes may have been idle for hours. Waking it is slow exactly once.
         try:
             took = notes.warm_up()
@@ -288,8 +310,8 @@ def plist(python: str, project: str) -> str:
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>{project}/.notron/listen.log</string>
-  <key>StandardErrorPath</key><string>{project}/.notron/listen.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
 </dict>
 </plist>
 """

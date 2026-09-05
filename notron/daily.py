@@ -8,12 +8,18 @@ based on the life you actually have this morning.
 
 from __future__ import annotations
 
+from .credentials import CredentialUnavailable
+from .securestore import StorageError
+from .policy import PolicyError
+
 from datetime import datetime
 
 from . import care, graph, index, notes, reflect, workspace
 
 
 def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
+    from . import retention
+    retention.reconcile()
     def say(msg: str) -> None:
         if on_step:
             on_step(msg)
@@ -27,6 +33,8 @@ def morning(brain, *, dry_run: bool = False, on_step=None) -> dict:
     #    to read per request.
     try:
         say(f"Notes ready in {notes.warm_up():.1f}s")
+    except (CredentialUnavailable, StorageError, PolicyError):
+        raise
     except Exception as e:
         say(f"Notes did not answer ({type(e).__name__}) — run `notron permissions`")
 
@@ -79,8 +87,8 @@ def plist(python: str, project: str, hour: int, minute: int) -> str:
     <key>Hour</key><integer>{hour}</integer>
     <key>Minute</key><integer>{minute}</integer>
   </dict>
-  <key>StandardOutPath</key><string>{project}/.notron/morning.log</string>
-  <key>StandardErrorPath</key><string>{project}/.notron/morning.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
   <key>RunAtLoad</key><false/>
 </dict>
 </plist>

@@ -21,7 +21,8 @@ from dataclasses import dataclass, field
 
 from . import conversation, notes, workspace, policy
 
-STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "seen.json"
+from .paths import DATA_DIR
+STATE = DATA_DIR / "seen.json"
 
 
 @dataclass
@@ -72,7 +73,10 @@ class Scanner:
     def _save(self) -> None:
         try:
             STATE.parent.mkdir(parents=True, exist_ok=True)
-            STATE.write_text(json.dumps({"seen": self.seen, "pending": sorted(self.pending)}))
+            from .persistence import atomic_write_json
+            from .securestore import private_directory
+            private_directory(STATE.parent)
+            atomic_write_json(STATE, {"seen": self.seen, "pending": sorted(self.pending)})
         except OSError:
             pass
 

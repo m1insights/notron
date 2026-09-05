@@ -97,6 +97,8 @@ class Executor:
                marks: list[tuple[str, int, str]] | None = None,
                rewrite_allowed: bool = False, approved_creation: bool = False,
                expected_note_id: str | None = None) -> WriteResult:
+        from . import retention
+        retention.require_ready()
         note = notes.find_note(folder, title)
         def permitted():
             return self._permitted(note, folder, title, mode, rewrite_allowed,
@@ -192,6 +194,8 @@ class Executor:
         """Apply one thing outside Notes. Still no model anywhere in this path."""
         if policy.current().status != 'ready':
             return WriteResult(False, 'note policy not ready; actions paused')
+        from . import retention
+        retention.require_ready()
         verdict = guard.check_action(action, about=about, request=request)
         if not verdict:
             self._log(f"**BLOCKED** {action.op} {action.kind} *{action.title}* — {verdict.reason}")

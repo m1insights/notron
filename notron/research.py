@@ -39,7 +39,9 @@ class Finding:
 
 
 def available() -> bool:
-    return bool(os.environ.get("TAVILY_API_KEY", "").strip())
+    from . import credentials, retention
+    retention.require_ready()
+    return credentials.get(credentials.SEARCH_KEY) is not None
 
 
 def check_url(url: str, *, timeout: int = 5) -> bool:
@@ -66,9 +68,12 @@ def check_url(url: str, *, timeout: int = 5) -> bool:
 def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
     """Return Tavily's own summary answer plus the sources behind it."""
     query = "\n".join(prepare_outbound("search", passages))
-    key = os.environ.get("TAVILY_API_KEY", "").strip()
+    from . import credentials, retention
+    retention.require_ready()
+    secret = credentials.get(credentials.SEARCH_KEY)
+    key = secret.decode("utf-8") if secret else ""
     if not key:
-        raise NoSearchKey("TAVILY_API_KEY is not set")
+        raise NoSearchKey("Search credential is not configured")
 
     payload = json.dumps({
         "api_key": key,

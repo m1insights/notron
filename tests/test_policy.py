@@ -207,7 +207,8 @@ def test_care_never_reads_unregistered_system_note(tmp_path, monkeypatch):
     monkeypatch.setattr(permissions, 'check', lambda: [])
     monkeypatch.setattr(care, '_usage', lambda *a, **kw: dict(calls=0, **{'in': 0, 'out': 0}))
     monkeypatch.setattr(index, 'exists', lambda: False)
-    care.check()
+    with pytest.raises(policy.PolicyError):
+        care.check()
 
 
 @pytest.mark.parametrize('raw', [[], {'version': 99, 'allow': ['n1']},

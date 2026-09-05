@@ -16,6 +16,18 @@ it. No deadline pressure beyond the hackathon date above — prefer the correct
 long-term design over the fastest thing to ship, and it's fine to land a feature
 in stages (e.g. safe-default now, riskier opt-in once its safety net exists).
 
+## Secure runtime gate (P01 Task 3)
+
+Protected commands now require injected Keychain credentials and AES-GCM storage.
+The signed bridge/startup integration is pending P06, so default startup pauses;
+`.env` credentials and plaintext cache fallback are no longer supported. Sensitive
+state and mood live in `~/Library/Application Support/com.m1labs.notron`, not the
+old repository cache. Background stdout/stderr are discarded; fixed local diagnostic
+counters retain seven days. Do not use historical `.notron/listen.log` instructions
+below for new builds. Legacy migration is an explicit offline operation; originals
+and encrypted backups remain until separate acceptance. See
+`docs/production/evidence/P01-secure-storage.md` and the Task 3 shared contract.
+
 ## Design
 
 Before building or changing ANY UI in the `mac/` companion app, read `docs/design/DESIGN.md`

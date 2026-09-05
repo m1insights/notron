@@ -92,6 +92,8 @@ def save(lib: Library, *, reset: bool = False) -> None:
     lib.chosen_at = lib.chosen_at or datetime.now().isoformat(timespec='minutes')
     policy.save_policy(STATE, lib.payload(), reset=reset)
     lib.status = 'ready'
+    from . import retention
+    retention.apply_policy()
 
 
 def user_notes(lib: Library | None = None) -> list[notes.Note]:

@@ -30,7 +30,8 @@ UNINDEXED_MAX = 20
 # One glance, no need to open Notes: the menu bar app reads this file to show her
 # mood, and the care note leads with the same line. Worst signal wins — a single
 # "needs you" outweighs five that are fine, because that's the one that costs you.
-MOOD_FILE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "mood.json"
+from .paths import DATA_DIR
+MOOD_FILE = DATA_DIR / "mood.json"
 _SEVERITY_RANK = ("needs you", "nudge", "ok")
 MOOD = {
     "needs you": ("🤖🧰", "needs your help"),
@@ -71,6 +72,8 @@ def _usage(days: int = 7) -> dict:
 
 
 def check() -> list[Signal]:
+    from . import retention
+    retention.reconcile()
     out: list[Signal] = []
 
     # 1. The instruction note. She re-reads it on every run, so its size is a tax.
@@ -237,10 +240,13 @@ def _write_mood(severity: str, emoji: str, label: str) -> None:
     a failed write here should never break the actual care note."""
     try:
         MOOD_FILE.parent.mkdir(parents=True, exist_ok=True)
-        MOOD_FILE.write_text(json.dumps({
+        from .persistence import atomic_write_json
+        from .securestore import private_directory
+        private_directory(MOOD_FILE.parent)
+        atomic_write_json(MOOD_FILE, {
             "severity": severity, "emoji": emoji, "label": label,
             "at": datetime.now().isoformat(),
-        }))
+        })
     except OSError:
         pass
 

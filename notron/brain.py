@@ -10,18 +10,19 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Sequence
 
 from .outbound import Passage, Purpose, prepare_outbound
 
-USAGE_LOG = Path(__file__).resolve().parents[1] / ".notron" / "usage.json"
+from .paths import DATA_DIR
+USAGE_LOG = DATA_DIR / "usage.json"
 
 BASE_URL = os.environ.get("NEBIUS_BASE_URL", "https://api.tokenfactory.nebius.com/v1/")
 
-# Tier -> model id. Override any of these in .env, e.g. NOTRON_MODEL_FAST=...
+# Tier -> model id. Non-secret configuration overrides remain environment settings.
 DEFAULT_MODELS = {
     "fast": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B",
     "smart": "nvidia/nemotron-3-super-120b-a12b",
@@ -36,37 +37,20 @@ EMBED_MODEL = "Qwen/Qwen3-Embedding-8B"
 REASONING_HEADROOM = 1200
 
 
-def _load_env() -> None:
-    """Read a .env from the repo root without adding a dependency."""
-    env = Path(__file__).resolve().parents[1] / ".env"
-    if not env.exists():
-        return
-    for line in env.read_text().splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
 class BrainUnavailable(RuntimeError):
-    """No Nebius key configured. NOTRON's hands still work; her head does not."""
+    """Compatibility error for unavailable inference configuration."""
 
 
 @dataclass
 class Brain:
-    api_key: str
+    api_key: str = field(repr=False)
     base_url: str = BASE_URL
 
     @classmethod
-    def from_env(cls) -> "Brain":
-        _load_env()
-        key = os.environ.get("NEBIUS_API_KEY", "").strip()
-        if not key:
-            raise BrainUnavailable(
-                "NEBIUS_API_KEY is not set. Sign up at https://tokenfactory.nebius.com, "
-                "create a key, then put it in apps/notron/.env"
-            )
+    def from_credentials(cls) -> "Brain":
+        from . import credentials, retention
+        retention.require_ready()
+        key = credentials.require(credentials.NEBIUS_KEY).decode('utf-8')
         return cls(api_key=key, base_url=os.environ.get("NEBIUS_BASE_URL", BASE_URL))
 
     def __post_init__(self) -> None:
@@ -80,26 +64,39 @@ class Brain:
             return
         try:
             USAGE_LOG.parent.mkdir(parents=True, exist_ok=True)
-            data = json.loads(USAGE_LOG.read_text()) if USAGE_LOG.exists() else {}
+            from .diagnostics import prune_usage
+            data = prune_usage(USAGE_LOG)
             day = data.setdefault(str(date.today()), {})
             row = day.setdefault(tier, {"calls": 0, "in": 0, "out": 0})
             row["calls"] += 1
             row["in"] += getattr(usage, "prompt_tokens", 0) or 0
             row["out"] += getattr(usage, "completion_tokens", 0) or 0
-            USAGE_LOG.write_text(json.dumps(data))
+            from .persistence import atomic_write_json
+            from .securestore import private_directory
+            private_directory(USAGE_LOG.parent)
+            atomic_write_json(USAGE_LOG, data)
         except OSError:
             pass
 
     def model_for(self, tier: str) -> str:
         return os.environ.get(f"NOTRON_MODEL_{tier.upper()}", DEFAULT_MODELS[tier])
 
+    def _check_credentials(self) -> None:
+        from . import credentials, retention
+        retention.require_ready()
+        key = credentials.require(credentials.NEBIUS_KEY).decode('utf-8')
+        # Check on each transport, including retries and embedding batches.
+        self._client.api_key = key
+
     def available_models(self) -> list[str]:
         """Ask the account what it can actually run — model ids drift."""
+        self._check_credentials()
         return sorted(m.id for m in self._client.models.list().data)
 
     def _call(self, tier: str, system: str, user: Sequence[Passage], budget: int, json_mode: bool,
               temperature: float, purpose: Purpose):
         prepared = prepare_outbound(purpose, user)
+        self._check_credentials()
         kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
         resp = self._client.chat.completions.create(
             model=self.model_for(tier),
@@ -151,6 +148,7 @@ class Brain:
         model = _os.environ.get("NOTRON_MODEL_EMBED", EMBED_MODEL)
         out: list[list[float]] = []
         for i in range(0, len(texts), 64):
+            self._check_credentials()
             resp = self._client.embeddings.create(model=model, input=prepare_outbound("embed", passages[i : i + 64]))
             self._record("embed", getattr(resp, "usage", None))
             out.extend(d.embedding for d in sorted(resp.data, key=lambda d: d.index))

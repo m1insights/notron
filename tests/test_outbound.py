@@ -14,7 +14,7 @@ def test_ordinary_approved_note_is_redacted_before_embedding_and_cache(outbound_
     monkeypatch.setattr(notes, 'read_body', lambda _: f'<div>Shopping</div><div>password: {SECRET}</div>')
     index.build(brain)
     assert SECRET not in json.dumps(calls.embed)
-    assert SECRET not in index.CACHE.read_text()
+    assert SECRET not in json.dumps(index._load())
 
 
 def test_direct_requests_are_filtered_too(outbound_policy):
@@ -88,18 +88,16 @@ def test_model_cannot_start_filing_without_a_user_filing_request(outbound_transp
     assert state.intent == 'question'
 
 
-def test_legacy_index_is_excluded_from_retrieval_and_rebuilt(outbound_policy, outbound_transport, monkeypatch):
+def test_legacy_index_requires_offline_migration_before_rebuild(outbound_policy, outbound_transport, monkeypatch):
+    from notron.securestore import StorageError
     brain, calls = outbound_transport
-    index.CACHE.write_text(json.dumps({'approved': [{'note_id': 'approved', 'title': 'Shopping',
-        'folder': 'Notes', 'modified': '1', 'text': f'password: {SECRET}', 'row': 0}]}))
-    assert index.glimpses() == {}
-    assert not index.exists()
-    monkeypatch.setattr(library, 'user_notes', lambda: [notes.Note('approved', 'Shopping', 'Notes', '1')])
-    monkeypatch.setattr(notes, 'read_body', lambda _: '<div>Shopping</div><div>safe replacement</div>')
-    result = index.build(brain)
-    assert result['reused'] == 0 and result['embedded'] == 1
-    assert SECRET not in index.CACHE.read_text()
-    assert SECRET not in json.dumps(calls.embed)
+    index.CACHE.write_text(json.dumps({'approved': [{'text': SECRET}]}))
+    with pytest.raises(StorageError):
+        index.exists()
+    with pytest.raises(StorageError):
+        index.build(brain)
+    assert not calls.embed
+    assert SECRET in index.CACHE.read_text()  # original retained until explicit migration
 
 
 def test_malicious_retrieval_cannot_grant_permissions_or_create_operations(outbound_policy, outbound_transport, monkeypatch):
@@ -191,8 +189,8 @@ def test_redaction_precedes_chunking_and_sanitizes_index_metadata(outbound_polic
     text = 'x ' * 695 + f'password: {SECRET} ' + 'y ' * 800
     monkeypatch.setattr(notes, 'read_body', lambda _: f'<div>{text}</div>')
     index.build(brain)
-    assert SECRET not in json.dumps(calls.embed) + index.CACHE.read_text()
-    assert secret_key not in index.CACHE.read_text()
+    assert SECRET not in json.dumps(calls.embed) + json.dumps(index._load())
+    assert secret_key not in json.dumps(index._load())
     assert len(calls.embed[0]['input']) > 1
 
 

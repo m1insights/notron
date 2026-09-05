@@ -24,6 +24,10 @@ The loop is built the way a loop has to be to be trusted:
 
 from __future__ import annotations
 
+from .credentials import CredentialUnavailable
+from .securestore import StorageError
+from .policy import PolicyError
+
 import hashlib
 import json
 import pathlib
@@ -34,7 +38,8 @@ from datetime import datetime
 from . import conversation, markup, notes, workspace
 from .outbound import Passage, sanitized
 
-STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "reflect.json"
+from .paths import DATA_DIR
+STATE = DATA_DIR / "reflect.json"
 
 MAX_LESSONS = 12          # the note is read on every run; keep it a page, not a scroll
 MAX_NEW_PER_RUN = 3       # slow learning compounds; fast learning thrashes
@@ -171,6 +176,8 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
     """One turn of the loop: measure, propose, verify, apply, record."""
     from . import policy
     policy.require_ready()
+    from . import retention
+    retention.reconcile()
     say = on_step or (lambda m: None)
     out: dict[str, object] = {"at": datetime.now().isoformat(timespec="minutes"),
                               "misses": 0, "proposed": 0, "kept": [], "skipped": ""}
@@ -214,6 +221,8 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
             user=[transcript_passage, *lesson_passages], purpose="reflect",
             tier="smart", max_tokens=600,
         ).get("lessons", [])
+    except (CredentialUnavailable, StorageError, PolicyError):
+        raise
     except Exception as e:
         out["skipped"] = f"proposer failed ({type(e).__name__})"
         return out
@@ -241,6 +250,8 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
             tier="fast", max_tokens=300,
         )
         keep = {i for i in verdict.get("keep", []) if isinstance(i, int)}
+    except (CredentialUnavailable, StorageError, PolicyError):
+        raise
     except Exception:
         keep = set()          # a verifier that fails keeps nothing; next run retries
 
@@ -265,10 +276,8 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> dict:
 # ------------------------------------------------------------------ run record
 
 def _state() -> dict:
-    try:
-        return json.loads(STATE.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
+    from .securestore import read_json
+    return read_json(STATE)
 
 
 def _record(state: dict, digest: str, out: dict, dry_run: bool) -> None:
@@ -277,8 +286,5 @@ def _record(state: dict, digest: str, out: dict, dry_run: bool) -> None:
     state["last_digest"] = digest
     state.setdefault("runs", []).append(out)
     state["runs"] = state["runs"][-MAX_RUNS_KEPT:]
-    try:
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps(state, indent=1))
-    except OSError:
-        pass
+    from .securestore import write_json
+    write_json(STATE, state)

@@ -10,15 +10,40 @@ import sys
 
 from . import graph, rewrite, workspace
 from .brain import Brain, BrainUnavailable
+from .credentials import CredentialUnavailable
+from .securestore import StorageError
 
 
 def _brain():
     try:
-        return Brain.from_env()
-    except BrainUnavailable as e:
+        from . import credentials
+        if credentials._provider is None:
+            credentials.startup()
+        return Brain.from_credentials()
+    except (BrainUnavailable, CredentialUnavailable, StorageError) as e:
         print(f"\n  {e}\n", file=sys.stderr)
         raise SystemExit(2)
 
+
+
+def cmd_storage(args):
+    """Offline maintenance, explicitly invoked by the user; never reads Apple data."""
+    from . import credentials, migration
+    if credentials._provider is None:
+        credentials.startup()
+    source, target = pathlib.Path(args.source).expanduser(), pathlib.Path(args.target).expanduser()
+    if args.action == 'initialize':
+        credentials.provision_storage_key(target)
+        print('Secure storage initialized.')
+        return
+    key = credentials.storage_key()
+    if args.action == 'migrate':
+        report = migration.migrate(source, target, key)
+        print(f"Migration {report['status']}. Originals and encrypted recovery copies preserved.")
+        print('Review before storage accept, which retires both recovery copies and original caches.')
+    else:
+        migration.accept(source, target, key)
+        print('Migration accepted. Legacy originals and recovery copies retired; approved-note rebuild required.')
 
 def cmd_setup(args):
     print(f"\nSetting up {workspace.FOLDER} in Apple Notes\n")
@@ -193,7 +218,7 @@ def cmd_listen(args):
 
     print()
     try:
-        watch.Watcher(_brain(), on_event=lambda m: print(m, flush=True)).run_forever()
+        watch.Watcher(_brain(), on_event=lambda m: __import__("notron.diagnostics", fromlist=["record"]).record("listener_event")).run_forever()
     except KeyboardInterrupt:
         print("\n  Stopped listening.\n")
 
@@ -401,8 +426,19 @@ def main(argv=None):
     sub.add_parser("agenda", help="what's in your calendar and what's still open"
                    ).set_defaults(fn=cmd_agenda)
 
+    from .paths import DATA_DIR
+    storage = sub.add_parser('storage', help='explicit offline storage setup or migration')
+    storage.add_argument('action', choices=['initialize', 'migrate', 'accept'])
+    storage.add_argument('--source', default=str(pathlib.Path(__file__).resolve().parents[1] / '.notron'))
+    storage.add_argument('--target', default=str(DATA_DIR))
+    storage.set_defaults(fn=cmd_storage)
+
     args = p.parse_args(argv)
-    args.fn(args)
+    try:
+        args.fn(args)
+    except (CredentialUnavailable, StorageError):
+        print("Protected processing paused. Secure storage requires setup or recovery.", file=sys.stderr)
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":

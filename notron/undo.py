@@ -8,25 +8,32 @@ from __future__ import annotations
 import json
 import pathlib
 
-STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "undo.json"
+from .paths import DATA_DIR
+STATE = DATA_DIR / "undo.json"
 
 
 def _load() -> dict:
-    try:
-        return json.loads(STATE.read_text())
-    except (OSError, ValueError):
-        return {}
+    from .securestore import read_json, write_json
+    from . import policy
+    data = read_json(STATE)
+    if not all(isinstance(nid, str) and nid and isinstance(body, str) for nid, body in data.items()):
+        from .securestore import IntegrityError
+        raise IntegrityError("Encrypted undo schema invalid; processing paused.")
+    safe = {nid: body for nid, body in data.items() if policy.current().can_read(nid)}
+    if safe != data:
+        write_json(STATE, safe)
+    return safe
 
 
 def _write(data: dict) -> None:
-    try:
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps(data))
-    except OSError:
-        pass
+    from .securestore import write_json
+    write_json(STATE, data)
 
 
 def save(note_id: str, old_body: str) -> None:
+    from . import policy
+    if not policy.current().can_read(note_id):
+        return
     if not old_body:            # nothing existed before this write — nothing to undo to
         return
     data = _load()

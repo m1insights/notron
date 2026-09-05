@@ -116,13 +116,13 @@ def test_tidying_up_in_her_own_ask_note_is_an_ordinary_question():
     a question about the user's own notes, and the Guard refuses a replace on
     the shared Ask note anyway."""
     brain = FakeBrain()
-    state = State(request="clean this up", reply_to=(workspace.ASK, workspace.FOLDER, 2))
+    state = State(request="clean this up", reply_to=(workspace.ASK, workspace.FOLDER, 2), source_note_id=f"{workspace.FOLDER}/{workspace.ASK}")
     assert nodes.router(state, brain=brain).intent == "question"
 
 
 def test_a_yes_in_her_own_ask_note_is_not_consent_to_rewrite_it():
     brain = FakeBrain()
-    state = State(request="yes", reply_to=(workspace.ASK, workspace.FOLDER, 2))
+    state = State(request="yes", reply_to=(workspace.ASK, workspace.FOLDER, 2), source_note_id=f"{workspace.FOLDER}/{workspace.ASK}")
     assert nodes.router(state, brain=brain).intent == "question"
 
 

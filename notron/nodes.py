@@ -7,6 +7,10 @@ planning and writing are rare and quality-critical, so they run on Super.
 
 from __future__ import annotations
 
+from .credentials import CredentialUnavailable
+from .securestore import StorageError
+from .policy import PolicyError
+
 import re
 from datetime import datetime
 
@@ -113,6 +117,8 @@ def router(state: State, *, brain) -> State:
             return state
     try:
         out = brain.ask_json(system=ROUTER_SYSTEM, user=[_request_passage(state)], purpose="route", tier="fast", max_tokens=400)
+    except (CredentialUnavailable, StorageError, PolicyError):
+        raise
     except Exception as e:
         # A router that cannot classify must never stop Notron answering. Assume the
         # most useful intent and pay for the context.
@@ -186,11 +192,13 @@ def researcher(state: State, *, brain=None) -> State:
     from . import research
 
     if not research.available():
-        state.note("researcher", "no web access — add a Tavily key to .env")
+        state.note("researcher", "no web access — configure the search credential in Keychain")
         return state
 
     try:
         answer, findings = research.search([_request_passage(state)], limit=8)
+    except (CredentialUnavailable, StorageError, PolicyError):
+        raise
     except Exception as e:
         # A failed search should cost the user an answer, not the whole reply.
         state.note("researcher", f"search failed ({type(e).__name__}) — answering without it")
@@ -239,6 +247,8 @@ def agenda(state: State, *, brain=None) -> State:
         return state
     try:
         state.agenda = _agenda_text()
+    except (CredentialUnavailable, StorageError, PolicyError):
+        raise
     except Exception as e:
         # Automation approval can be revoked at any time, and Calendar hangs rather
         # than failing when it is. Losing context is survivable; losing the morning
@@ -274,6 +284,8 @@ def scheduler(state: State, *, brain) -> State:
     try:
         out = brain.ask_json(system=SCHEDULER_SYSTEM, user=_scheduling_prompt(state), purpose="schedule",
                              tier="fast", max_tokens=400)
+    except (CredentialUnavailable, StorageError, PolicyError):
+        raise
     except Exception as e:
         state.note("scheduler", f"could not read that as a date ({type(e).__name__})")
         state.answer = ("I couldn't work out the date from that. "
@@ -801,6 +813,8 @@ def _verify_links(state: State) -> None:
             break
         try:
             alive = research.check_url(url)
+        except (CredentialUnavailable, StorageError, PolicyError):
+            raise
         except Exception:
             alive = False
         if not alive:

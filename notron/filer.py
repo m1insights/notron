@@ -24,6 +24,10 @@ path; the dump is just the place where the tag is implicit on every line.
 
 from __future__ import annotations
 
+from .credentials import CredentialUnavailable
+from .securestore import StorageError
+from .policy import PolicyError
+
 import hashlib
 import json
 import os
@@ -37,7 +41,8 @@ from .outbound import Passage, sanitized
 from . import conversation, index, layout, markup, notedoc, notes, privacy, workspace
 from .notedoc import FILED, RECEIPT
 
-STATE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "filer.json"
+from .paths import DATA_DIR
+STATE = DATA_DIR / "filer.json"
 
 #: Where a note she is allowed to create goes. Apple's own default folder.
 FILING_FOLDER = os.environ.get("NOTRON_FILING_FOLDER", "Notes")
@@ -420,10 +425,8 @@ def _title(text: str) -> str:
 # ------------------------------------------------------------------- state
 
 def _state() -> dict:
-    try:
-        data = json.loads(STATE.read_text())
-    except (OSError, json.JSONDecodeError):
-        data = {}
+    from .securestore import read_json
+    data = read_json(STATE)
     data.setdefault("judged", {})
     data.setdefault("proposals", {})
     data.setdefault("shapes", {})
@@ -437,11 +440,8 @@ def _save(data: dict, *, dry_run: bool) -> None:
     if len(judged) > MAX_JUDGED:
         for key in list(judged)[: len(judged) - MAX_JUDGED]:
             judged.pop(key, None)
-    try:
-        STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps(data, indent=1))
-    except OSError:
-        pass
+    from .securestore import write_json
+    write_json(STATE, data)
 
 
 def pending_proposals() -> dict[str, list[Item]]:
@@ -594,6 +594,8 @@ def _file(ex, brain, items: list[Item], state: dict, out: Outcome, *,
         try:
             fresh, said_shapes = classify(brain, [items[i] for i in ask], candidates)
             out.model_calls += 1
+        except (CredentialUnavailable, StorageError, PolicyError):
+            raise
         except Exception as e:
             say(f"could not judge them ({type(e).__name__}) — leaving them for next time")
             fresh = [None] * len(ask)
@@ -749,6 +751,8 @@ def run(brain, *, dry_run: bool = False, on_step=None) -> Outcome:
     from .executor import Executor
     from . import policy
     policy.require_ready()
+    from . import retention
+    retention.reconcile()
 
     say = on_step or (lambda m: None)
     out = Outcome()
@@ -780,6 +784,8 @@ def file_items(brain, items: list[Item], *, bare: list[str] = (), dry_run: bool 
     from .executor import Executor
     from . import policy
     policy.require_ready()
+    from . import retention
+    retention.reconcile()
 
     out = Outcome()
     if not items:

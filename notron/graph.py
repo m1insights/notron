@@ -82,6 +82,8 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
     """
     from . import policy
     policy.require_ready()
+    from . import retention
+    retention.reconcile()
     state = State(request=request, trigger=trigger, reply_to=reply_to, here=here,
                   source=source, source_note_id=source_note_id or policy.request_note_id(),
                   source_modified=source_modified)

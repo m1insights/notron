@@ -14,7 +14,8 @@ from dataclasses import asdict, dataclass
 from .outbound import Passage, prepare_outbound
 from . import privacy
 
-CACHE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "index.json"
+from .paths import DATA_DIR
+CACHE = DATA_DIR / "index.json"
 VECTORS = CACHE.with_name("vectors.npy")
 CHUNK_CHARS = 1400
 CHUNK_OVERLAP = 150
@@ -52,69 +53,58 @@ def split(text: str) -> list[str]:
 
 
 def _load() -> dict[str, list[dict]]:
-    if not CACHE.exists():
+    from .securestore import read_json, write_json, IntegrityError
+    payload = read_json(CACHE)
+    if not payload:
         return {}
-    payload = json.loads(CACHE.read_text())
-    # Pre-provenance indexes are never reused, even when modified dates match.
-    if not isinstance(payload, dict) or payload.get("outbound_version") != 1:
-        return {}
-    data = payload.get("notes", {})
-    return {nid: rows for nid, chunks in data.items()
-            if (rows := _readable(chunks))}
+    if payload.get("outbound_version") != 1 or not isinstance(payload.get("notes"), dict):
+        raise IntegrityError('Encrypted index schema invalid; processing paused.')
+    data = payload["notes"]
+    _validate(data)
+    safe = {nid: rows for nid, chunks in data.items() if (rows := _readable(chunks))}
+    if safe != data:
+        write_json(CACHE, {"outbound_version": 1, "notes": safe})
+    return safe
 
+
+
+def _validate(data: dict) -> None:
+    import math
+    from .securestore import IntegrityError
+    try:
+        dimensions = set()
+        for nid, rows in data.items():
+            if not isinstance(nid, str) or not nid or not isinstance(rows, list): raise ValueError()
+            for row in rows:
+                if not isinstance(row, dict) or row.get("note_id") != nid: raise ValueError()
+                if not all(isinstance(row.get(k), str) for k in ("text", "title", "folder", "modified")): raise ValueError()
+                vector = row.get("vector")
+                if vector is not None:
+                    if not isinstance(vector, list) or not vector: raise ValueError()
+                    if not all(type(v) in (int, float) and math.isfinite(v) for v in vector): raise ValueError()
+                    dimensions.add(len(vector))
+        if len(dimensions) > 1: raise ValueError()
+    except (ValueError, TypeError, OverflowError):
+        raise IntegrityError('Encrypted index schema invalid; processing paused.') from None
 
 def _save(data: dict[str, list[dict]]) -> None:
-    """Metadata as JSON, vectors as one float32 array. Keeps the index ~5x smaller
-    and lets search memory-map it instead of parsing megabytes of text."""
-    import numpy as np
-
-    CACHE.parent.mkdir(parents=True, exist_ok=True)
-    global _MMAP
-    _MMAP = None
-    # Recheck policy after embedding, before any persistent write.
+    from .securestore import write_json
+    _validate(data)
     safe_data = {}
     for nid, chunks in data.items():
-        rows = _readable(chunks)
+        rows = [dict(c) for c in _readable(chunks)]
         for c in rows:
             c["text"] = prepare_outbound("embed", [_passage(c)])[0]
             c["title"] = privacy.redact(c["title"])
             c["folder"] = privacy.redact(c["folder"])
+            c.pop("row", None)
         if rows:
             safe_data[nid] = rows
-    data = safe_data
-    vectors, row = [], 0
-    for chunks in data.values():
-        for c in chunks:
-            vec = c.pop("vector", None)
-            if vec is None:
-                c["row"] = None
-                continue
-            vectors.append(vec)
-            c["row"] = row
-            row += 1
-    # Retain legacy bytes locally for the explicit Task 3 migration; never
-    # expose them to retrieval or transport. No private data is read here.
-    if CACHE.exists():
-        payload = json.loads(CACHE.read_text())
-        if not isinstance(payload, dict) or payload.get("outbound_version") != 1:
-            CACHE.replace(CACHE.with_name(CACHE.name + ".unprepared"))
-            if VECTORS.exists():
-                VECTORS.replace(VECTORS.with_name(VECTORS.name + ".unprepared"))
-    CACHE.write_text(json.dumps({"outbound_version": 1, "notes": data}))
-    np.save(VECTORS, np.asarray(vectors, dtype="float32"))
+    write_json(CACHE, {"outbound_version": 1, "notes": safe_data})
 
 
-def _vector_at(row: int | None):
-    import numpy as np
-
-    if row is None or not VECTORS.exists():
-        return None
-    global _MMAP
-    if _MMAP is None:
-        _MMAP = np.load(VECTORS, mmap_mode="r")
-    return _MMAP[row].tolist()
-
-
+# Compatibility name only; never holds a persistent mmap. Vectors are decrypted
+# with their metadata on each load and remain in process memory.
 _MMAP = None
 
 
@@ -122,6 +112,8 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
     """Embed every note that is new or has changed since the last run."""
     from . import markup, notes, workspace
 
+    from . import retention
+    retention.reconcile()
     cached = {} if force else _load()
     from . import library, policy
 
@@ -134,9 +126,7 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
 
     for n in live:
         old = cached.get(n.id)
-        if old and old[0].get("modified") == n.modified and old[0].get("row") is not None:
-            for c in old:
-                c["vector"] = _vector_at(c["row"])
+        if old and old[0].get("modified") == n.modified and old[0].get("vector") is not None:
             fresh[n.id] = old
             reused += 1
             continue
@@ -168,14 +158,15 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
 def search(query: list[Passage], brain, *, limit: int = 8) -> list[Chunk]:
     import numpy as np
 
+    from . import retention
+    retention.reconcile()
     prepare_outbound("embed", query)
     data = _load()
-    rows = _readable([r for chunks in data.values() for r in chunks if r.get("row") is not None])
-    if not rows or not VECTORS.exists():
+    rows = _readable([r for chunks in data.values() for r in chunks if r.get("vector") is not None])
+    if not rows:
         return []
 
-    store = np.load(VECTORS, mmap_mode="r")
-    matrix = np.asarray(store[[r["row"] for r in rows]], dtype="float32")
+    matrix = np.asarray([r["vector"] for r in rows], dtype="float32")
     matrix /= np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-9
     q = np.array(brain.embed(query)[0], dtype="float32")
     q /= np.linalg.norm(q) + 1e-9

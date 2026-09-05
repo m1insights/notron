@@ -139,7 +139,7 @@ def _notes_is_never_the_real_one(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _policy_is_disposable(monkeypatch, tmp_path):
+def _policy_is_disposable(monkeypatch, tmp_path, _task3_storage):
     """Existing feature tests explicitly select their synthetic notes.
 
     Permission regression tests override STATE or save their own selection.
@@ -163,7 +163,6 @@ def _outbound_resources_are_disposable(monkeypatch, tmp_path):
 
     monkeypatch.setattr(socket.socket, 'connect', blocked)
     monkeypatch.setattr(urllib.request, 'urlopen', blocked)
-    monkeypatch.setattr(brain, '_load_env', lambda: None)
     monkeypatch.delenv('NEBIUS_API_KEY', raising=False)
     for module, attr, name in (
         (brain, 'USAGE_LOG', 'usage.json'), (care, 'USAGE_LOG', 'usage.json'),
@@ -210,5 +209,23 @@ def outbound_transport(monkeypatch):
     brain = Brain.__new__(Brain)
     brain._client = NS(chat=NS(completions=NS(create=chat)), embeddings=NS(create=embed))
     monkeypatch.setattr(urllib.request, 'urlopen', search)
-    monkeypatch.setenv('TAVILY_API_KEY', 'synthetic-test-key')
+    from notron import credentials
+    credentials._provider.put(credentials.SEARCH_KEY, b'synthetic-test-key')
     return brain, calls
+
+
+@pytest.fixture(autouse=True)
+def _task3_storage(monkeypatch, tmp_path, _outbound_resources_are_disposable):
+    from notron import credentials, diagnostics, retention
+    class MemoryCredentials:
+        def __init__(self):
+            self.values = {credentials.STORAGE_KEY: bytes(range(32)),
+                           credentials.NEBIUS_KEY: b'synthetic-inference-key'}
+        def get(self, name): return self.values.get(name)
+        def put(self, name, value): self.values[name] = value
+        def delete(self, name): self.values.pop(name, None)
+    provider = MemoryCredentials()
+    monkeypatch.setattr(credentials, '_provider', provider)
+    monkeypatch.setattr(diagnostics, 'ROOT', tmp_path / 'diagnostics')
+    monkeypatch.setattr(retention, 'LEGACY_ROOT', tmp_path / 'legacy-repository')
+    return provider

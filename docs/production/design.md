@@ -232,3 +232,97 @@ Production updates are signed, verified, delivered over HTTPS, installed with wo
 - [FastAPI deployment concepts](https://fastapi.tiangolo.com/deployment/concepts/).
 
 These establish constraints; they are not proof of this app's implementation or certification. The existing 371 passing Python tests and successful Swift build were observed in the assessment, not rerun as part of writing this design. New plans add the missing production scenarios.
+
+### P01 Task 3 implemented secure storage contract (2026-09-04)
+
+`credentials.CredentialStore` owns `get(name) -> bytes | None`,
+`put(name, value: bytes) -> None`, and `delete(name) -> None`. Approved account
+names are `storage-key`, `nebius-api-key`, and `tavily-api-key`, under Keychain
+service `com.m1labs.notron`. `credentials.configure(provider)` injects access;
+there is no `.env` import, credential environment fallback, or automatic key
+replacement. `Brain.from_credentials()` replaces `from_env()`. Non-secret
+model/endpoint environment settings remain supported; Nebius and every model
+identifier are unchanged. An absent optional search account disables search;
+unavailable Keychain access or missing/invalid storage key pauses protected work.
+
+`credentials.KeychainStore(helper: Path)` exchanges a bounded JSON request over
+an inherited socket pair dedicated to that helper invocation. Only the helper
+path, FD flag and FD number appear in argv. Standard streams are discarded;
+credentials are never added to the child environment. The Swift
+`KeychainStore.swift` uses Security plus a noninteractive `LAContext`, with
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly` for new accounts. It includes a
+conditional `NOTRON_KEYCHAIN_HELPER` entry point. **P06 must package, sign, verify
+identity, and connect this helper.** `credentials.startup()` intentionally pauses
+until that integration exists; there is no environment switch to bypass it.
+Type-checking and mocked pipe tests do not verify signed/native Keychain behavior.
+
+`securestore.EncryptedStore(root, key)` implements `.write(name, data: bytes)` and
+`.read(name) -> bytes`. Payloads use `cryptography==50.0.1` AESGCM with a 256-bit
+key, a fresh 96-bit nonce on each write, full authentication tags, and authenticated
+logical filename plus version header (`NOTRON-AESGCM` + version byte 1). Files
+are `<name>.enc`, 0600, below a 0700 directory. Writes use Task 1 atomic
+replacement/fsync; migration marker deletions also fsync their directories.
+Invalid paths/symlinks are refused. Wrong keys, tampering, truncated files, unknown
+versions, and malformed payload schemas pause processing with content-free errors.
+
+Production JSON consumers use `read_json(path)` / `write_json(path, dict)`, which
+resolve `path.stem + '.enc'`, check credentials and migration readiness, and refuse
+legacy plaintext. Missing payloads are empty only after those checks. The index
+retains `outbound_version: 1`, with vectors inside the authenticated per-note rows.
+No persistent NPY file or memory map is used. Rebuilds still use Task 2 provenance
+and redact complete notes before chunking, embedding, and persistence. Undo keeps
+one **exact encrypted original body** per note; it is deliberately not redacted,
+so restoration remains lossless. Filing proposals/judgments/shapes and reflection
+run content are encrypted too. No P02 durable request/operation store is invented.
+
+Sensitive content, scanner metadata, usage counters, mood metadata and diagnostics
+live in `~/Library/Application Support/com.m1labs.notron`. The Mac mood reader
+uses that same path. Existing policy/rewrite/onboarding paths remain unchanged;
+Python atomic metadata writes now harden existing parent permissions. Mood and
+usage contain presentation state/numeric counters, not request bodies. Background
+launchd stdout/stderr go to `/dev/null`; the listener emits only fixed diagnostic
+event counters. Diagnostics and validated day/tier/token usage retain seven calendar
+days and are pruned on processing. No provider/request/response bodies are logged.
+
+`retention.require_ready()` validates credentials, active storage, migration gates,
+legacy-cache exclusion and policy before protected use. `retention.reconcile()`
+uses a successful metadata-only Notes inventory and current title/date-aware policy
+before manual graph, filing, reflection, care, daily, build, semantic search and
+listener sweeps. It purges index/undo and invalidates mixed-source request/reflection
+caches on deletion/revocation. Permission saves purge before future reuse; locked
+storage leaves the restrictive policy saved and processing paused until cleanup can
+finish. Listener pending text/failure/scanner memory is also cleared for excluded
+IDs. A failed inventory cannot be treated as an empty library. Atomic per-file
+updates are not a cross-process transaction; P02 still owns concurrency/recovery.
+
+Offline migration is explicit: `storage initialize`, `storage migrate --source …
+--target …`, then **separately** `storage accept`. The native startup gate applies
+to these commands too; only injected synthetic providers were used in P01 tests.
+Initialization generates a random key only for an empty destination with no existing
+key. Migration accepts an empty target or its sole authenticated initialization
+marker. It recognizes legacy JSON/NPY, Task 2 `.unprepared` index files, undo,
+filing/reflection/scanner/usage/mood files and old background logs; it never scans
+credential files. Recognized files are validated and backed up byte-for-byte in
+**encrypted** recovery copies; plaintext originals remain user-only until acceptance.
+Raw/prepared legacy vectors are not reused: the active index starts empty and must
+be rebuilt from currently approved notes. Legacy request/reflection state is
+invalidated; policy-approved undo bodies survive exactly.
+
+An authenticated manifest records source/backup hashes and verified output hashes.
+Incomplete/pending/accepting migrations cannot process, even if the plaintext status
+sidecar is lost, and direct JSON cache consumers enforce the same gate. Resume
+validates source identity/content and finishes interrupted publication. Acceptance
+validates outputs and recovery before retiring plaintext originals **and** encrypted
+recovery copies. Interrupted acceptance is resumable; corruption while cleanup is
+pending preserves remaining recovery copies and pauses. Until acceptance the offline
+originals/backups are recovery material, not active caches; no cloud use is allowed.
+Explicit acceptance ends that retention exception. Deletion is ordinary filesystem
+unlink, not a forensic-erasure promise on APFS/snapshots/backups.
+
+A lost storage key cannot decrypt old data. Replacing the Keychain key does not
+silently regenerate, import, or bypass the old ciphertext: processing pauses.
+Restoring the exact original key restores access; planned key rotation must retain
+it until an explicitly validated offline re-encryption/rebuild is accepted. P01
+provides no automatic rotation or legacy-key fallback. Memory erasure, a compromised
+local user account, provider retention, signed bridge behavior, and OS backups are
+not proven by unit tests. See [Task 3 evidence](evidence/P01-secure-storage.md).

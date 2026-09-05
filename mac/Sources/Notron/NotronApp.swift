@@ -1,18 +1,17 @@
 import SwiftUI
 import AppIntents
 
-/// Reads `.notron/mood.json`, which `care.py` rewrites every morning (or on a manual
+/// Reads managed Application Support `mood.json`, which `care.py` rewrites every morning (or on a manual
 /// `notron care`), so the menu bar glyph shows her real state without opening Notes.
-/// Same dev-machine placeholder as `AskNotronIntent`'s Python path — see its comment.
+/// Matches the Python managed-storage root.
 @MainActor
 final class MoodWatcher: ObservableObject {
     @Published var emoji = "🤖"
     @Published var label = "Notron"
 
     private static let path: URL = {
-        let home = ProcessInfo.processInfo.environment["NOTRON_HOME"]
-            ?? "/Users/m1labs/Dev/apps/juno"
-        return URL(fileURLWithPath: home).appendingPathComponent(".notron/mood.json")
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/com.m1labs.notron/mood.json")
     }()
 
     private var timer: Timer?
