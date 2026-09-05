@@ -30,6 +30,7 @@ import time
 from dataclasses import dataclass, field
 
 from . import conversation, filer, graph, mentions, notes, workspace
+from .markup import to_text
 from .applescript import AppleScriptError, NotesBusy
 
 ASK_POLL = 5           # seconds between checks of the Ask note
@@ -38,6 +39,48 @@ SETTLE = 6             # how long your typing must be still before she answers
 MIN_CHARS = 2
 
 DUMP_POLL = 60         # seconds between looks at the Brain Dump (one cheap read)
+
+HERE_CHARS = 40_000    # how much of the note she was tagged in the model sees
+ELIDED = "\n\n[… a part of this note is not shown …]\n\n"
+
+
+def here_text(body_html: str, anchor: str = "", *, budget: int = HERE_CHARS) -> str:
+    """The note she was tagged in, as the model should see it.
+
+    Whole, whenever it fits — and it almost always does. Some cap is
+    unavoidable (a note may run to 200,000 characters), but a cap that simply
+    keeps the opening is worse than it looks: a question like "would my first
+    scene idea, written at the end of this note, work?" then points at text she
+    was never given, and she answers, reasonably and wrongly, that she cannot
+    find it. That happened on a 25,000-character story bible against the old
+    4,000-character cut.
+
+    So an oversized note is sent as three parts — how it opens, the passage
+    around the line she was tagged in, and how it ends — with the gaps marked
+    so she can say what she has not read rather than assume it is not there.
+    Parts that turn out to touch are joined back into one, so the marker only
+    ever appears where something really was left out.
+    """
+    text = to_text(body_html)
+    if len(text) <= budget:
+        return text
+
+    third = budget // 3
+    spans = [(0, third), (len(text) - third, len(text))]
+    at = text.find(anchor.strip()) if anchor.strip() else -1
+    if at >= 0:
+        window = budget - 2 * third
+        start = max(0, min(at - window // 2, len(text) - window))
+        spans.append((start, start + window))
+
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return ELIDED.join(text[start:end] for start, end in merged)
+
 # How long the dump must be untouched before she files it. A dump session is a
 # burst of half-thoughts; filing on a timer would file the half. Fifteen quiet
 # minutes means the session is over.
@@ -166,9 +209,8 @@ class Watcher:
             if not self._settled(key, m.question):
                 continue
             body = notes.read_body(m.note_id)
-            from .markup import to_text
             wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                                 here=to_text(body)[:4000], source=m.raw)
+                                 here=here_text(body, m.raw or m.question), source=m.raw)
             self._attempted(key, wrote)
             self._pending.pop(key, None)
             return

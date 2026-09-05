@@ -217,3 +217,31 @@ def test_a_successful_answer_clears_the_failure_count():
 def test_is_running_reads_the_launchctl_exit_code():
     assert watch.is_running(runner=lambda: 0) is True
     assert watch.is_running(runner=lambda: 113) is False  # launchd's "not found"
+
+
+# 2026-09-05: a question tagged in a 25k-character story bible asked about "my
+# first scene idea written at the end of this note". She was handed the first
+# 4,000 characters of it, so she answered that she could not find any such idea.
+def test_a_note_she_is_tagged_in_arrives_whole():
+    body = markup.render("Book idea", "chapter one\n\n@notron what do you think\n\nchapter two")
+    seen = watch.here_text(body)
+    assert "chapter one" in seen and "chapter two" in seen
+
+
+def test_a_note_too_big_to_send_whole_still_shows_her_how_it_ends():
+    filler = "\n".join(f"middle line {i}" for i in range(9_000))
+    body = markup.render("ASCENSION", f"@notron is my ending any good\n\n{filler}\n\nMY FIRST SCENE IDEA")
+    seen = watch.here_text(body, "@notron is my ending any good", budget=4_000)
+    assert "MY FIRST SCENE IDEA" in seen
+    assert "@notron is my ending any good" in seen
+    assert len(seen) <= 4_000 + len(watch.ELIDED) * 2
+
+
+def test_the_lines_around_the_tag_survive_the_trim():
+    top = "\n".join(f"opening line {i}" for i in range(3_000))
+    bottom = "\n".join(f"closing line {i}" for i in range(3_000))
+    body = markup.render("Long note", f"{top}\n\nBURIED QUESTION @notron\n\n{bottom}")
+    seen = watch.here_text(body, "BURIED QUESTION @notron", budget=6_000)
+    assert "BURIED QUESTION @notron" in seen
+    assert "opening line 0" in seen and "closing line 2999" in seen
+    assert watch.ELIDED in seen
