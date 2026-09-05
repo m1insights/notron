@@ -229,3 +229,85 @@ def test_a_successful_answer_clears_the_failure_count():
 def test_is_running_reads_the_launchctl_exit_code():
     assert watch.is_running(runner=lambda: 0) is True
     assert watch.is_running(runner=lambda: 113) is False  # launchd's "not found"
+
+
+def test_ask_persists_before_settling_and_restart_reuses_identity(monkeypatch):
+    from notron import requests
+    body = ask_note('remind me to call')
+    monkeypatch.setattr(watch.notes, 'read_body', lambda nid: body)
+    watcher = watch.Watcher(brain=None, settle=100)
+    watcher.check_ask()
+    first = requests.current().pending()
+    assert len(first) == 1
+    assert first[0].envelope.source == 'ask'
+    restarted = watch.Watcher(brain=None, settle=100)
+    restarted.check_ask()
+    assert [r.request_id for r in requests.current().pending()] == [first[0].request_id]
+
+
+def test_scanner_attaches_persisted_occurrence_ids(monkeypatch):
+    from notron import mentions, requests, notes
+    note = notes.Note('n1', 'Ideas', 'Notes', 'today')
+    body = '<div>Ideas</div><div>#notron remind me to call</div>'
+    monkeypatch.setattr(mentions.notes, 'list_all_notes', lambda: [note])
+    monkeypatch.setattr(mentions.notes, 'read_body', lambda nid: body)
+    scanner = mentions.Scanner()
+    found = scanner.scan()
+    assert len(found) == 1
+    first = found[0].envelope
+    assert first.source == 'mention' and first.note_id == 'n1'
+    assert requests.current().get(first.request_id).status == 'prepared'
+    assert scanner.scan()[0].envelope.request_id == first.request_id
+
+
+def test_watcher_uses_entire_occurrence_id_instead_of_text_prefix(monkeypatch):
+    from notron import requests
+    prefix = 'remind me to call a very long shared prefix '
+    body = f'<div>{workspace.ASK}</div><div>{prefix}one</div><div></div><div></div><div>{prefix}two</div>'
+    monkeypatch.setattr(watch.notes, 'read_body', lambda nid: body)
+    watcher = watch.Watcher(brain=None, settle=100)
+    watcher.check_ask()
+    pending = requests.current().pending()
+    assert len(pending) == 2
+    assert len(watcher._pending) == 2
+    assert all(any(r.request_id in key for key in watcher._pending) for r in pending)
+
+
+def test_dump_commits_batch_before_inference_and_restart_does_not_replay(monkeypatch):
+    from notron import requests
+    body = f'<div>{workspace.DUMP}</div><div>synthetic new thought</div>'
+    monkeypatch.setattr(watch.notes, 'read_body', lambda nid: body)
+    monkeypatch.setattr(watch.filer, 'worth_a_pass', lambda body: True)
+    seen = []
+    def run(*a, **kw):
+        records = requests.current().pending()
+        assert len(records) == 1 and records[0].status == 'running'
+        seen.append(records[0].request_id)
+        raise RuntimeError('interruption')
+    monkeypatch.setattr(watch.filer, 'run', run)
+    watcher = watch.Watcher(brain=None, dump_settle=0)
+    watcher.check_dump()
+    assert len(requests.current().pending()) == 1
+    with pytest.raises(RuntimeError):
+        watcher.check_dump()
+    restarted = watch.Watcher(brain=None, dump_settle=0)
+    restarted.check_dump()
+    restarted.check_dump()
+    assert len(seen) == 1
+
+
+def test_dump_changed_after_settling_does_not_run(monkeypatch):
+    from notron import requests
+    body = f'<div>{workspace.DUMP}</div><div>synthetic thought</div>'
+    changed = body.replace('thought', 'changed thought')
+    monkeypatch.setattr(watch.notes, 'read_body', lambda nid: body)
+    monkeypatch.setattr(watch.filer, 'worth_a_pass', lambda body: True)
+    def forbidden(*a, **kw):
+        pytest.fail('Filing ran after source changed')
+    monkeypatch.setattr(watch.filer, 'run', forbidden)
+    watcher = watch.Watcher(brain=None, dump_settle=0)
+    watcher.check_dump()
+    reads = iter([body, changed])
+    monkeypatch.setattr(watch.notes, 'read_body', lambda nid: next(reads))
+    watcher.check_dump()
+    assert requests.current().pending()[0].status == 'prepared'

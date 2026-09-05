@@ -857,15 +857,12 @@ def test_setup_creates_the_dump_note_and_the_guard_treats_it_as_shared():
     assert not v, "Notron may tick and append in the dump, never rewrite it"
 
 
-def test_the_cli_has_a_file_command():
+def test_the_cli_has_a_file_command(monkeypatch):
     from notron import cli
     import argparse
     captured = {}
-    cli.cmd_file = lambda args: captured.update(vars(args))
-    try:
-        cli.main(["file", "--dry-run"])
-    finally:
-        pass
+    monkeypatch.setattr(cli, 'cmd_file', lambda args: captured.update(vars(args)))
+    cli.main(["file", "--dry-run"])
     assert captured.get("dry_run") is True
 
 

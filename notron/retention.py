@@ -61,6 +61,9 @@ def apply_policy() -> None:
         index._load()  # persists removal using full title/date-aware policy
     if undo.STATE.with_suffix('.enc').exists():
         undo._load()
+    from . import operations, requests
+    if operations.PATH.exists():
+        requests.current().purge_sources(all_content=previous.get('policy') != signature)
     if previous.get('policy') != signature:
         write_json(marker, {'policy': signature})
 
@@ -104,4 +107,7 @@ def reconcile() -> set[str]:
         except (ValueError, TypeError):
             raise StorageError('Scanner metadata invalid; processing paused.') from None
 
+    from . import operations, requests
+    if operations.PATH.exists():
+        requests.current().purge_sources(live)
     return live

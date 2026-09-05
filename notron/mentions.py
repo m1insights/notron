@@ -19,7 +19,7 @@ import json
 import pathlib
 from dataclasses import dataclass, field
 
-from . import conversation, notes, workspace, policy
+from . import conversation, notes, workspace, policy, requests
 
 from .paths import DATA_DIR
 STATE = DATA_DIR / "seen.json"
@@ -33,6 +33,7 @@ class Mention:
     question: str
     after: int
     modified: str = ""
+    envelope: requests.RequestEnvelope | None = None
     raw: str = ""        # the whole turn, tags intact — what the Filer ticks
 
 
@@ -126,12 +127,14 @@ class Scanner:
                 self.pending.add(n.id)
             else:
                 self.pending.discard(n.id)
-            for q in asks:
+            envelopes = requests.current().observe(n.id, body, asks, source='mention',
+                                                   title=n.title, folder=n.folder, modified=n.modified)
+            for q, envelope in zip(asks, envelopes):
                 found.append(Mention(
                     note_id=n.id, title=n.title, folder=n.folder,
                     question=conversation.strip_tag(conversation.tagged_lines(q.text)),
                     after=q.after,
-                    raw=q.text, modified=n.modified,
+                    raw=q.text, modified=n.modified, envelope=envelope,
                 ))
 
         # Save *after* working out what is still owed. Saving inside `changed()`

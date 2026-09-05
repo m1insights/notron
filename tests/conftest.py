@@ -139,7 +139,7 @@ def _notes_is_never_the_real_one(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _policy_is_disposable(monkeypatch, tmp_path, _task3_storage):
+def _policy_is_disposable(monkeypatch, tmp_path, _task3_storage, _operation_storage_is_disposable):
     """Existing feature tests explicitly select their synthetic notes.
 
     Permission regression tests override STATE or save their own selection.
@@ -248,3 +248,10 @@ def _native_subprocesses_require_mocks(monkeypatch):
 
     monkeypatch.setattr(subprocess, 'run', blocked)
     monkeypatch.setattr(subprocess, 'Popen', blocked)
+
+
+@pytest.fixture(autouse=True)
+def _operation_storage_is_disposable(monkeypatch, tmp_path, _task3_storage):
+    from notron import operations
+    monkeypatch.setattr(operations, 'PATH', tmp_path / 'ledger' / 'operations.sqlite3')
+    monkeypatch.setenv('TZ', 'UTC')

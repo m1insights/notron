@@ -71,6 +71,7 @@ ORDER = ("watcher", "router", "retriever", "researcher", "agenda",
 def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
         reply_to: tuple | None = None, here: str = "", source: str = "",
         source_note_id: str | None = None, source_modified: str = "",
+        request_id: str | None = None,
         on_node: Callable[[str, State], None] | None = None) -> State:
     """Walk the graph once.
 
@@ -80,24 +81,68 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
     `source` is the exact turn she was tagged in, tags intact — what the Filer
     copies and ticks.
     """
-    from . import policy
+    from . import policy, requests
     policy.require_ready()
-    from . import retention
+    envelope = requests.create(request, request_id=request_id,
+                               source='mention' if trigger == 'notes' else ('morning' if trigger == 'morning' else 'cli'),
+                               note_id=source_note_id or policy.request_note_id(),
+                               reply_to=reply_to, here=here, source_text=source,
+                               source_modified=source_modified)
+    return run_request(envelope, brain=brain, dry_run=dry_run,
+                       on_node=on_node, trigger=trigger)
+
+
+def run_request(envelope, *, brain, dry_run: bool = False,
+                on_node: Callable[[str, State], None] | None = None,
+                trigger: str | None = None) -> State:
+    """Commit identity and claim admission before the first graph node.
+
+    Existing completed/uncertain requests are never silently replayed. The
+    envelope carries provenance, but does not grant an explicit reply capability.
+    """
+    from . import policy, retention, requests
+    policy.require_ready()
     retention.reconcile()
-    state = State(request=request, trigger=trigger, reply_to=reply_to, here=here,
-                  source=source, source_note_id=source_note_id or policy.request_note_id(),
-                  source_modified=source_modified)
-    for name in ORDER:
-        fn = NODES[name]
-        if name in ("executor", "doer", "filer"):
-            state = fn(state, brain=brain, dry_run=dry_run)
-        else:
-            state = fn(state, brain=brain)
-        if on_node:
-            on_node(name, state)
-        if state.intent == "ignore" and name == "router":
-            state.note("graph", "halted — nothing addressed to Notron")
-            break
+    store = requests.current()
+    envelope = store.capture(envelope)
+    state = State(request=envelope.text, request_id=envelope.request_id, envelope=envelope,
+                  trigger=trigger or ('notes' if envelope.source in {'ask', 'mention'} else envelope.source),
+                  reply_to=envelope.reply_to, here=envelope.here, source=envelope.source_text,
+                  source_note_id=envelope.note_id, source_modified=envelope.source_modified,
+                  source_revision=envelope.source_revision)
+    record = store.get(envelope.request_id)
+    if record.status != 'prepared':
+        state.answer = ('This request was already completed.' if record.status == 'completed'
+                        else 'This request needs review before it can run again.')
+        state.note('graph', record.status)
+        return state
+    if not store.validate_source(envelope):
+        state.answer = 'The source changed. Waiting for a fresh observation before running.'
+        state.note('graph', 'source changed before inference')
+        return state
+    if not dry_run and not store.claim(envelope.request_id):
+        state.answer = 'This request is already active or needs review.'
+        state.note('graph', 'request not claimed')
+        return state
+    try:
+        with requests.execution(envelope):
+            for name in ORDER:
+                fn = NODES[name]
+                if name in ('executor', 'doer', 'filer'):
+                    state = fn(state, brain=brain, dry_run=dry_run)
+                else:
+                    state = fn(state, brain=brain)
+                if on_node:
+                    on_node(name, state)
+                if state.intent == 'ignore' and name == 'router':
+                    state.note('graph', 'halted — nothing addressed to Notron')
+                    break
+    except BaseException:
+        if not dry_run:
+            store.finish(envelope.request_id, needs_review=True)
+        raise
+    if not dry_run:
+        store.finish(envelope.request_id, needs_review=any(r.startswith('✗') for r in state.results))
     return state
 
 

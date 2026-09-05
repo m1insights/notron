@@ -21,7 +21,7 @@
 **Consumes:** Shared RequestEnvelope and OperationStatus; P01 EncryptedStore.
 **Produces:** `OperationStore(path, payload_store)`, `.prepare(request_id, operation_id, payload_hash)`, `.transition(operation_id, expected, target, external_id=None)`, `.get(operation_id)`, `.pending()`; `run_request(envelope, *, brain, dry_run=False)` in graph, preserving `graph.run` as a compatibility wrapper.
 
-- [ ] Add state-machine tests before implementation. Reopening the ledger must retain APPLIED state; duplicate operation IDs with a different payload hash are rejected.
+- [x] Add state-machine tests before implementation. Reopening the ledger must retain APPLIED state; duplicate operation IDs with a different payload hash are rejected.
 
 ```python
 import pytest
@@ -35,10 +35,10 @@ def test_operation_identity_cannot_be_reused_for_different_work(tmp_path, payloa
         ledger.prepare('r1', 'r1:action:0', 'hash-b')
 ```
 
-- [ ] Implement SQL schema with request ID, operation ID primary key, payload hash, encrypted payload reference, state, timestamps, source/target ID, expected revision, external ID and failure code. Use transactions, foreign keys, WAL and durable synchronization; no plaintext note bodies in SQL metadata.
-- [ ] Commit request identity before inference. Add persisted occurrence tracking keyed to note ID and observed source span/anchor. Keep the same ID while a request is pending despite unrelated edits; allocate a new ID for a newly submitted identical sentence after completion. Ambiguous copied/reordered pending occurrences ask rather than merge.
-- [ ] Add test for two identical reminders submitted separately, restart before inference, changed text before execution, same text in different notes, and CLI supplied request ID. Inject temporary ledger/credential stores globally in tests.
-- [ ] Run `.venv/bin/python -m pytest tests/test_requests.py tests/test_operations.py tests/test_watch.py tests/test_graph.py -q`; commit after the intended behavior passes.
+- [x] Implement SQL schema with request ID, operation ID primary key, payload hash, encrypted payload reference, state, timestamps, source/target ID, expected revision, external ID and failure code. Use transactions, foreign keys, WAL and durable synchronization; no plaintext note bodies in SQL metadata.
+- [x] Commit request identity before inference. Add persisted occurrence tracking keyed to note ID and observed source span/anchor. Keep the same ID while a request is pending despite unrelated edits; allocate a new ID for a newly submitted identical sentence after completion. Ambiguous copied/reordered pending occurrences ask rather than merge.
+- [x] Add test for two identical reminders submitted separately, restart before inference, changed text before execution, same text in different notes, and CLI supplied request ID. Inject temporary ledger/credential stores globally in tests.
+- [x] Run `.venv/bin/python -m pytest tests/test_requests.py tests/test_operations.py tests/test_watch.py tests/test_graph.py -q`; commit after the intended behavior passes.
 
 ## Task 2 — Stable targets and revision-aware writes
 

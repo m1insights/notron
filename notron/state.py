@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .requests import RequestEnvelope
 
 from .outbound import Passage
 
@@ -42,6 +46,9 @@ class Action:
 
 @dataclass
 class State:
+    request_id: str = ""
+    envelope: RequestEnvelope | None = None
+    source_revision: str | None = None
     trigger: str = "manual"          # what woke the graph
     request: str = ""                # what the user actually typed
     about: str = ""                  # 📌 About Me — the standing instructions

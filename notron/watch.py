@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from . import conversation, filer, graph, mentions, notes, workspace, policy
+from . import conversation, filer, graph, mentions, notes, workspace, policy, requests
 from .applescript import AppleScriptError, NotesBusy
 
 ASK_POLL = 5           # seconds between checks of the Ask note
@@ -78,15 +78,15 @@ class Watcher:
     # --------------------------------------------------------------- answering
 
     def _answer(self, question: str, *, title: str, folder: str, after: int,
-                here: str = "", source: str = "", note_id: str | None = None, modified: str = "") -> bool:
+                here: str = "", source: str = "", note_id: str | None = None, modified: str = "",
+                envelope: requests.RequestEnvelope | None = None) -> bool:
         self._say(f"\n> [{title}] {question}")
         if note_id is None:
             raise policy.PolicyError('Reply requires the observed note ID.')
         with policy.explicit_reply(note_id):
-            state = graph.run(
-                question, brain=self.brain, trigger="notes",
-                reply_to=(title, folder, after), here=here, source=source, source_note_id=note_id, source_modified=modified,
-            )
+            if envelope is None:
+                raise ValueError('A persisted source occurrence is required.')
+            state = graph.run_request(envelope, brain=self.brain)
         for line in state.trace:
             self._say(f"  {line}")
         for result in state.results:
@@ -146,16 +146,23 @@ class Watcher:
             self._ask_id = None
             self._say(f"  {workspace.ASK} not found — will look again")
             return
-        for q in conversation.unanswered(body, ignore=ASK_FURNITURE):
-            if len(q.text) < MIN_CHARS:
+        asks = [q for q in conversation.unanswered(body, ignore=ASK_FURNITURE) if len(q.text) >= MIN_CHARS]
+        store = requests.current()
+        envelopes = store.observe(self._ask_id, body, asks, source='ask',
+                                  title=workspace.ASK, folder=workspace.FOLDER)
+        for q, envelope in zip(asks, envelopes):
+            record = store.get(envelope.request_id)
+            if record.status != 'prepared':
+                if record.status in {'running', 'needs_review'}:
+                    self._say('  request needs review before it can run again')
                 continue
-            key = f"ask:{q.text[:40]}"
+            key = f"ask:{envelope.request_id}"
             if not self._worth_trying(key):
                 continue
             if not self._settled(key, q.text):
                 continue
             wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
-                                 after=q.after, source=q.text, note_id=self._ask_id)
+                                 after=q.after, source=q.text, note_id=self._ask_id, envelope=envelope)
             self._attempted(key, wrote)
             # Only the Ask note moved underneath us; a tag elsewhere is still
             # settling on its own clock and keeps its timer.
@@ -171,7 +178,9 @@ class Watcher:
         if self._dump_id not in live:
             self._dump_id = None
         def retain(key):
-            if key.startswith('tag:'): return key[4:] in live
+            if key.startswith('tag:'):
+                record = requests.current().get(key[4:])
+                return record is not None and record.envelope is not None and record.envelope.note_id in live
             if key.startswith('ask:'): return self._ask_id is not None
             if key == 'dump': return self._dump_id is not None
             return False
@@ -184,7 +193,14 @@ class Watcher:
         if found:
             self._say(f"  {len(found)} note(s) mention me")
         for m in found:
-            key = f"tag:{m.note_id}"
+            if m.envelope is None:
+                continue
+            record = requests.current().get(m.envelope.request_id)
+            if record.status != 'prepared':
+                if record.status in {'running', 'needs_review'}:
+                    self._say('  request needs review before it can run again')
+                continue
+            key = f"tag:{m.envelope.request_id}"
             if not self._worth_trying(key):
                 continue
             if not self._settled(key, m.question):
@@ -195,7 +211,7 @@ class Watcher:
             from .markup import to_text
             from . import privacy
             wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                                 here=privacy.redact(to_text(body))[:4000], source=m.raw, note_id=m.note_id, modified=m.modified)
+                                 here=privacy.redact(to_text(body))[:4000], source=m.raw, note_id=m.note_id, modified=m.modified, envelope=m.envelope)
             self._attempted(key, wrote)
             self._pending.pop(key, None)
             return
@@ -229,14 +245,27 @@ class Watcher:
             self._dump_id = None
             self._say(f"  {workspace.DUMP} not found — will look again")
             return
-        if not filer.worth_a_pass(body):
+        items = filer.unfiled(body)
+        fingerprint = "\n".join(it.anchor for it in items)
+        store = requests.current()
+        envelopes = store.observe(self._dump_id, body,
+                                  [conversation.Question(fingerprint, items[-1].near)] if items else [],
+                                  source='ask', title=workspace.DUMP, folder=workspace.FOLDER)
+        if not filer.worth_a_pass(body) or not envelopes:
             self._pending.pop("dump", None)
             return
-        fingerprint = "\n".join(it.anchor for it in filer.unfiled(body))
+        envelope = envelopes[0]
+        if store.get(envelope.request_id).status != 'prepared':
+            self._say('  filing batch already completed or needs review')
+            return
         if not self._settled("dump", fingerprint, settle=self.dump_settle):
             return
         self._say(f"\n> [{workspace.DUMP}] quiet for {int(self.dump_settle // 60)} min — filing")
-        out = filer.run(self.brain, on_step=lambda m: self._say(f"  filer: {m}"))
+        outcome = requests.run_job(envelope, lambda: filer.run(self.brain, on_step=lambda m: self._say(f"  filer: {m}")))
+        if outcome.result is None:
+            self._say(outcome.message)
+            return
+        out = outcome.result
         for result in out.results:
             self._say(f"  {result}")
         self._say(f"\n{out.summary()}\n")

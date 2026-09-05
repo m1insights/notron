@@ -440,3 +440,90 @@ untrusted model instructions, provider retention and Apple Notes non-atomic writ
 remain limitations. P02 reliability, P05 hosted tenant isolation, P06 signed/native
 startup/distribution and P07 independent security/release evidence remain open.
 Default real processing stays paused; no sandbox or production-readiness claim.
+
+### P02 Task 1 implemented request/ledger contract (2026-09-05)
+
+`requests.RequestEnvelope` implements the version-1 identity, source, text, aware
+capture/observation timestamps, IANA timezone, capture confidence, note ID, source
+revision and optional thread ID. Encrypted envelope-only context adds
+`source_text`, `reply_to`, `here`, and `source_modified`. Notes captures remain
+`captured_at=None` / `observed_only`; CLI/morning captures are explicit. `create`
+accepts `timezone_name`; otherwise it resolves validated `TZ` or the macOS
+`/etc/localtime` zoneinfo link, and pauses if it cannot establish an IANA zone.
+UTC timestamp serialization does not replace the user's timezone. Time resolution
+and delayed-date confirmation remain Task 5.
+
+`operations.OperationStore(path, payload_store)` owns SQLite schema version **1**,
+with `requests`, `operations`, and `observations` tables. Each connection enables
+foreign keys, WAL, and `synchronous=FULL`; state changes use `BEGIN IMMEDIATE`
+transactions and compare-and-swap checks. The database is 0600 in a 0700 directory;
+symlink database/sidecar paths and unknown schema versions are refused. SQLite
+contains IDs, hashes, encrypted references, statuses, timestamps, source/target
+IDs, expected revisions, external IDs and fixed failure codes, never note bodies.
+Encrypted payload references are immutable and committed before SQL references;
+orphan payloads are removed under the same transaction lock. Unknown schemas
+require explicit migration, and no legacy state is automatically imported.
+
+`prepare(request_id, operation_id, payload_hash, *, payload=None, source_id=None,
+target_id=None, expected_revision=None)` returns a frozen `Operation` record.
+`payload` is bytes and, when supplied, must match its SHA-256 digest. Identity
+reuse must match request, digest and source/target/revision metadata; an existing
+payload cannot be replaced. `get`, `payload`, `pending` and
+`transition(operation_id, expected, target, external_id=None, *, failure_code=None)`
+provide durable reads and checked transitions. `pending` includes APPLIED and
+NEEDS_REVIEW until receipted/cancelled. Valid edges are PREPARED → APPLYING,
+CANCELLED or NEEDS_REVIEW; APPLYING → APPLIED or NEEDS_REVIEW; APPLIED → RECEIPTED
+or NEEDS_REVIEW; NEEDS_REVIEW → APPLIED or CANCELLED only after an explicit outcome
+determination. No edge permits blind reapplication. External IDs cannot change.
+`source_id` denotes a source Notes ID for retention; external system IDs belong
+in `external_id`. A standalone preparation creates a request metadata stub, which
+cannot be inferred/replayed without a captured envelope.
+
+`requests.RequestStore` shares this ledger. `observe` commits all current source
+occurrences before the watcher starts its settling timer. Anchors and source spans
+are encrypted; note ID/revision identify the observation. Unique unchanged pending
+anchors follow unrelated edits and retain original observation time. Changed
+unexecuted text cancels its old request and creates a distinct request. Initially
+separate identical spans receive distinct IDs. Ambiguous copied/reordered pending
+turns stop for review. Completed turns remain recognized while present; a later
+identical unanswered turn following the completed turn's receipt receives a new
+ID even when no empty poll intervened. Without distinguishable occurrence evidence,
+identity cannot recover an unobserved delete/retype of identical text at precisely
+the same position; no Apple per-line identity or authenticated signature is claimed.
+
+`graph.run_request(envelope, *, brain, dry_run=False)` commits/captures and atomically
+claims the request before the first node. `graph.run` remains a wrapper and accepts
+`request_id`. `State` exposes `request_id`, `envelope` and `source_revision`.
+Completed, cancelled, running and review-needed IDs do not infer again. A live
+source-revision check precedes admission; a changed source waits for re-observation.
+Exceptions/failed results stop at request `needs_review`; a crash leaving `running`
+also blocks replay. Request completion describes graph completion, **not verified
+receipts or exactly-once effects**. Side-effect reconciliation and inference/receipt
+recovery remain Task 3. Dry runs capture metadata but neither claim nor complete a
+real request, and continue to pass `dry_run` to effect-producing nodes.
+
+Ask and mention paths carry persisted envelopes into the graph; independent
+settling/cooldown keys use full request IDs. Tagged context is bounded/redacted from
+the same observed body and refreshed with its revision before inference. Envelopes
+and caller-supplied IDs never grant permissions: only the existing watcher-scoped
+`policy.explicit_reply` capability authorizes a reply. `requests.active_request()`
+provides correlation during graph/filing execution, never a permission capability.
+CLI `ask` and `file` accept `--request-id`. Automatic Brain Dump batches persist
+before settling and use `requests.run_job` to claim before `filer.run`; CLI file
+uses the same admission. Care/reflection/index maintenance job orchestration and
+worker exclusivity remain Task 6; source/effect revision protection remains Task 2.
+
+P01 retention now covers request and operation payloads. Policy changes invalidate
+mixed-source payloads; successful live inventories remove deleted/unreadable source
+content. Durable content-free tombstones prevent regrant/retry from resurrecting
+purged work. Purged Notes observation history requires explicit review before more
+automatic work in that source; there is no automatic reset. Encrypted orphan deletion
+uses directory fsync. Metadata/pending history is retained conservatively; bounded
+ledger compaction, review/reset UI, old scanner migration, receipt recovery, worker
+leases and retry budgets remain Tasks 3/6. These are required before real use;
+P06's signed-startup pause is unchanged.
+
+Evidence: [Task 1 handoff](handoffs/2026-09-05-P02-task-1.md). No dependency,
+provider or model changed, no live data/provider/native execution, and no merge or
+push. Task 2's separately authored acceptance tests are intentionally excluded from
+Task 1's gate while that sequential task is unimplemented.

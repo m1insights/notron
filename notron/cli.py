@@ -83,10 +83,10 @@ def cmd_ask(args):
     brain = _brain()
     request = " ".join(args.request)
 
-    if args.quiet:
+    if getattr(args, 'quiet', False):
         # For a caller that just wants the words back — a Shortcut piping into
         # "Speak Text", say. No trace, no blank lines, no results dump.
-        state = graph.run(request, brain=brain, dry_run=args.dry_run)
+        state = graph.run(request, brain=brain, dry_run=args.dry_run, request_id=getattr(args, 'request_id', None))
         print(state.answer.strip() if state.answer else "I don't have anything to say to that.")
         return
 
@@ -95,7 +95,7 @@ def cmd_ask(args):
             print(f"  · {state.trace[-1]}")
 
     print()
-    state = graph.run(request, brain=brain, dry_run=args.dry_run, on_node=trace)
+    state = graph.run(request, brain=brain, dry_run=args.dry_run, on_node=trace, request_id=getattr(args, 'request_id', None))
     print(f"\n{state.answer or '(nothing to say)'}\n")
     for r in state.results:
         print(f"  {r}")
@@ -224,10 +224,18 @@ def cmd_listen(args):
 
 
 def cmd_file(args):
-    from . import filer
+    from . import filer, requests
 
+    brain = _brain()
+    envelope = requests.create('file my brain dump', request_id=getattr(args, 'request_id', None))
     print()
-    out = filer.run(_brain(), dry_run=args.dry_run, on_step=lambda m: print(f"  · {m}"))
+    outcome = requests.run_job(envelope, lambda: filer.run(brain, dry_run=args.dry_run,
+                                                          on_step=lambda m: print(f"  · {m}")),
+                               dry_run=args.dry_run)
+    if outcome.result is None:
+        print(outcome.message)
+        return
+    out = outcome.result
     for r in out.results:
         print(f"  {r}")
     print(f"\n{out.summary()}\n")
@@ -355,6 +363,7 @@ def main(argv=None):
     a.add_argument("request", nargs="+")
     a.add_argument("--dry-run", action="store_true", help="run the graph, write nothing")
     a.add_argument("--quiet", action="store_true", help="print only the answer — for scripts/Shortcuts")
+    a.add_argument("--request-id", help="stable caller ID for this request; reuse only for retries")
     a.set_defaults(fn=cmd_ask)
 
     pl = sub.add_parser("plan", help="have Notron plan your day or week")
@@ -389,6 +398,7 @@ def main(argv=None):
 
     fi = sub.add_parser("file", help=f"sort {workspace.DUMP} into the right notes now")
     fi.add_argument("--dry-run", action="store_true", help="judge every line, write nothing")
+    fi.add_argument("--request-id", help="stable caller ID for this filing request")
     fi.set_defaults(fn=cmd_file)
 
     ix = sub.add_parser("index", help="teach Notron your notes (run after adding a lot)")
