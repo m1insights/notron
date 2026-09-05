@@ -111,6 +111,9 @@ def resolve_local(value: str, timezone_name: str) -> datetime:
 
 
 def unsupported_request(text: str) -> bool:
+    # Plural weekdays request recurrence even without "every" or "weekly".
+    if re.search(r"\b(?:" + "|".join(WEEKDAYS) + r")s\b", text, re.I):
+        return True
     # Conservative compound requests wait for separate requests. No partial success.
     return bool(re.search(r"\b(every|each|weekdays|weekends|annually|biweekly|fortnightly|daily|weekly|monthly|yearly|recurr(?:ing|ence)?|and|then|also)\b|[;\n]\s*(?:remind|schedule|create|add|set|complete|tick)\b", text, re.I))
 

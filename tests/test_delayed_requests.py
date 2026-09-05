@@ -254,3 +254,51 @@ def monday_clock(monkeypatch):
             return MONDAY.astimezone(tz) if tz else MONDAY.replace(tzinfo=None)
     monkeypatch.setattr(executor, 'datetime', Clock)
     monkeypatch.setattr(guard, 'datetime', Clock)
+
+
+@pytest.mark.parametrize('weekday', when.WEEKDAYS)
+def test_plural_weekday_recurrence_is_rejected_before_scheduler_inference(weekday):
+    class Brain:
+        def ask_json(self, **kw):
+            pytest.fail('recurring request must not reach extraction')
+    request = envelope(text=f'Remind me {weekday.capitalize()}s to call Sam')
+    result = nodes.scheduler(State(request=request.text, envelope=request, intent='remind'), brain=Brain())
+    assert not result.actions and 'non-recurring' in result.answer
+
+
+def test_resumed_prepared_plural_weekday_recurrence_cannot_save(monkeypatch, monday_clock):
+    from dataclasses import asdict
+    from notron import requests, recovery, operations, reminders, executor
+    request = envelope(text='Remind me Mondays to call Sam')
+    requests.current().capture(request)
+    requests.current().claim(request.request_id)
+    action = Action('reminder', 'create', 'Call Sam', when='2026-09-21T10:00-04:00', target_id='inbox', timezone='America/New_York')
+    saved = []
+    monkeypatch.setattr(reminders, 'create', lambda *a, **kw: saved.append(kw) or 'unexpected-save')
+    with requests.execution(request):
+        recovery.put(request.request_id, action.operation_id, {'action': asdict(action)}, [])
+        result = executor.Executor(audit=False).do(action, request=request.text, resumed=True)
+    assert not result.ok and result.needs_confirmation and 'non-recurring' in result.reason
+    assert not saved
+    assert operations.current().get(action.operation_id).status == operations.S.CANCELLED
+
+
+@pytest.mark.parametrize('saved_status', ['applied', 'applying'])
+def test_plural_weekday_refusal_preserves_existing_effect_recovery(saved_status, monkeypatch, monday_clock):
+    from dataclasses import asdict
+    from notron import requests, recovery, operations, reminders, executor
+    request = envelope(text='Remind me Mondays to call Sam')
+    requests.current().capture(request)
+    requests.current().claim(request.request_id)
+    action = Action('reminder', 'create', 'Call Sam', when='2026-09-21T10:00-04:00', target_id='inbox', timezone='America/New_York')
+    monkeypatch.setattr(reminders, 'create', lambda *a, **kw: pytest.fail('saved effect must not repeat'))
+    monkeypatch.setattr(reminders, 'find_by_operation', lambda oid: ['already-saved'])
+    with requests.execution(request):
+        recovery.put(request.request_id, action.operation_id, {'action': asdict(action)}, [])
+        store = operations.current()
+        store.transition(action.operation_id, operations.S.PREPARED, operations.S.APPLYING)
+        if saved_status == 'applied':
+            store.transition(action.operation_id, operations.S.APPLYING, operations.S.APPLIED, external_id='already-saved')
+        result = executor.Executor(audit=False).do(action, request=request.text, resumed=True)
+    assert result.ok and result.ref == 'already-saved'
+    assert operations.current().get(action.operation_id).status == operations.S.APPLIED
