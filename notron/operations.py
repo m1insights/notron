@@ -80,6 +80,13 @@ class OperationStore:
         self.path, self.payload_store = Path(path), payload_store
         private_directory(self.path.parent)
         self._safe_paths()
+        marker = 'ledger-history-' + sha256(str(self.path.absolute()).encode()).hexdigest()
+        marker_path = self.payload_store.root / (marker + '.enc')
+        history_exists = marker_path.exists() or any(self.payload_store.root.glob('operation-*.enc'))
+        if (not self.path.exists() or self.path.stat().st_size == 0) and history_exists:
+            raise StorageError('Operation history exists but its ledger is missing; explicit recovery is required.')
+        if marker_path.exists() and self.payload_store.read(marker) != b'notron-operation-ledger-v1':
+            raise StorageError('Operation history marker is invalid; explicit recovery is required.')
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         os.close(fd)
         os.chmod(self.path, 0o600)
@@ -88,6 +95,8 @@ class OperationStore:
             if version not in (0, SCHEMA_VERSION):
                 raise StorageError('Operation schema requires explicit migration.')
             if version == 0:
+                if history_exists:
+                    raise StorageError('Operation history exists without a valid ledger; explicit recovery is required.')
                 if db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchone():
                     raise StorageError('Unrecognized operation database; processing paused.')
                 db.executescript('''
@@ -131,6 +140,8 @@ class OperationStore:
                     PRAGMA user_version=1;
                     COMMIT;
                 ''')
+        if not marker_path.exists():
+            self.payload_store.write(marker, b'notron-operation-ledger-v1')
         # Persist directory entries as well as the SQLite transaction contents.
         fd = os.open(self.path.parent, os.O_RDONLY)
         try:

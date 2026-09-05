@@ -527,3 +527,23 @@ Evidence: [Task 1 handoff](handoffs/2026-09-05-P02-task-1.md). No dependency,
 provider or model changed, no live data/provider/native execution, and no merge or
 push. Task 2's separately authored acceptance tests are intentionally excluded from
 Task 1's gate while that sequential task is unimplemented.
+
+Task 1 independent-review corrections: unresolved request rows remain part of
+occurrence matching even after the latest visible set becomes empty; restoring a
+running/review-needed occurrence preserves its ID and review requirement. Observation
+payloads now include encrypted block hashes to map unchanged source spans across
+unrelated edits. Two identical pending turns keep their distinct identities through
+such edits. A ledger-completed turn with a receipt at its observed span is removed
+from unanswered matching, so its identical pending sibling retains its own ID after
+the receipt shifts positions. Copied/reordered ambiguous occurrences still pause.
+Initial v1 list-only observation payloads remain readable, with conservative matching
+when block evidence is absent; SQL schema version remains 1.
+
+An authenticated `ledger-history-<path digest>.enc` initialization marker lives in
+the same payload store and survives content purging. A missing/empty/version-zero
+ledger with that marker or surviving operation payloads fails closed before history
+can be recreated or pruned. Existing valid v1 ledgers acquire a marker when first
+opened by this revision. Recovery must restore the matched ledger/payload store;
+there is no automatic reset. This detects missing/empty state and authenticates its
+marker, not arbitrary rollback/replacement of a valid database by privileged local
+software. Payload stores are dedicated to one ledger.

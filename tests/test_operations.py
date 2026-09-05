@@ -105,3 +105,39 @@ def test_policy_change_purges_payload_for_standalone_operation():
     library.save(lib)
     assert ledger.payload('standalone-op') is None
     assert ledger.get('standalone-op').status == S.NEEDS_REVIEW
+
+
+@pytest.mark.parametrize('loss', ['missing', 'empty'])
+def test_missing_ledger_with_surviving_encrypted_history_fails_closed(loss):
+    from notron import operations, requests
+    from notron.securestore import StorageError
+    store = requests.current()
+    envelope = requests.create('synthetic request')
+    store.capture(envelope)
+    store.claim(envelope.request_id)
+    artifacts = {path.name: path.read_bytes() for path in store.operations.payload_store.root.glob('*.enc')}
+    if loss == 'missing':
+        store.operations.path.unlink()
+    else:
+        store.operations.path.write_bytes(b'')
+    with pytest.raises(StorageError):
+        operations.current()
+    assert store.operations.path.exists() == (loss == 'empty')
+    assert {path.name: path.read_bytes() for path in store.operations.payload_store.root.glob('*.enc')} == artifacts
+
+
+@pytest.mark.parametrize('loss', ['missing', 'empty'])
+def test_missing_ledger_still_fails_after_content_was_purged(loss):
+    from notron import operations, requests
+    from notron.securestore import StorageError
+    store = requests.current()
+    envelope = requests.create('synthetic request')
+    store.capture(envelope)
+    store.purge_sources(all_content=True)
+    if loss == 'missing':
+        store.operations.path.unlink()
+    else:
+        store.operations.path.write_bytes(b'')
+    assert list(store.operations.payload_store.root.glob('operation-*.enc')) == []
+    with pytest.raises(StorageError):
+        operations.current()

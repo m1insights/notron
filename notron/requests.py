@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from hashlib import sha256
 import json
 import os
@@ -197,11 +198,12 @@ class RequestStore:
         them for review. Completed occurrences remain recognized while present.
         A remove/answer observation followed by resubmission creates a new ID.
         """
-        from . import conversation
+        from . import conversation, notedoc
         identity(note_id)
         if source not in {'ask', 'mention'}:
             raise ValueError('Occurrences require a Notes source.')
         rev = revision(body)
+        blocks = [revision(text) for text in notedoc.texts(body)]
         items = [{'anchor': revision(q.text), 'after': q.after, 'raw': q.text} for q in questions]
         if len({q.after for q in questions}) != len(questions):
             raise ValueError('Occurrence spans must be distinct.')
@@ -209,14 +211,46 @@ class RequestStore:
             row = db.execute('SELECT * FROM observations WHERE note_id=? AND source=?', (note_id, source)).fetchone()
             if row and row['payload_ref'] is None:
                 raise OperationConflict('Source history was purged; explicit review is required.')
-            old = json.loads(self.operations.payload_store.read(row['payload_ref'])) if row else []
+            snapshot = json.loads(self.operations.payload_store.read(row['payload_ref'])) if row else []
+            # Accept the initial v1 list representation conservatively; only
+            # newer snapshots have block evidence for duplicate-span rebasing.
+            old = snapshot['items'] if isinstance(snapshot, dict) else snapshot
+            old_blocks = snapshot.get('blocks', []) if isinstance(snapshot, dict) else []
             if row and row['revision'] == rev:
                 # A changed caller observation with identical body is not trusted.
                 if [(x['anchor'], x['after']) for x in old] != [(x['anchor'], x['after']) for x in items]:
                     raise OperationConflict('Source occurrence observation is inconsistent.')
                 return [self._read(db.execute('SELECT * FROM requests WHERE request_id=?', (x['id'],)).fetchone()).envelope for x in old]
-            counts, previous = Counter(x['anchor'] for x in items), Counter(x['anchor'] for x in old)
+            # The latest visible observation is not the uncertainty history.
+            # Temporarily removing a running/review-needed turn cannot erase its
+            # durable identity and authorize the same work when it reappears.
+            visible_ids = {x['id'] for x in old}
+            for historical in db.execute("SELECT * FROM requests WHERE note_id=? AND status IN ('running','needs_review') AND payload_ref IS NOT NULL", (note_id,)).fetchall():
+                if historical['request_id'] in visible_ids:
+                    continue
+                record = self._read(historical)
+                envelope = record.envelope
+                if envelope.source == source:
+                    old.append({'id': envelope.request_id,
+                                'anchor': revision(envelope.source_text or envelope.text),
+                                'after': envelope.reply_to[2] if envelope.reply_to else -1})
             old_by_id = {x['id']: self._read(db.execute('SELECT * FROM requests WHERE request_id=?', (x['id'],)).fetchone()) for x in old}
+            # A ledger-completed occurrence with a receipt at its observed span
+            # has left the unanswered set. Remove only that proven occurrence
+            # from matching, preserving a distinct identical pending sibling.
+            old = [x for x in old if not (
+                old_by_id[x['id']].status == 'completed'
+                and x['after'] in self._answered_anchor_spans(body, old_by_id[x['id']].envelope.source_text)
+                and not any(item['after'] == x['after'] for item in items))]
+            counts, previous = Counter(x['anchor'] for x in items), Counter(x['anchor'] for x in old)
+            span_map = {}
+            if old_blocks:
+                for old_start, new_start, length in SequenceMatcher(None, old_blocks, blocks, autojunk=False).get_matching_blocks():
+                    span_map.update((old_start + offset, new_start + offset) for offset in range(length))
+            stable_spans = (bool(old_blocks) and len(old) == len(items)
+                            and all(previous_item['anchor'] == current_item['anchor']
+                                    and span_map.get(previous_item['after']) == current_item['after']
+                                    for previous_item, current_item in zip(old, items)))
             active = {'prepared', 'running', 'needs_review'}
             overlap_old = [x['anchor'] for x in old if counts[x['anchor']] and old_by_id[x['id']].status in active]
             overlap_new = [x['anchor'] for x in items if x['anchor'] in overlap_old]
@@ -226,12 +260,12 @@ class RequestStore:
             for item in items:
                 candidates = [x for x in old if x['anchor'] == item['anchor'] and x['id'] not in used]
                 duplicates = counts[item['anchor']] > 1 or previous[item['anchor']] > 1
-                ambiguous = duplicates and any(old_by_id[x['id']].status in active for x in old if x['anchor'] == item['anchor'])
+                ambiguous = duplicates and not stable_spans and any(old_by_id[x['id']].status in active for x in old if x['anchor'] == item['anchor'])
                 match = None
                 if len(candidates) == 1 and not duplicates:
                     match = candidates[0]
                 else:
-                    exact = [x for x in candidates if x['after'] == item['after']]
+                    exact = [x for x in candidates if (span_map.get(x['after']) if stable_spans else x['after']) == item['after']]
                     if len(exact) == 1:
                         match = exact[0]
                     elif candidates:
@@ -277,16 +311,18 @@ class RequestStore:
                 review = copied or record.status != 'prepared'
                 db.execute('UPDATE requests SET status=?,failure_code=?,updated_at=? WHERE request_id=?',
                            ('needs_review' if review else 'cancelled', 'ambiguous_occurrence' if copied else 'source_changed', now(), item['id']))
-            ref = self.operations.put_payload(json.dumps(observations).encode())
+            ref = self.operations.put_payload(json.dumps({'items': observations, 'blocks': blocks}).encode())
             db.execute('INSERT INTO observations VALUES(?,?,?,?) ON CONFLICT(note_id,source) DO UPDATE SET '
                        'revision=excluded.revision,payload_ref=excluded.payload_ref', (note_id, source, rev, ref))
         self.prune_payloads()
         return envelopes
 
     @staticmethod
-    def _has_answered_anchor(body, raw):
+    def _answered_anchor_spans(body, raw):
         from . import conversation, notedoc
-        texts = [text.strip() for text in notedoc.texts(body) if text.strip()]
+        indexed = [(index, text.strip()) for index, text in enumerate(notedoc.texts(body)) if text.strip()]
+        texts = [text for _, text in indexed]
+        spans = set()
         for end in range(len(texts)):
             for start in range(end, -1, -1):
                 anchor = '\n'.join(texts[start:end + 1])
@@ -297,8 +333,12 @@ class RequestStore:
                     if after < len(texts) and texts[after] == conversation.QA_RULE:
                         after += 1
                     if after < len(texts) and texts[after].startswith(conversation.SIGNATURE):
-                        return True
-        return False
+                        spans.add(indexed[end][0])
+        return spans
+
+    @classmethod
+    def _has_answered_anchor(cls, body, raw):
+        return bool(cls._answered_anchor_spans(body, raw))
 
     @staticmethod
     def _context(body):

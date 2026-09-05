@@ -285,3 +285,51 @@ def test_identical_resubmission_after_receipt_needs_no_empty_poll():
     second = store.observe('n1', next_body, questions, source='ask', title='Ask', folder='Notes')[0]
     assert first.request_id != second.request_id
     assert store.get(second.request_id).status == 'prepared'
+
+
+@pytest.mark.parametrize('finish_review', [False, True])
+def test_uncertain_request_keeps_identity_across_absence_and_restart(finish_review):
+    store = requests.current()
+    first = observe(store)[0]
+    assert store.claim(first.request_id)
+    if finish_review:
+        store.finish(first.request_id, needs_review=True)
+    observe(store, 'source temporarily empty', items=[])
+    reopened = RequestStore(store.operations)
+    restored = observe(reopened, 'source restored')[0]
+    assert restored.request_id == first.request_id
+    assert reopened.get(restored.request_id).status == 'needs_review'
+    assert not reopened.claim(restored.request_id)
+
+
+def test_receipt_for_first_identical_turn_preserves_second_pending_identity():
+    from notron import conversation
+    store = requests.current()
+    first_body = '<div>Ask</div><div>remind me to call</div><div></div><div></div><div>remind me to call</div>'
+    questions = conversation.unanswered(first_body, ignore=('Ask',))
+    first, second = store.observe('n1', first_body, questions, source='ask', title='Ask', folder='Notes')
+    assert store.claim(first.request_id)
+    store.finish(first.request_id)
+    after_receipt = '<div>Ask</div><div>remind me to call</div><div>Notron:</div><div>Reminder set</div><div>———</div><div></div><div></div><div>remind me to call</div>'
+    remaining = store.observe('n1', after_receipt, conversation.unanswered(after_receipt, ignore=('Ask',)), source='ask', title='Ask', folder='Notes')
+    assert len(remaining) == 1 and remaining[0].request_id == second.request_id
+    assert store.get(second.request_id).status == 'prepared'
+    assert store.claim(second.request_id)
+    store.finish(second.request_id)
+    assert all(store.get(envelope.request_id).status == 'completed' for envelope in (first, second))
+
+
+@pytest.mark.parametrize('edit', ['prefix', 'suffix'])
+def test_identical_pending_turns_keep_identity_across_unrelated_edits(edit):
+    from notron import conversation
+    store = requests.current()
+    body = '<div>Ask</div><div>remind me to call</div><div></div><div></div><div>remind me to call</div>'
+    first = store.observe('n1', body, conversation.unanswered(body, ignore=('Ask',)), source='ask', title='Ask', folder='Notes')
+    if edit == 'prefix':
+        updated = '<div>unrelated context</div><div></div><div></div>' + body
+    else:
+        updated = body + '<div></div><div></div><div>unrelated context</div>'
+    questions = [q for q in conversation.unanswered(updated, ignore=('Ask',)) if q.text == 'remind me to call']
+    second = store.observe('n1', updated, questions, source='ask', title='Ask', folder='Notes')
+    assert [envelope.request_id for envelope in second] == [envelope.request_id for envelope in first]
+    assert all(store.get(envelope.request_id).status == 'prepared' for envelope in second)
