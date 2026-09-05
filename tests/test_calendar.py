@@ -68,24 +68,22 @@ def test_creating_an_event_sends_both_ends():
         return {"id": "uid-1", "calendar": "Home"}
 
     uid = cal.create("Dentist", start_iso="2026-09-03T14:00",
-                     end_iso="2026-09-03T15:00", caller=spy)
+                     end_iso="2026-09-03T15:00", target_id="home-id", caller=spy)
     assert uid == "uid-1"
-    assert seen["data"]["start"] == "2026-09-03T14:00"
-    assert seen["data"]["end"] == "2026-09-03T15:00"
+    assert seen["data"]["start"] == "2026-09-03T14:00+00:00"
+    assert seen["data"]["end"] == "2026-09-03T15:00+00:00"
 
 
-def test_an_event_with_no_end_time_gets_a_sensible_hour():
-    seen = {}
-    cal.create("Coffee", start_iso="2026-09-03T14:00",
-               caller=lambda body, **kw: (seen.setdefault("data", kw["data"]), {"id": "u", "calendar": "x"})[1])
-    assert seen["data"]["end"] == "2026-09-03T15:00"
+def test_an_event_with_no_end_time_requires_confirmation():
+    import pytest
+    with pytest.raises(ValueError, match='duration'):
+        cal.create("Coffee", start_iso="2026-09-03T14:00", caller=lambda *a, **kw: pytest.fail('must not save'))
 
 
-def test_an_end_before_the_start_is_corrected_not_saved():
-    seen = {}
-    cal.create("Backwards", start_iso="2026-09-03T14:00", end_iso="2026-09-03T13:00",
-               caller=lambda body, **kw: (seen.setdefault("data", kw["data"]), {"id": "u", "calendar": "x"})[1])
-    assert seen["data"]["end"] == "2026-09-03T15:00"
+def test_an_end_before_the_start_is_refused_not_changed():
+    import pytest
+    with pytest.raises(ValueError, match='end must be after'):
+        cal.create("Backwards", start_iso="2026-09-03T14:00", end_iso="2026-09-03T13:00", caller=lambda *a, **kw: pytest.fail('must not save'))
 
 
 def test_an_unusable_start_is_refused_before_anything_is_saved():

@@ -412,7 +412,7 @@ def test_a_sentence_and_the_list_under_it_file_as_one_thought_in_journal_shape(s
         ("took vita", [], "Supps")]
     assert "Filed 2 thoughts → Supps (2)." in out.summary()
     supps = store.text("Supps")
-    assert supps == ("Supps\n\nMagnesium\nSeriphos\n\nWed 2 Sep 2026\n"
+    assert supps == ("Supps\n\nMagnesium\nSeriphos\n\nWed 2 Sep 2026\n(filing date; capture date unknown)\n"
                      "The stack did really well today once the trazodone wore off.\n"
                      "• Concerta 36mg\n• Avmacol\n• PQQ\n\ntook vitamin D today")
     d = store.text(workspace.DUMP)
@@ -433,7 +433,7 @@ def test_a_second_pass_the_same_day_joins_the_entry_already_there(store, monkeyp
     filer.run(FilerBrain({"zinc at lunch": {"note": "Supps"}}, shapes={"Supps": "list"}))
 
     assert store.text("Supps").count("Wed 2 Sep 2026") == 1
-    assert store.text("Supps").endswith("Wed 2 Sep 2026\ntook vitamin D today\n\nzinc at lunch")
+    assert store.text("Supps").endswith("Wed 2 Sep 2026\n(filing date; capture date unknown)\ntook vitamin D today\n\n(filing date; capture date unknown)\nzinc at lunch")
     assert filer._state()["shapes"] == {"Supps": "log"}, "the first shape sticks; a later 'list' is ignored"
 
 

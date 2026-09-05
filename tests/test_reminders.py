@@ -45,7 +45,7 @@ def test_creating_a_reminder_sends_an_iso_date_the_script_can_use():
         seen["data"] = kw["data"]
         return {"id": "x-new"}
 
-    rid = reminders.create("Call the pharmacy", when_iso="2026-09-03T09:00", caller=spy)
+    rid = reminders.create("Call the pharmacy", when_iso="2026-09-03T09:00", target_id="inbox-id", caller=spy)
     assert rid == "x-new"
     assert seen["data"]["when"] == "2026-09-03T09:00"
 
@@ -61,5 +61,5 @@ def test_a_reminder_can_be_found_by_what_the_user_actually_called_it():
         {"id": "x-1", "title": "Call the pharmacy about the repeat", "list": "Inbox", "due": ""},
         {"id": "x-2", "title": "Buy milk", "list": "Inbox", "due": ""},
     ]
-    assert reminders.find_open("call the pharmacy", caller=_fake(payload)).id == "x-1"
-    assert reminders.find_open("book a flight", caller=_fake(payload)) is None
+    assert reminders.find_open("call the pharmacy", caller=_fake(payload))[0].id == "x-1"
+    assert reminders.find_open("book a flight", caller=_fake(payload)) == []

@@ -534,7 +534,15 @@ def _shape_for(title: str, said: dict[str, str], state: dict) -> str:
 
 def _entry_markdown(group: list[Item], *, shape: str, existing: str = '') -> str:
     entries = [(it.text, [p.text for p in it.parts]) for it in group]
-    return layout.markdown(entries, shape=shape, existing_text=markup.to_text(existing), day=_today())
+    from .requests import active_request
+    from zoneinfo import ZoneInfo
+    envelope = active_request()
+    # A CLI 'file my dump' capture dates the command, not those older thoughts.
+    captured_items = [part for item in group for part in (item, *item.parts)]
+    known = bool(envelope and envelope.captured_at and envelope.source_text and
+                 all(item.note_id == envelope.note_id and item.anchor in envelope.source_text for item in captured_items))
+    day = envelope.captured_at.astimezone(ZoneInfo(envelope.timezone)).date() if known else _today()
+    return layout.markdown(entries, shape=shape, existing_text=markup.to_text(existing), day=day, capture_known=known)
 
 
 def _bind_items(items: list[Item]) -> list[Item]:

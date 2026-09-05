@@ -32,14 +32,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from . import notedoc, privacy, when, workspace
 
 MAX_BODY_CHARS = 200_000
 MAX_TITLE_CHARS = 300
 MAX_AHEAD_DAYS = 400
-MAX_BEHIND_HOURS = 12
 
 KINDS = {"reminder": {"create", "complete"}, "event": {"create"}}
 
@@ -140,7 +139,7 @@ def latest_hour(about: str) -> int | None:
     return _hour(LATEST.search(about or ""))
 
 
-def check_action(action, *, about: str = "", request: str = "", now: datetime | None = None) -> Verdict:
+def check_action(action, *, about: str = "", request: str = "", now: datetime | None = None, timezone_name: str | None = None) -> Verdict:
     """Judge one thing Notron wants to do outside Notes.
 
     The two hard promises live here. A calendar event may only ever be created —
@@ -149,7 +148,7 @@ def check_action(action, *, about: str = "", request: str = "", now: datetime | 
     reminder may be created or completed, never deleted: 'done' must not silently
     mean 'gone'.
     """
-    now = now or datetime.now()
+    now = now or datetime.now().astimezone()
 
     allowed_ops = KINDS.get(action.kind)
     if allowed_ops is None:
@@ -184,11 +183,21 @@ def check_action(action, *, about: str = "", request: str = "", now: datetime | 
         return Verdict(False, f"I couldn't read {action.when!r} as a date. "
                               "Give me a day and a time and I'll set it.")
 
-    if moment < now - timedelta(hours=MAX_BEHIND_HOURS):
+    from .requests import local_timezone
+    try:
+        from zoneinfo import ZoneInfo
+        zone = ZoneInfo(timezone_name or local_timezone())
+        moment = when.resolve_local(action.when, zone.key).astimezone(zone)
+    except ValueError as exc:
+        return Verdict(False, str(exc))
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=moment.tzinfo)
+    past = moment.timestamp() < now.timestamp() if when.has_time(action.when) else moment.date() < now.astimezone(moment.tzinfo).date()
+    if past:
         return Verdict(False, f"that lands in the past ({when.human(moment)}) — "
                               "I've probably got the year or the day wrong. Say the date.")
 
-    if moment > now + timedelta(days=MAX_AHEAD_DAYS):
+    if moment.timestamp() > now.timestamp() + MAX_AHEAD_DAYS * 86400:
         return Verdict(False, f"that lands on {when.human(moment)}, over a year away. "
                               "That is usually a typo. Say the date and I'll set it.")
 

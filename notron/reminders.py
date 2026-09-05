@@ -22,6 +22,7 @@ MAX_IN_PROMPT = 25
 FETCH_SECONDS = 15
 
 _OPEN = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var pred = store.predicateForIncompleteRemindersWithDueDateStartingEndingCalendars($(), $(), $());
 var out = null;
@@ -34,7 +35,7 @@ store.fetchRemindersMatchingPredicateCompletion(pred, function (arr) {
       var d = $.NSCalendar.currentCalendar.dateFromComponents(r.dueDateComponents);
       if (!d.isNil()) {
         var f = $.NSDateFormatter.alloc.init;
-        f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mm';
+        f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mmXXX';
         due = ObjC.unwrap(f.stringFromDate(d));
       }
     }
@@ -42,16 +43,19 @@ store.fetchRemindersMatchingPredicateCompletion(pred, function (arr) {
       id: ObjC.unwrap(r.calendarItemIdentifier),
       title: ObjC.unwrap(r.title) || '',
       list: ObjC.unwrap(r.calendar.title) || '',
+      recurring: !r.recurrenceRules.isNil() && r.recurrenceRules.count > 0,
       due: due
     });
   }
   out = rows;
 });
 awaitDone(function () { return out !== null; }, %d);
-JSON.stringify(out === null ? [] : out);
+if (out === null) throw new Error('reminders fetch timed out');
+JSON.stringify(out);
 """ % FETCH_SECONDS
 
 _LISTS = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeReminder);
 var names = [];
@@ -60,28 +64,24 @@ JSON.stringify(names);
 """
 
 _CREATE = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var r = $.EKReminder.reminderWithEventStore(store);
 r.title = input.title;
 r.notes = input.notes;
-var listName = input.list;
-var target = $();
-var cals = store.calendarsForEntityType($.EKEntityTypeReminder);
-for (var i = 0; i < cals.count; i++) {
-  var c = cals.objectAtIndex(i);
-  if (listName && ObjC.unwrap(c.title) === listName) { target = c; break; }
-}
-if (target.isNil()) target = store.defaultCalendarForNewReminders;
+var target = store.calendarWithIdentifier(input.target_id);
+if (target.isNil() || !Boolean(target.allowsContentModifications)) throw new Error('selected list unavailable');
 r.calendar = target;
 var iso = input.when;
 if (iso) {
-  var f = $.NSDateFormatter.alloc.init;
-  f.dateFormat = iso.length > 10 ? 'yyyy-MM-dd\\'T\\'HH:mm' : 'yyyy-MM-dd';
-  var d = f.dateFromString(iso);
+  var d = $.NSDate.dateWithTimeIntervalSince1970(input.timestamp);
   var units = iso.length > 10
     ? ($.NSCalendarUnitYear | $.NSCalendarUnitMonth | $.NSCalendarUnitDay | $.NSCalendarUnitHour | $.NSCalendarUnitMinute)
     : ($.NSCalendarUnitYear | $.NSCalendarUnitMonth | $.NSCalendarUnitDay);
-  r.dueDateComponents = $.NSCalendar.currentCalendar.componentsFromDate(units, d);
+  var cal = $.NSCalendar.alloc.initWithCalendarIdentifier($.NSCalendarIdentifierGregorian);
+  cal.timeZone = $.NSTimeZone.timeZoneForSecondsFromGMT(input.offset);
+  r.dueDateComponents = cal.componentsFromDate(units, d);
+  r.dueDateComponents.timeZone = cal.timeZone;
   if (iso.length > 10) r.addAlarm($.EKAlarm.alarmWithAbsoluteDate(d));
 }
 var err = Ref();
@@ -90,10 +90,12 @@ return JSON.stringify(ok ? {id: ObjC.unwrap(r.calendarItemIdentifier)} : {error:
 """
 
 _COMPLETE = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var item = store.calendarItemWithIdentifier(input.id);
 if (item.isNil()) { return JSON.stringify({error: 'not found'}); }
 else {
+  if (!item.recurrenceRules.isNil() && item.recurrenceRules.count > 0) throw new Error('recurring reminders require manual completion');
   item.completed = true;
   var err = Ref();
   var ok = store.saveReminderCommitError(item, true, err);
@@ -108,6 +110,7 @@ class Reminder:
     title: str
     list_name: str
     due: str          # ISO, or "" when undated
+    recurring: bool = False
 
 
 def lists(*, caller=None) -> list[str]:
@@ -116,8 +119,10 @@ def lists(*, caller=None) -> list[str]:
 
 def open_items(*, caller=None) -> list[Reminder]:
     rows = (caller or eventkit.run)(_OPEN)
+    if not isinstance(rows, list):
+        raise eventkit.EventKitError("Reminders unavailable; context incomplete")
     return [Reminder(id=r.get("id", ""), title=r.get("title", ""),
-                     list_name=r.get("list", ""), due=r.get("due", ""))
+                     list_name=r.get("list", ""), due=r.get("due", ""), recurring=bool(r.get("recurring")))
             for r in rows if r.get("title", "").strip()]
 
 
@@ -134,14 +139,24 @@ def summary(*, caller=None, limit: int = MAX_IN_PROMPT) -> str:
 
 
 def create(title: str, *, notes: str = "", list_name: str = "",
-           when_iso: str | None = None, caller=None) -> str:
+           when_iso: str | None = None, target_id: str | None = None, timezone_name: str | None = None, caller=None) -> str:
     """Make a reminder. Returns its id. Called only by the Executor.
 
-    A dated reminder also gets an alarm — a due date alone shows in the app but does
-    not notify, and a reminder that does not buzz is just a note with a circle.
+    Timed reminders get an explicit alarm. Date-only reminders retain a due date
+    without an explicit timed alarm; receipts explain that distinction.
     """
+    from . import when
+    from .requests import local_timezone
+    if not target_id:
+        hits = resolve_targets(list_name, caller=caller)
+        if len(hits) != 1:
+            raise ValueError('Which reminder list? Give an existing, unambiguous list name.')
+        target_id = hits[0]['id']
+    dt = when.resolve_local(when_iso, timezone_name or local_timezone()) if when_iso else None
     out = (caller or eventkit.run)(_CREATE, data={
-        "title": title, "notes": notes, "list": list_name, "when": when_iso or ""})
+        "title": title, "notes": notes, "list": list_name, "target_id": target_id,
+        "when": when_iso or "", "timestamp": dt.timestamp() if dt else None,
+        "offset": dt.utcoffset().total_seconds() if dt else None})
     if "error" in out:
         raise eventkit.EventKitError(f"could not create the reminder: {out['error']}")
     return out["id"]
@@ -156,25 +171,24 @@ def complete(reminder_id: str, *, caller=None) -> str:
     return out["title"]
 
 
-def find_open(phrase: str, *, caller=None) -> Reminder | None:
-    """The open reminder the user most likely means. Exact match, then substring,
-    then the shortest title containing every word they said."""
-    items = open_items(caller=caller)
-    needle = phrase.strip().lower()
+def find_open(phrase: str, *, list_name: str = "", caller=None) -> list[Reminder]:
+    """Return zero, one or many; titles never disambiguate duplicate records."""
+    items = [r for r in open_items(caller=caller) if not list_name or r.list_name.casefold() == list_name.casefold()]
+    needle = phrase.strip().casefold()
     if not needle:
-        return None
-    for r in items:
-        if r.title.lower() == needle:
-            return r
-    for r in items:
-        if needle in r.title.lower():
-            return r
+        return []
+    exact = [r for r in items if r.title.casefold() == needle]
+    if exact:
+        return exact
+    hits = [r for r in items if needle in r.title.casefold()]
+    if hits:
+        return hits
     words = [w for w in needle.split() if len(w) > 2]
-    hits = [r for r in items if words and all(w in r.title.lower() for w in words)]
-    return min(hits, key=lambda r: len(r.title)) if hits else None
+    return [r for r in items if words and all(w in r.title.casefold() for w in words)]
 
 
 _FIND_OPERATION = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var pred = store.predicateForRemindersInCalendars($());
 var out = null;
@@ -194,6 +208,7 @@ return JSON.stringify(out);
 """
 
 _COMPLETED = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var item = store.calendarItemWithIdentifier(input.id);
 return JSON.stringify(!item.isNil() && Boolean(item.completed));
@@ -208,3 +223,25 @@ def find_by_operation(operation_id: str, *, caller=None) -> list[str]:
 
 def is_completed(reminder_id: str, *, caller=None) -> bool:
     return (caller or eventkit.run)(_COMPLETED, data={'id': reminder_id}) is True
+
+_TARGETS = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('full access required');
+var store = $.EKEventStore.alloc.init;
+var cals = store.calendarsForEntityType($.EKEntityTypeReminder);
+var def = store.defaultCalendarForNewReminders;
+var rows = [];
+for (var i = 0; i < cals.count; i++) {
+  var c = cals.objectAtIndex(i);
+  if (Boolean(c.allowsContentModifications)) rows.push({id: ObjC.unwrap(c.calendarIdentifier), title: ObjC.unwrap(c.title), default: !def.isNil() && ObjC.unwrap(def.calendarIdentifier) === ObjC.unwrap(c.calendarIdentifier)});
+}
+JSON.stringify(rows);
+"""
+
+
+def resolve_targets(name: str = "", *, target_id: str | None = None, caller=None) -> list[dict]:
+    rows = (caller or eventkit.run)(_TARGETS)
+    if not isinstance(rows, list):
+        raise eventkit.EventKitError('Target inventory unavailable')
+    return [row for row in rows if row.get('id') and
+            (row.get('id') == target_id if target_id else True) and
+            (row.get('title', '').casefold() == name.casefold() if name else (bool(target_id) or row.get('default') is True))]

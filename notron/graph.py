@@ -129,6 +129,7 @@ def run_request(envelope, *, brain, dry_run: bool = False,
     start = 0
     if resumed:
         name, state = resumed
+        state.resumed = True
         start = ORDER.index(name) + 1
     try:
         with requests.execution(envelope):

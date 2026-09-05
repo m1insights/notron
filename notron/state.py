@@ -54,12 +54,14 @@ class Action:
     ends: str | None = None          # events only
     where: str = ""                  # list name / calendar name
     notes: str = ""
-    target_id: str | None = None     # set by the doer for "complete"
+    target_id: str | None = None     # stable reminder/calendar/list identifier
+    timezone: str = ""               # captured IANA zone, set locally
     operation_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 @dataclass
 class State:
+    resumed: bool = False
     request_id: str = ""
     envelope: RequestEnvelope | None = None
     source_revision: str | None = None
@@ -80,6 +82,7 @@ class State:
     write_targets: dict[str, Write] = field(default_factory=dict)
     system_sources: dict[str, Passage] = field(default_factory=dict)
     context: list[Passage] = field(default_factory=list)
+    context_incomplete: bool = False
     web: list[str] = field(default_factory=list)
     agenda: str = ""                          # today's calendar + open reminders
     actions: list[Action] = field(default_factory=list)

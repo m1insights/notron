@@ -19,6 +19,9 @@ def recovery_harness(monkeypatch, _notes_is_never_the_real_one):
     ask_id = f'{workspace.FOLDER}/{workspace.ASK}'
     app.bodies[ask_id] = '<div>Ask</div><div>Call dentist</div>'
     monkeypatch.setattr(notes, 'write_body', lambda nid, body: app.bodies.__setitem__(nid, body))
+    monkeypatch.setattr(reminders, 'resolve_targets', lambda *a, **kw: [{'id':'inbox','title':'Inbox'}])
+    monkeypatch.setattr(calendar, 'resolve_targets', lambda *a, **kw: [{'id':'work','title':'Work'}])
+    monkeypatch.setattr(calendar, 'overlaps', lambda *a, **kw: [])
     rows, calls = [], []
     h = SimpleNamespace(point=None, envelope=None, state=None, rows=rows, calls=calls, kind='reminder')
     def fail(point, operation_id):
@@ -42,11 +45,15 @@ def recovery_harness(monkeypatch, _notes_is_never_the_real_one):
             if kw['purpose'] == 'route':
                 return {'intent': 'schedule' if h.kind == 'event' else 'remind'}
             return {'kind': h.kind, 'op': 'create', 'title': 'Call dentist',
-                    'when': (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%dT14:00')}
+                    'when': (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%dT14:00'),
+                    'ends': (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%dT15:00') if h.kind == 'event' else None}
         def ask(self, **kw):
             raise AssertionError('Action receipts must not infer')
     h.brain = Brain()
     def submit(rid, text):
+        if h.kind == "event":
+            text += " from 14:00 to 15:00"
+            app.bodies[ask_id] = app.bodies[ask_id].replace("<div>Call dentist</div>", "<div>" + text + "</div>")
         h.envelope = requests.create(text, request_id=rid, source='ask', note_id=ask_id,
             source_revision=requests.revision(app.bodies[ask_id]), source_text=text,
             reply_to=(workspace.ASK, workspace.FOLDER, 1))
@@ -325,9 +332,9 @@ def test_uncertain_complete_uses_persisted_target_and_does_not_select_another(mo
     from notron import executor
     from notron.state import Action
     selected, completed = [], []
-    def find(title):
+    def find(title, **kw):
         selected.append(title)
-        return reminders.Reminder('original-id', title, '', '')
+        return [reminders.Reminder('original-id', title, '', '')]
     def complete(nid):
         completed.append(nid)
         raise OSError('saved then adapter lost response')

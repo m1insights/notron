@@ -59,7 +59,7 @@ def _block(entry: Entry, *, shape: str) -> str:
     return "\n".join([lead, *(f"- {p}" for p in parts)])
 
 
-def markdown(entries: Sequence[Entry], *, shape: str, existing_text: str, day: date) -> str:
+def markdown(entries: Sequence[Entry], *, shape: str, existing_text: str, day: date, capture_known: bool = True) -> str:
     """The Markdown to append for these entries, in this shape, to a note
     whose plain text currently reads `existing_text`."""
     blocks = [_block(e, shape=shape) for e in entries]
@@ -72,6 +72,8 @@ def markdown(entries: Sequence[Entry], *, shape: str, existing_text: str, day: d
                 chunks.append(b)
         return "\n" + "\n\n".join(chunks) + "\n"
     body = "\n\n".join(blocks)
+    if not capture_known:
+        body = "(filing date; capture date unknown)\n" + body
     if under_today(existing_text, day):
         return "\n" + body + "\n"
     return f"\n**{heading(day)}**\n{body}\n"

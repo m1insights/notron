@@ -209,7 +209,7 @@ def test_the_reply_says_what_actually_happened_not_what_was_intended():
     state = graph.run("remind me to call the pharmacy", brain=brain, dry_run=True)
     assert "Reminder set:" not in state.answer, "must not claim success on a blocked action"
     assert "didn't set" in state.answer.lower()
-    assert any("✗" in r for r in state.results)
+    assert any(r.startswith("?") for r in state.results), "known refusal must reach the writer as a clarification"
 
 
 def test_a_scheduling_reply_costs_no_smart_model_call():

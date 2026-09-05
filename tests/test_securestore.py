@@ -190,6 +190,7 @@ def test_encrypted_index_roundtrip_reuses_vectors_and_searches_in_memory(monkeyp
     note = notes.Note('n1', 'Ordinary', 'Notes', '2026-09-04')
     monkeypatch.setattr(notes, 'list_all_notes', lambda: [note])
     monkeypatch.setattr(library, 'user_notes', lambda: [note])
+    monkeypatch.setattr(notes, 'get_note', lambda nid: note if nid == note.id else None)
     monkeypatch.setattr(notes, 'read_body', lambda _: '<div>synthetic password: synthetic-value</div>')
     monkeypatch.setattr(np, 'load', lambda *a, **kw: pytest.fail('persistent NumPy loading is forbidden'))
     brain, calls = outbound_transport

@@ -19,6 +19,13 @@ CACHE = DATA_DIR / "index.json"
 VECTORS = CACHE.with_name("vectors.npy")
 CHUNK_CHARS = 1400
 CHUNK_OVERLAP = 150
+QUERY_READ_BUDGET = 8
+
+
+class SearchResults(list):
+    """List compatibility plus explicit omitted/unavailable context evidence."""
+    incomplete = False
+    truncated = False
 
 
 @dataclass
@@ -155,7 +162,7 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
     return {"notes": len(live), "reused": reused, "embedded": len(pending)}
 
 
-def search(query: list[Passage], brain, *, limit: int = 8) -> list[Chunk]:
+def search(query: list[Passage], brain, *, limit: int = 8, read_budget: int = QUERY_READ_BUDGET) -> list[Chunk]:
     import numpy as np
 
     from . import retention
@@ -164,7 +171,7 @@ def search(query: list[Passage], brain, *, limit: int = 8) -> list[Chunk]:
     data = _load()
     rows = _readable([r for chunks in data.values() for r in chunks if r.get("vector") is not None])
     if not rows:
-        return []
+        return SearchResults()
 
     matrix = np.asarray([r["vector"] for r in rows], dtype="float32")
     matrix /= np.linalg.norm(matrix, axis=1, keepdims=True) + 1e-9
@@ -174,16 +181,45 @@ def search(query: list[Passage], brain, *, limit: int = 8) -> list[Chunk]:
     scores = matrix @ q
     best = np.argsort(-scores)[: limit * 3]
 
-    seen: set[str] = set()
-    out: list[Chunk] = []
+    from . import notes, markup, policy
+    from .securestore import StorageError
+    from .credentials import CredentialUnavailable
+    seen = set()
+    out = SearchResults()
+    reads = 0
     for i in best:
         row = rows[int(i)]
-        key = f"{row['note_id']}:{row['text'][:40]}"
-        if key in seen:
+        nid = row['note_id']
+        if nid in seen:
             continue
-        seen.add(key)
-        out.append(Chunk(**{k: row[k] for k in ("note_id", "title", "folder", "modified", "text")}))
+        seen.add(nid)
+        if reads >= read_budget:
+            out.incomplete = out.truncated = True
+            break
+        reads += 1
+        try:
+            live = notes.get_note(nid)
+            if live is None or not policy.current().readable(live):
+                out.incomplete = True
+                continue
+            if live.modified != row['modified'] or live.title != row['title'] or live.folder != row['folder']:
+                text = markup.to_text(notes.read_body(nid))
+                check = notes.get_note(nid)
+                if check != live or not policy.current().readable(live):
+                    out.incomplete = True
+                    continue
+                text = prepare_outbound('write', [Passage.from_note(text, live)])[0]
+                out.truncated |= len(text) > CHUNK_CHARS
+                chunk = Chunk(nid, live.title, live.folder, live.modified, text[:CHUNK_CHARS])
+            else:
+                chunk = Chunk(**{k: row[k] for k in ('note_id', 'title', 'folder', 'modified', 'text')})
+            out.append(chunk)
+        except (StorageError, CredentialUnavailable, policy.PolicyError):
+            raise
+        except Exception:
+            out.incomplete = True
         if len(out) >= limit:
+            out.truncated |= len(seen) < len({r['note_id'] for r in rows})
             break
     return out
 

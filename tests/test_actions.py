@@ -8,7 +8,13 @@ import sys, pathlib
 from datetime import datetime, timedelta
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
+import pytest
 from notron import guard
+
+@pytest.fixture(autouse=True)
+def targets(monkeypatch):
+    from notron import reminders
+    monkeypatch.setattr(reminders, "resolve_targets", lambda *a, **kw: [{"id":"inbox", "title":"Inbox"}])
 from notron.state import Action
 
 SOON = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT14:00")
@@ -192,8 +198,8 @@ def test_completing_looks_the_reminder_up_by_what_the_user_called_it(monkeypatch
 
     monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line, **kw: None)
     monkeypatch.setattr(ex_mod.reminders, "find_open",
-                        lambda phrase, **kw: Reminder(id="x-3", title="Call the pharmacy",
-                                                       list_name="Inbox", due=""))
+                        lambda phrase, **kw: [Reminder(id="x-3", title="Call the pharmacy",
+                                                       list_name="Inbox", due="")])
     done = []
     monkeypatch.setattr(ex_mod.reminders, "complete", lambda rid, **kw: done.append(rid) or "ok")
 
@@ -206,6 +212,6 @@ def test_ticking_off_something_that_isnt_there_says_so(monkeypatch):
     from notron import executor as ex_mod
 
     monkeypatch.setattr(ex_mod.Executor, "_log", lambda self, line, **kw: None)
-    monkeypatch.setattr(ex_mod.reminders, "find_open", lambda phrase, **kw: None)
+    monkeypatch.setattr(ex_mod.reminders, "find_open", lambda phrase, **kw: [])
     r = ex_mod.Executor().do(Action(kind="reminder", op="complete", title="feed the cat"), about="")
     assert not r.ok and "couldn't find" in r.reason.lower()

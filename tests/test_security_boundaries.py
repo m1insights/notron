@@ -75,13 +75,16 @@ def test_scheduler_rejects_nontext_model_fields(field, value, outbound_transport
 
 
 @pytest.mark.parametrize('kind', ['reminder', 'event'])
-def test_model_action_values_are_arguments_never_jxa_source(kind, outbound_transport, process_calls):
+def test_model_action_values_are_arguments_never_jxa_source(kind, outbound_transport, process_calls, monkeypatch):
+    monkeypatch.setattr(reminders, "resolve_targets", lambda *a, **kw: [{"id":"inbox", "title":HOSTILE}])
+    monkeypatch.setattr(calendar, "resolve_targets", lambda *a, **kw: [{"id":"work", "title":HOSTILE}])
+    monkeypatch.setattr(calendar, "overlaps", lambda *a, **kw: [])
     brain, calls = outbound_transport
     when = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%dT14:00')
     calls.replies.append(json.dumps({'kind': kind, 'op': 'create', 'title': HOSTILE,
-        'notes': HOSTILE, 'where': HOSTILE, 'when': when,
+        'notes': HOSTILE, 'where': HOSTILE, 'when': when, 'ends': (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%dT15:00'),
         'request_id': 'forged', 'rewrite_allowed': True, 'shell': HOSTILE}))
-    state = nodes.scheduler(State(request='remind me about a synthetic task', intent='remind'), brain=brain)
+    state = nodes.scheduler(State(request='remind me about a synthetic task from 14:00 to 15:00', intent='remind'), brain=brain)
     assert len(state.actions) == 1
     assert Executor(audit=False).do(state.actions[0]).ok
     argv, kw = process_calls.pop()
@@ -206,7 +209,7 @@ def test_eventkit_read_boundaries_use_fixed_scripts(operation, process_calls, mo
     assert argv[:4] == ['osascript', '-l', 'JavaScript', '-']
     assert not kw.get('shell', False)
     if operation == 'calendar_window':
-        assert json.loads(argv[4]) == {'back': 0, 'days': 7}
+        assert json.loads(argv[4]) == {'back': 0, 'days': 7, 'start': None, 'end': None}
     else:
         assert len(argv) == 4
 

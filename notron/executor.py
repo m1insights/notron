@@ -19,6 +19,7 @@ from datetime import datetime
 from . import calendar, guard, markup, notedoc, notes, reminders, undo, workspace, policy, rewrite
 from .state import Write
 from .requests import revision
+from .securestore import StorageError
 
 _LOCAL_LOCK = threading.RLock()
 _LOCK_DEPTH = threading.local()
@@ -79,6 +80,7 @@ class WriteResult:
     operation_id: str | None = None
     observed_revision: str | None = None
     alternative_text: str | None = None
+    needs_confirmation: bool = False
 
 
 class Executor:
@@ -443,7 +445,7 @@ class Executor:
         elif write.note_id and not write.undo_reply:
             undo.promote(write.note_id, write.operation_id)
 
-    def do(self, action, *, about: str = "", request: str = "", content_sources=()) -> WriteResult:
+    def do(self, action, *, about: str = "", request: str = "", content_sources=(), resumed: bool = False) -> WriteResult:
         """Commit intent before EventKit; reconcile uncertain saves without replay."""
         from . import operations, requests, recovery, retention
         if policy.current().status != 'ready':
@@ -451,8 +453,31 @@ class Executor:
         retention.require_ready()
         with write_transaction():
             store = operations.current()
+            proposal = action
             oid = action.operation_id
             prior = store.get(oid)
+            def clarify(reason):
+                # A known refusal precedes every external effect. Cancel a saved
+                # PREPARED intent before delivering its question as a Notes reply.
+                if prior and prior.status == operations.S.PREPARED:
+                    store.transition(oid, operations.S.PREPARED, operations.S.CANCELLED,
+                                     failure_code='clarification_required')
+                return WriteResult(False, reason, operation_id=oid, needs_confirmation=True)
+
+            from . import when
+            envelope = requests.active_request()
+            # Canonicalize only pre-effect/new actions. Verified/uncertain recovery
+            # uses its immutable payload and never needs fresh creation permission.
+            def canonical(value):
+                if value and when.has_time(value):
+                    return when.resolve_local(value, envelope.timezone if envelope else requests.local_timezone()).isoformat(timespec='minutes')
+                return value
+            if prior is None:
+                try:
+                    action = replace(action, when=canonical(action.when), ends=canonical(action.ends),
+                                     timezone=envelope.timezone if envelope else requests.local_timezone())
+                except ValueError as exc:
+                    return clarify(str(exc))
             if prior:
                 if not prior.payload_ref or not self._content_readable(prior.content_source_ids or ()):
                     return WriteResult(False, 'action content unavailable; review required', operation_id=oid)
@@ -462,6 +487,14 @@ class Executor:
                 envelope = requests.active_request()
                 expected_request = envelope.request_id if envelope else 'action:' + oid
                 incoming = replace(action, target_id=saved.target_id) if action.target_id is None else action
+                # Scheduler checkpoints may predate canonical timezone resolution.
+                try:
+                    incoming = replace(incoming,
+                        when=canonical(incoming.when) if when.parse(saved.when) and when.parse(saved.when).tzinfo else incoming.when,
+                        ends=canonical(incoming.ends) if when.parse(saved.ends) and when.parse(saved.ends).tzinfo else incoming.ends,
+                        timezone=incoming.timezone or saved.timezone)
+                except ValueError:
+                    pass
                 incoming_sources = set(content_sources)
                 if envelope and envelope.note_id:
                     incoming_sources.add(envelope.note_id)
@@ -469,6 +502,8 @@ class Executor:
                         or tuple(sorted(incoming_sources)) != prior.content_source_ids):
                     raise operations.OperationConflict('Action identity already belongs to different work.')
                 action = saved
+                proposal.target_id, proposal.timezone = action.target_id, action.timezone
+                proposal.when, proposal.ends = action.when, action.ends
                 if prior.status in (operations.S.APPLIED, operations.S.RECEIPTED):
                     self._log('Action verified', operation_id=oid)
                     return WriteResult(True, self._said(action).strip(' —') or 'done',
@@ -477,10 +512,27 @@ class Executor:
                     return self._reconcile_action(action, prior)
                 if prior.status != operations.S.PREPARED:
                     return WriteResult(False, 'action outcome needs review', operation_id=oid)
-            verdict = guard.check_action(action, about=about, request=request)
+                if not action.target_id:
+                    store.transition(oid, operations.S.PREPARED, operations.S.NEEDS_REVIEW, failure_code='unbound_target')
+                    return WriteResult(False, 'Legacy action target is unbound; review required.', operation_id=oid)
+            if when.unsupported_request(request):
+                return clarify('Send one non-recurring action per request.')
+            if envelope and action.op == 'create':
+                context = when.resolve_time_context(envelope, datetime.now().astimezone(), resumed)
+                if context.needs_confirmation:
+                    return clarify(context.message)
+            if envelope and action.op == 'create':
+                try:
+                    error = when.relative_date_error(action.when, envelope)
+                except ValueError as exc:
+                    error = str(exc)
+                if error:
+                    return clarify(error)
+            verdict = guard.check_action(action, about=about, request=request,
+                                         timezone_name=action.timezone or (envelope.timezone if envelope else None))
             if not verdict:
                 self._log('**BLOCKED** action was refused')
-                return WriteResult(False, verdict.reason, operation_id=oid)
+                return clarify(verdict.reason)
             if self.dry_run:
                 return WriteResult(True, 'dry run — nothing created')
             envelope = requests.active_request()
@@ -489,11 +541,50 @@ class Executor:
                 sources.add(envelope.note_id)
             if not self._content_readable(tuple(sources)):
                 return WriteResult(False, 'source permission changed; action paused')
-            if action.op == 'complete' and not action.target_id:
-                hit = reminders.find_open(action.title)
-                if hit is None:
-                    return WriteResult(False, "couldn't find an open reminder with that title")
-                action = replace(action, target_id=hit.id)
+            try:
+                if action.op == 'complete' and not action.target_id:
+                    hits = reminders.find_open(action.title, list_name=action.where)
+                    import re
+                    ids = re.findall(r'(?m)^reminder-id ([^\s]+)\s*$', request)
+                    if ids:
+                        hits = [h for h in hits if len(ids) == 1 and h.id == ids[0]]
+                    if len(hits) != 1:
+                        options = '; '.join(f'{h.title} [{h.list_name}] reminder-id {h.id}' for h in hits[:10])
+                        detail = "couldn't find an open reminder with that title" if not hits else 'Multiple reminders match. Restate the task with a reminder-id line: ' + options
+                        return clarify(detail)
+                    if hits[0].recurring:
+                        return clarify('I do not complete recurring reminders automatically. Please complete this one in Reminders.')
+                    action = replace(action, target_id=hits[0].id)
+                elif action.op == 'create' and not action.target_id:
+                    adapter = calendar if action.kind == 'event' else reminders
+                    import re
+                    label = 'calendar-id' if action.kind == 'event' else 'list-id'
+                    ids = re.findall(r'(?m)^' + label + r' ([^\s]+)\s*$', request)
+                    if len(ids) > 1:
+                        return clarify('Select one target ID.')
+                    hits = adapter.resolve_targets(action.where, **({'target_id': ids[0]} if ids else {}))
+                    if len(hits) != 1:
+                        options = '; '.join(f"{h['title']} ({label} {h['id']})" for h in hits[:10])
+                        return clarify('Which existing calendar or reminder list? The name is missing or ambiguous. Restate the task with one target-ID line. ' + options)
+                    action = replace(action, target_id=hits[0]['id'])
+                if action.kind == 'event':
+                    if not action.ends or not when.has_time(action.when) or not when.has_time(action.ends) or (request and not when.duration_explicit(request)):
+                        return clarify('Confirm an explicit start and end time; no duration is assumed.')
+                    error = when.duration_error(request, action.when, action.ends, action.timezone or requests.local_timezone())
+                    if error:
+                        return clarify(error)
+                    conflicts = calendar.overlaps(action.when, action.ends)
+                    if conflicts:
+                        token = calendar.conflict_token(action, conflicts)
+                        import re
+                        if not re.search(r'(?im)^confirm conflict ' + re.escape(token) + r'\s*$', request):
+                            return clarify(f'Conflict for {action.title}: {action.when} to {action.ends}, calendar {action.where or action.target_id}. Restate this exact event and add a line with confirmation code: confirm conflict {token}')
+            except (StorageError, policy.PolicyError, operations.OperationConflict):
+                raise
+            except Exception:
+                return clarify('Calendar or Reminders unavailable; context is incomplete. No action saved.')
+            proposal.target_id, proposal.timezone = action.target_id, action.timezone
+            proposal.when, proposal.ends = action.when, action.ends
             if not prior:
                 prior = recovery.put(envelope.request_id if envelope else 'action:' + oid, oid,
                                      {'action': asdict(action)}, sources)
@@ -540,7 +631,7 @@ class Executor:
     def _perform(self, action) -> tuple[str, str]:
         if action.kind == "reminder" and action.op == "create":
             ref = reminders.create(action.title, notes=self._action_notes(action),
-                                   list_name=action.where, when_iso=action.when)
+                                   list_name=action.where, when_iso=action.when, target_id=action.target_id, timezone_name=action.timezone or None)
             return ref, self._said(action)
 
         if action.kind == "reminder" and action.op == "complete":
@@ -549,7 +640,7 @@ class Executor:
 
         if action.kind == "event" and action.op == "create":
             ref = calendar.create(action.title, start_iso=action.when, end_iso=action.ends,
-                                  calendar_name=action.where, notes=self._action_notes(action))
+                                  calendar_name=action.where, notes=self._action_notes(action), target_id=action.target_id)
             return ref, self._said(action)
 
         raise ValueError(f"nothing to do for {action.kind}/{action.op}")

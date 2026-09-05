@@ -27,21 +27,23 @@ from . import eventkit
 from .when import human, parse
 
 MAX_IN_PROMPT = 30
-DEFAULT_MINUTES = 60
+MAX_WINDOW_DAYS = 31
 
 _WINDOW = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
-var start = $.NSDate.dateWithTimeIntervalSinceNow(-86400 * input.back);
-var end = $.NSDate.dateWithTimeIntervalSinceNow(86400 * input.days);
+var start = input.start == null ? $.NSDate.dateWithTimeIntervalSinceNow(-86400 * input.back) : $.NSDate.dateWithTimeIntervalSince1970(input.start);
+var end = input.end == null ? $.NSDate.dateWithTimeIntervalSinceNow(86400 * input.days) : $.NSDate.dateWithTimeIntervalSince1970(input.end);
 var pred = store.predicateForEventsWithStartDateEndDateCalendars(start, end, cals);
 var events = store.eventsMatchingPredicate(pred);
 var f = $.NSDateFormatter.alloc.init;
-f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mm';
+f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mmXXX';
 var rows = [];
 for (var i = 0; i < events.count; i++) {
   var e = events.objectAtIndex(i);
   rows.push({
+    id: ObjC.unwrap(e.eventIdentifier),
     calendar: ObjC.unwrap(e.calendar.title) || '',
     title: ObjC.unwrap(e.title) || '',
     start: ObjC.unwrap(f.stringFromDate(e.startDate)),
@@ -53,6 +55,7 @@ return JSON.stringify(rows);
 """
 
 _NAMES = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
 var names = [];
@@ -61,22 +64,15 @@ JSON.stringify(names);
 """
 
 _CREATE = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var e = $.EKEvent.eventWithEventStore(store);
 e.title = input.title;
 e.notes = input.notes;
-var f = $.NSDateFormatter.alloc.init;
-f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mm';
-e.startDate = f.dateFromString(input.start);
-e.endDate = f.dateFromString(input.end);
-var wanted = input.calendar;
-var target = $();
-var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
-for (var i = 0; i < cals.count; i++) {
-  var c = cals.objectAtIndex(i);
-  if (wanted && ObjC.unwrap(c.title) === wanted) { target = c; break; }
-}
-if (target.isNil()) target = store.defaultCalendarForNewEvents;
+e.startDate = $.NSDate.dateWithTimeIntervalSince1970(input.start_timestamp);
+e.endDate = $.NSDate.dateWithTimeIntervalSince1970(input.end_timestamp);
+var target = store.calendarWithIdentifier(input.target_id);
+if (target.isNil() || !Boolean(target.allowsContentModifications)) throw new Error('selected calendar unavailable');
 e.calendar = target;
 var err = Ref();
 var ok = store.saveEventSpanCommitError(e, $.EKSpanThisEvent, true, err);
@@ -92,6 +88,7 @@ class Event:
     start: str        # ISO
     end: str          # ISO
     location: str = ""
+    id: str = ""
 
     @property
     def starts_at(self) -> datetime | None:
@@ -102,12 +99,20 @@ def names(*, caller=None) -> list[str]:
     return (caller or eventkit.run)(_NAMES)
 
 
-def window(*, back: int = 0, days: int = 7, caller=None) -> list[Event]:
-    rows = (caller or eventkit.run)(_WINDOW, data={"back": int(back), "days": int(days)})
-    events = [Event(calendar=r.get("calendar", ""), title=r.get("title", ""),
+def window(*, back: int = 0, days: int = 7, caller=None, start: datetime | None = None, end: datetime | None = None) -> list[Event]:
+    if start is None and end is None:
+        bounded = 0 <= back <= MAX_WINDOW_DAYS and 0 < days <= MAX_WINDOW_DAYS and back + days <= MAX_WINDOW_DAYS
+    else:
+        bounded = bool(start and end and start.tzinfo and end.tzinfo and 0 < end.timestamp() - start.timestamp() <= MAX_WINDOW_DAYS * 86400)
+    if not bounded:
+        raise ValueError('Calendar reads must use a bounded window of at most 31 days')
+    rows = (caller or eventkit.run)(_WINDOW, data={"back": int(back), "days": int(days), "start": start.timestamp() if start else None, "end": end.timestamp() if end else None})
+    if not isinstance(rows, list):
+        raise eventkit.EventKitError("Calendar unavailable; context incomplete")
+    events = [Event(calendar=r.get("calendar", ""), title=r.get("title", "") or "Untitled event",
                     start=r.get("start", ""), end=r.get("end", ""),
-                    location=r.get("location", ""))
-              for r in rows if r.get("title", "").strip()]
+                    location=r.get("location", ""), id=r.get("id", ""))
+              for r in rows]
     return sorted(events, key=lambda e: e.start)
 
 
@@ -126,7 +131,8 @@ def brief(*, on: datetime | None = None, caller=None) -> str:
 
 def week(*, caller=None, limit: int = MAX_IN_PROMPT) -> str:
     """The next seven days, grouped by day."""
-    events = window(days=7, caller=caller)[:limit]
+    all_events = window(days=7, caller=caller)
+    events = all_events[:limit]
     if not events:
         return "Nothing in the calendar this week."
     lines, seen = [], None
@@ -138,11 +144,13 @@ def week(*, caller=None, limit: int = MAX_IN_PROMPT) -> str:
             seen = at.date()
             lines.append(f"**{human(at, with_time=False)}**")
         lines.append(f"- {at:%H:%M} {e.title}")
+    if len(all_events) > limit:
+        lines.append(f"Context truncated: {len(all_events) - limit} more events in this window.")
     return "\n".join(lines)
 
 
 def create(title: str, *, start_iso: str, end_iso: str | None = None,
-           calendar_name: str = "", notes: str = "", caller=None) -> str:
+           calendar_name: str = "", notes: str = "", target_id: str | None = None, caller=None) -> str:
     """Add an event. Returns its identifier.
 
     There is no `update`, `move` or `delete` in this module, and there never will
@@ -150,21 +158,23 @@ def create(title: str, *, start_iso: str, end_iso: str | None = None,
     without asking, and the strongest way to keep that promise is not to write the
     code that could break it.
     """
-    from datetime import timedelta
-
     from . import when as when_mod
-
-    start = when_mod.parse(start_iso)
-    if start is None:
-        raise ValueError(f"unusable start date {start_iso!r}")
-    end = when_mod.parse(end_iso) or (start + timedelta(minutes=DEFAULT_MINUTES))
-    if end <= start:
-        end = start + timedelta(minutes=DEFAULT_MINUTES)
-
+    from .requests import local_timezone
+    if not when_mod.has_time(start_iso) or not when_mod.has_time(end_iso):
+        raise ValueError('Confirm an explicit start and end time; no duration is assumed.')
+    start = when_mod.resolve_local(start_iso, local_timezone())
+    end = when_mod.resolve_local(end_iso, local_timezone())
+    if end.timestamp() <= start.timestamp():
+        raise ValueError('The end must be after the start; confirm the duration.')
+    if not target_id:
+        hits = resolve_targets(calendar_name, caller=caller)
+        if len(hits) != 1:
+            raise ValueError('Which calendar? Give an existing, unambiguous calendar name.')
+        target_id = hits[0]['id']
     out = (caller or eventkit.run)(_CREATE, data={
-        "title": title, "notes": notes, "calendar": calendar_name,
-        "start": start.strftime("%Y-%m-%dT%H:%M"),
-        "end": end.strftime("%Y-%m-%dT%H:%M"),
+        "title": title, "notes": notes, "calendar": calendar_name, "target_id": target_id,
+        "start": start.isoformat(timespec='minutes'), "end": end.isoformat(timespec='minutes'),
+        "start_timestamp": start.timestamp(), "end_timestamp": end.timestamp(),
     })
     if "error" in out:
         raise eventkit.EventKitError(f"could not create the event: {out['error']}")
@@ -172,10 +182,11 @@ def create(title: str, *, start_iso: str, end_iso: str | None = None,
 
 
 _FIND_OPERATION = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var f = $.NSDateFormatter.alloc.init;
-f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mm';
-var day = f.dateFromString(input.start);
+f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mmXXX';
+var day = $.NSDate.dateWithTimeIntervalSince1970(input.start);
 var start = day.dateByAddingTimeInterval(-86400);
 var end = day.dateByAddingTimeInterval(86400);
 var pred = store.predicateForEventsWithStartDateEndDateCalendars(start, end, $());
@@ -199,4 +210,54 @@ def find_by_operation(operation_id: str, *, caller=None) -> list[str]:
     if start is None:
         return []
     return (caller or eventkit.run)(_FIND_OPERATION, data={
-        'reference': reference(operation_id), 'start': start.strftime('%Y-%m-%dT%H:%M')})
+        'reference': reference(operation_id), 'start': start.timestamp()})
+
+_TARGETS = """
+if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('full access required');
+var store = $.EKEventStore.alloc.init;
+var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
+var def = store.defaultCalendarForNewEvents;
+var rows = [];
+for (var i = 0; i < cals.count; i++) {
+  var c = cals.objectAtIndex(i);
+  if (Boolean(c.allowsContentModifications)) rows.push({id: ObjC.unwrap(c.calendarIdentifier), title: ObjC.unwrap(c.title), default: !def.isNil() && ObjC.unwrap(def.calendarIdentifier) === ObjC.unwrap(c.calendarIdentifier)});
+}
+JSON.stringify(rows);
+"""
+
+
+def resolve_targets(name: str = "", *, target_id: str | None = None, caller=None) -> list[dict]:
+    rows = (caller or eventkit.run)(_TARGETS)
+    if not isinstance(rows, list):
+        raise eventkit.EventKitError('Target inventory unavailable')
+    return [row for row in rows if row.get('id') and
+            (row.get('id') == target_id if target_id else True) and
+            (row.get('title', '').casefold() == name.casefold() if name else (bool(target_id) or row.get('default') is True))]
+
+
+def overlaps(start_iso: str, end_iso: str, *, caller=None) -> list[Event]:
+    from .when import resolve_local
+    from .requests import local_timezone
+    start, end = (resolve_local(v, local_timezone()) for v in (start_iso, end_iso))
+    if end.timestamp() <= start.timestamp():
+        raise ValueError('Confirm an end after the start')
+    events = window(start=start, end=end, caller=caller)
+    found = []
+    for event in events:
+        if not event.id:
+            raise eventkit.EventKitError('Calendar context incomplete; event identity unavailable')
+        try:
+            a, b = (resolve_local(v, local_timezone()) for v in (event.start, event.end))
+        except ValueError:
+            raise eventkit.EventKitError('Calendar context incomplete; event time unavailable') from None
+        if a.timestamp() < end.timestamp() and b.timestamp() > start.timestamp():
+            found.append(event)
+    return found
+
+
+def conflict_token(action, events: list[Event]) -> str:
+    """Local deterministic confirmation, bound to proposal and current conflicts."""
+    import hashlib, json
+    value = [action.kind, action.op, action.title, action.when, action.ends, action.target_id, action.notes,
+             sorted((e.id, e.start, e.end) for e in events)]
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False).encode()).hexdigest()[:16]

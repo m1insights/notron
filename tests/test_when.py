@@ -30,3 +30,12 @@ def test_a_confirmation_says_the_weekday_out_loud_so_a_wrong_date_is_obvious():
 def test_a_weekday_named_in_the_request_can_be_checked_against_the_answer():
     assert when.weekday_named("remind me to call the pharmacy thursday") == 3
     assert when.weekday_named("remind me tomorrow") is None
+
+
+def test_iso_offsets_survive_including_negative_offsets_and_z():
+    assert when.parse('2026-11-01T01:30-04:00').utcoffset().total_seconds() == -14400
+    assert when.parse('2026-09-04T22:00Z').utcoffset().total_seconds() == 0
+
+
+def test_non_iso_separators_cannot_turn_a_timed_alarm_into_a_date_only_receipt():
+    assert when.parse('2026-09-09X10:00') is None
