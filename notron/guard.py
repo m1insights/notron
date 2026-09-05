@@ -33,7 +33,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from . import notedoc, privacy, when, workspace
+from . import markup, notedoc, privacy, when, workspace
 
 MAX_BODY_CHARS = 200_000
 MAX_TITLE_CHARS = 300
@@ -87,8 +87,11 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str,
     if mode == "append" and old_body and not new_body.startswith(old_body):
         return Verdict(False, "append would not preserve the existing note content")
 
-    if mode == "insert" and old_body and not notedoc.preserves(old_body, new_body):
-        return Verdict(False, "insert would have changed or removed existing text")
+    added_by_insert: str | None = None
+    if mode == "insert" and old_body:
+        added_by_insert = notedoc.inserted(old_body, new_body)
+        if added_by_insert is None:
+            return Verdict(False, "insert would have changed or removed existing text")
 
     marks: list[str] = []
     if mode == "mark":
@@ -104,12 +107,18 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str,
         added = new_body[len(old_body):]
     elif mode == "mark":
         added = "".join(marks)
+    elif added_by_insert is not None:
+        added = added_by_insert
     else:
         added = new_body
     # A restore is exempt: the body going back in was live in this exact note a
     # moment ago, so anything key-shaped in it is the user's own text, already
     # theirs. Refusing it would leave them stuck with the version she wrote.
-    if mode != "restore" and privacy.contains_secret(added):
+    # Scanned as text, not as HTML: the pattern for a labelled secret takes the
+    # next non-space run as the value, and in a body straight from Notes that
+    # run is often a tag. A story bible with a scene tag called MACRO-SECRET
+    # became unanswerable because `SECRET</div>` read as "secret: </div>".
+    if mode != "restore" and privacy.contains_secret(markup.to_text(added)):
         return Verdict(False, "the text contains something that looks like a password or key")
 
     if mode == "replace" and title in workspace.SHARED:
