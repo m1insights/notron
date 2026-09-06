@@ -285,3 +285,117 @@ def describe(att: Attachment, brain, question: str = DESCRIBE) -> str:
     if out:
         cached.write_text(out)
     return out
+
+
+# ------------------------------------------------------------- recordings
+
+#: Long enough for a long memo, short enough that a wedged recogniser cannot
+#: hold the listener. Measured 2026-09-05: 0.37s for a 3.8s clip.
+LISTEN_TIMEOUT = 120
+
+#: On-device speech, reached through `osascript` the same way EventKit is.
+#:
+#: Three things were measured into this script on 2026-09-05, and each of them
+#: is the difference between working and silently returning nothing:
+#:
+#: * **Never ask for authorization.** `SFSpeechRecognizer.requestAuthorization`
+#:   under `osascript` never calls back — there is no
+#:   `NSSpeechRecognitionUsageDescription` in its bundle, so no prompt appears
+#:   and nothing returns. A design that waits for a grant hangs forever.
+#:   Recognising a *file* on-device needs no grant: this runs with
+#:   `authorizationStatus` sitting at 0 (notDetermined) and works.
+#: * **`requiresOnDeviceRecognition` is the hackathon rule, not an optimisation.**
+#:   Without it Apple may send the audio to its own servers, which would turn a
+#:   checkbox into a second cloud provider. With it the audio never leaves the
+#:   machine, which is the same standing as the Notes app turning handwriting
+#:   into characters.
+#: * **The run loop has to be pumped.** The result arrives in a callback and JXA
+#:   has no `await` — `eventkit.py`'s trap, in a second place.
+_LISTEN = """
+ObjC.import('Speech');
+ObjC.import('Foundation');
+function awaitDone(check, seconds) {
+  var deadline = $.NSDate.dateWithTimeIntervalSinceNow(seconds);
+  while (!check() && $.NSDate.date.compare(deadline) < 0) {
+    $.NSRunLoop.currentRunLoop.runModeBeforeDate(
+      $.NSDefaultRunLoopMode, $.NSDate.dateWithTimeIntervalSinceNow(0.02));
+  }
+  return check();
+}
+var out = {};
+var rec = $.SFSpeechRecognizer.alloc.init;
+out.available = rec.isAvailable && rec.supportsOnDeviceRecognition;
+if (out.available) {
+  var req = $.SFSpeechURLRecognitionRequest.alloc.initWithURL(
+    $.NSURL.fileURLWithPath(PATH));
+  req.requiresOnDeviceRecognition = true;
+  var text = null, err = null;
+  rec.recognitionTaskWithRequestResultHandler(req, function (result, error) {
+    if (error && !error.isNil()) { err = String(error.localizedDescription.js); return; }
+    if (result && !result.isNil() && result.isFinal) {
+      text = String(result.bestTranscription.formattedString.js);
+    }
+  });
+  awaitDone(function () { return text !== null || err !== null; }, SECONDS);
+  out.text = text;
+  out.error = err;
+}
+JSON.stringify(out);
+"""
+
+
+def speech_available() -> bool:
+    """Can this Mac transcribe on-device at all?
+
+    Deliberately *not* the TCC number. Every other permission in Notron is read
+    numerically because a query that comes back empty is indistinguishable from
+    a free week — here the numeric read is the misleading one: it says
+    `notDetermined` forever while transcription works perfectly.
+    """
+    import json
+
+    try:
+        raw = subprocess.run(
+            ["osascript", "-l", "JavaScript", "-"],
+            input=_LISTEN.replace("PATH", '""').replace("SECONDS", "0"),
+            capture_output=True, text=True, timeout=20)
+        return bool(json.loads(raw.stdout.strip() or "{}").get("available"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def _listen(path: pathlib.Path) -> str:
+    """One recording, transcribed on this machine. "" when there is no speech."""
+    import json
+
+    script = (_LISTEN.replace("PATH", json.dumps(str(path.resolve())))
+                     .replace("SECONDS", str(LISTEN_TIMEOUT)))
+    proc = subprocess.run(["osascript", "-l", "JavaScript", "-"], input=script,
+                          capture_output=True, text=True, timeout=LISTEN_TIMEOUT + 30)
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.strip() or "the recogniser failed")
+    out = json.loads(proc.stdout.strip() or "{}")
+    if not out.get("available"):
+        raise RuntimeError("this Mac cannot transcribe on-device")
+    return (out.get("text") or "").strip()
+
+
+def transcribe(att: Attachment) -> str:
+    """What was said in this recording, as words. Cached beside the file.
+
+    Nothing is cached for a recording that yielded no speech. The real
+    `recording.m4a` in the developer's own library answers "No speech
+    detected", and writing that down as its transcript would both read as
+    having listened and heard nothing, and stop her ever trying again.
+    """
+    from . import privacy
+
+    path = fetch(att)
+    cached = path.with_name(path.name + ".txt")
+    if cached.exists():
+        return cached.read_text()
+
+    said = privacy.redact(_listen(path))
+    if said:
+        cached.write_text(said)
+    return said

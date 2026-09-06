@@ -176,6 +176,10 @@ def _attached(state: State, brain=None) -> list[str]:
             elif att.kind == "image" and brain is not None and looks < MAX_LOOKS:
                 looks += 1
                 text = attachments.describe(att, brain)
+            elif att.kind == "audio":
+                # No model and no network — macOS transcribes it on this
+                # machine, so this one is neither slow nor billed.
+                text = attachments.transcribe(att)
         except Exception:
             text = ""       # Notes busy, deleted, unreadable — say so instead
         if text.strip():

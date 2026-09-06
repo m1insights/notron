@@ -245,3 +245,56 @@ def _touch(path):
     import pathlib as _p
     _p.Path(path).write_bytes(b"converted")
     return type("Done", (), {"returncode": 0})()
+
+
+# ------------------------------------------------------------ listening (D)
+
+def test_she_transcribes_a_voice_memo(_notes_is_never_the_real_one, cache, monkeypatch):
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("memo.m4a", "att/10")]
+    app.files["att/10"] = b"m4a"
+    monkeypatch.setattr(attachments, "_listen", lambda path: "pay the plumber on Friday")
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    assert attachments.transcribe(att) == "pay the plumber on Friday"
+
+
+def test_a_memo_played_twice_is_listened_to_once(_notes_is_never_the_real_one, cache, monkeypatch):
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("memo.m4a", "att/10")]
+    app.files["att/10"] = b"m4a"
+    heard = []
+    monkeypatch.setattr(attachments, "_listen",
+                        lambda path: heard.append(path) or "pay the plumber")
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    attachments.transcribe(att)
+    attachments.transcribe(att)
+    assert len(heard) == 1
+
+
+def test_a_password_read_aloud_is_redacted(_notes_is_never_the_real_one, cache, monkeypatch):
+    """Someone reads a code into their phone sooner or later. Once it is words
+    it is `privacy.py`'s problem again, which only works if the scan is run."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("memo.m4a", "att/10")]
+    app.files["att/10"] = b"m4a"
+    monkeypatch.setattr(attachments, "_listen", lambda path: "the password is hunter2 ok")
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    assert "hunter2" not in attachments.transcribe(att)
+
+
+def test_a_recording_with_no_speech_in_it_is_not_cached_as_an_empty_answer(
+        _notes_is_never_the_real_one, cache, monkeypatch):
+    """The real `recording.m4a` in the developer's library answers "No speech
+    detected". Caching that as the transcript means she can never try again
+    after a better recogniser, and reads as if she listened and heard nothing."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("memo.m4a", "att/10")]
+    app.files["att/10"] = b"m4a"
+    monkeypatch.setattr(attachments, "_listen", lambda path: "")
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    assert attachments.transcribe(att) == ""
+    assert not (attachments.CACHE / "att-10.m4a.txt").exists()

@@ -35,3 +35,33 @@ def test_json_flag_prints_the_same_checks_as_a_flat_list(capsys):
     out = json.loads(capsys.readouterr().out)
     assert isinstance(out, list)
     assert {"app", "ok", "detail", "fix"} <= out[0].keys()
+
+
+def test_speech_is_reported_by_what_it_can_do_not_by_its_number():
+    """Every other permission here is read numerically because a query that
+    comes back empty is indistinguishable from a free week. Speech is the
+    opposite: its number says `notDetermined` forever while transcription
+    works. Measured 2026-09-05."""
+    checks = {c.app: c for c in permissions.check(
+        reader=lambda: {"events": 3, "reminders": 3},
+        notes_runner=lambda: "4",
+        speech=lambda: True)}
+    assert checks["Speech"].ok
+    assert "available" in checks["Speech"].detail
+
+
+def test_a_mac_that_cannot_transcribe_says_so_rather_than_going_quiet():
+    checks = {c.app: c for c in permissions.check(
+        reader=lambda: {"events": 3, "reminders": 3},
+        notes_runner=lambda: "4",
+        speech=lambda: False)}
+    assert not checks["Speech"].ok
+    assert checks["Speech"].fix
+
+
+def test_an_unreadable_calendar_does_not_hide_a_working_recogniser():
+    def boom():
+        raise RuntimeError("EventKit did not answer")
+    checks = {c.app: c for c in permissions.check(
+        reader=boom, notes_runner=lambda: "4", speech=lambda: True)}
+    assert checks["Speech"].ok

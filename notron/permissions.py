@@ -9,9 +9,15 @@ Three separate permissions, and each fails in its own quiet way:
     reports one calendar and zero events, so a blocked calendar is indistinguishable
     from a free week. Measured on this Mac 2026-08-30: Calendar was write-only and
     looked empty all day.
+  * **Speech** — transcribing a voice memo — is the exception that proves the
+    rule. Its numeric status is the *wrong* thing to read: measured 2026-09-05,
+    `SFSpeechRecognizer.authorizationStatus` sits at `notDetermined` forever
+    (the request never calls back under `osascript`, because there is no usage
+    string in its bundle) while on-device transcription works perfectly. So
+    this one is reported by what it can actually do.
 
 So this module reads the numeric authorization status rather than trying a query
-and believing the answer.
+and believing the answer — everywhere the number is the honest one.
 """
 
 from __future__ import annotations
@@ -61,7 +67,23 @@ def _read() -> dict:
     return eventkit.run(_STATUS)
 
 
-def check(reader=None, notes_runner=None) -> list[Check]:
+def _speech_check(speech=None) -> Check:
+    """What on-device transcription can actually do, not what TCC says about it."""
+    from . import attachments
+
+    try:
+        heard = (speech or attachments.speech_available)()
+    except Exception:
+        heard = False
+    return Check(
+        "Speech", heard,
+        "on-device transcription is available" if heard
+        else "no on-device speech recogniser — voice memos stay unread",
+        "" if heard else "System Settings → General → Language & Region, add the "
+                         "language you speak; macOS downloads the on-device model.")
+
+
+def check(reader=None, notes_runner=None, speech=None) -> list[Check]:
     out: list[Check] = []
 
     notes_runner = notes_runner or (lambda: run(_NOTES, timeout=PROBE_TIMEOUT, retries=0))
@@ -78,6 +100,9 @@ def check(reader=None, notes_runner=None) -> list[Check]:
     except Exception as e:
         for app in ("Calendar", "Reminders"):
             out.append(Check(app, False, f"could not be checked ({type(e).__name__})", ""))
+        # Speech has nothing to do with EventKit — an unreadable calendar must
+        # not make a working recogniser invisible.
+        out.append(_speech_check(speech))
         return out
 
     for app, key in (("Calendar", "events"), ("Reminders", "reminders")):
@@ -86,4 +111,6 @@ def check(reader=None, notes_runner=None) -> list[Check]:
         fix = (f"System Settings → Privacy & Security → {PANE[app]}, "
                f"give your terminal full access.") if broken else ""
         out.append(Check(app, not broken, detail, fix))
+
+    out.append(_speech_check(speech))
     return out
