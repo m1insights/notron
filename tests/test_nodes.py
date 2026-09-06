@@ -523,8 +523,9 @@ def test_she_is_told_about_a_file_she_cannot_read_yet():
     """Apple Notes keeps an attachment out of the body entirely, so without
     this she answers about a photo as if the photo were not there — which
     sounds exactly like having looked."""
+    from notron.attachments import Attachment
     s = State(request="what does this say?", here="see attached",
-              carried=[("image", "whiteboard.png")])
+              carried=[Attachment(id="a1", name="whiteboard.png", kind="image")])
     p = nodes._prompt(s)
     assert "whiteboard.png" in p
     assert "cannot read" in p.lower()
@@ -533,3 +534,41 @@ def test_she_is_told_about_a_file_she_cannot_read_yet():
 def test_a_note_with_no_files_says_nothing_about_files():
     p = nodes._prompt(State(request="what's on today?"))
     assert "cannot read" not in p.lower()
+
+
+def test_a_text_file_in_the_note_is_read_and_stops_being_a_file_she_cannot_read(monkeypatch):
+    """Once she can actually read the thing, it must leave the "you have NOT
+    seen these" list — or she tells the user she is blind to a file she just
+    quoted."""
+    from notron import attachments
+    att = attachments.Attachment(id="a1", name="log.txt", kind="text")
+    monkeypatch.setattr(attachments, "read_text", lambda a: "line one\nline two")
+
+    s = State(request="what does the log say?", carried=[att],
+              reply_to=("Deploys", "Notes", 3))
+    s = nodes.retriever(s, brain=None)
+
+    assert any("log.txt" in c and "line two" in c for c in s.context)
+    assert s.carried == []
+    assert "cannot read" not in nodes._prompt(s).lower()
+
+
+def test_a_file_she_still_cannot_read_stays_named(monkeypatch):
+    from notron import attachments
+    s = State(request="what is in the photo?",
+              carried=[attachments.Attachment(id="a1", name="board.png", kind="image")])
+    s = nodes.retriever(s, brain=None)
+    assert s.context == []
+    assert [a.name for a in s.carried] == ["board.png"]
+
+
+def test_a_file_that_will_not_open_is_named_rather_than_silently_dropped(monkeypatch):
+    """Notes busy, a deleted attachment, a bad decode — she keeps saying the
+    file is there. Losing it from the prompt is the one outcome that reads as
+    having looked."""
+    from notron import attachments
+    att = attachments.Attachment(id="a1", name="log.txt", kind="text")
+    monkeypatch.setattr(attachments, "read_text",
+                        lambda a: (_ for _ in ()).throw(RuntimeError("Notes is busy")))
+    s = nodes.retriever(State(request="what does it say?", carried=[att]), brain=None)
+    assert [a.name for a in s.carried] == ["log.txt"]

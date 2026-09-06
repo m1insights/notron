@@ -149,10 +149,46 @@ def router(state: State, *, brain) -> State:
 
 # -------------------------------------------------------------- Retriever
 
+def _attached(state: State) -> list[str]:
+    """The files hanging off this note that she can actually read, as passages.
+
+    Whatever comes back stops being something she must warn the user she has
+    not seen — and anything that does not, for any reason, stays in
+    `state.carried` so she still says it is there. Silently losing a file from
+    both lists is the one outcome that reads as having looked.
+    """
+    from . import attachments
+
+    where = state.reply_to[0] if state.reply_to else "this note"
+    passages, unread = [], []
+    for att in state.carried:
+        text = ""
+        if att.kind == "text":
+            try:
+                text = attachments.read_text(att)
+            except Exception:
+                text = ""       # Notes busy, deleted, unreadable — say so instead
+        if text.strip():
+            passages.append(f"### {att.name} (attached to {where})\n{text}")
+        else:
+            unread.append(att)
+    state.carried = unread
+    return passages
+
+
 def retriever(state: State, *, brain=None, limit: int = 12) -> State:
     """Pull the user's most relevant notes. Keyword match over titles for now;
-    Phase 3 swaps in embeddings without changing this node's contract."""
+    Phase 3 swaps in embeddings without changing this node's contract.
+
+    A file dropped into the note she was tagged in is read here too, whether or
+    not the router asked for context: the user put it there, in the note they
+    are asking about, which is as explicit as a request gets.
+    """
+    attached = _attached(state)
+    if attached:
+        state.note("retriever", f"read {len(attached)} attached file(s)")
     if not state.needs_context:
+        state.context = attached
         return state
     from . import index
 
@@ -160,7 +196,7 @@ def retriever(state: State, *, brain=None, limit: int = 12) -> State:
         chunks = index.search(state.request, brain, limit=limit)
         raw = [(c.title, f"### {c.title} ({c.folder})\n{c.text}") for c in chunks]
         safe = privacy.filter_passages(state.request, raw)
-        state.context = [text for _, text in safe]
+        state.context = attached + [text for _, text in safe]
         dropped = len(raw) - len(safe)
         state.note("retriever", f"{len(safe)} passages (semantic)"
                                 + (f", {dropped} withheld as private" if dropped else ""))
@@ -170,7 +206,7 @@ def retriever(state: State, *, brain=None, limit: int = 12) -> State:
 
     hits = search(state.request, limit=limit)
     raw = [(h.title, f"### {h.title} ({h.folder})\n{h.excerpt}") for h in hits]
-    state.context = [t for _, t in privacy.filter_passages(state.request, raw)]
+    state.context = attached + [t for _, t in privacy.filter_passages(state.request, raw)]
     state.note("retriever", f"{len(hits)} notes (keyword — run `notron index`)")
     return state
 
@@ -854,7 +890,7 @@ def _prompt(state: State) -> str:
         # Invariant 12. She is blind to attachments, and the failure mode is not
         # silence — it is a fluent answer about a photo she never saw, which
         # reads exactly like having looked.
-        listed = "\n".join(f"- {name} ({kind})" for kind, name in state.carried)
+        listed = "\n".join(f"- {a.name} ({a.kind})" for a in state.carried)
         parts.append(
             "# Files attached to that note that you cannot read yet\n"
             f"{listed}\n"

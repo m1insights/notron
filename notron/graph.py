@@ -70,7 +70,7 @@ ORDER = ("watcher", "router", "retriever", "researcher", "agenda",
 
 def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
         reply_to: tuple | None = None, here: str = "", source: str = "",
-        carried: list[tuple[str, str]] | None = None,
+        carried: list | None = None,
         on_node: Callable[[str, State], None] | None = None) -> State:
     """Walk the graph once.
 
@@ -78,8 +78,8 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
     underneath something specific rather than at the end of the Ask note.
     `here` is the note she was tagged in, which is context she gets for free.
     `source` is the exact turn she was tagged in, tags intact — what the Filer
-    copies and ticks. `carried` is (kind, filename) for every file hanging off
-    that note, which the body cannot tell her about.
+    copies and ticks. `carried` is every file hanging off that note, which the body
+    cannot tell her about.
     """
     state = State(request=request, trigger=trigger, reply_to=reply_to, here=here,
                   source=source, carried=list(carried or []))

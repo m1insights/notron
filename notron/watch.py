@@ -122,7 +122,7 @@ class Watcher:
 
     def _answer(self, question: str, *, title: str, folder: str, after: int,
                 here: str = "", source: str = "",
-                carried: list[tuple[str, str]] | None = None) -> bool:
+                carried: list | None = None) -> bool:
         self._say(f"\n> [{title}] {question}")
         state = graph.run(
             question, brain=self.brain, trigger="notes",
@@ -139,7 +139,7 @@ class Watcher:
         self._say(f"\n{state.answer}\n")
         return wrote
 
-    def _carried(self, note_id: str, modified: str = "") -> list[tuple[str, str]]:
+    def _carried(self, note_id: str, modified: str = "") -> list:
         """The files hanging off this note, for the prompt to be honest about.
 
         Asked here rather than in the poll: a note's attachments cost a 0.4s
@@ -147,7 +147,7 @@ class Watcher:
         note actually about to be answered pays for it.
         """
         try:
-            return [(a.kind, a.name) for a in attachments.on_note(note_id, modified)]
+            return attachments.on_note(note_id, modified)
         except Exception as e:
             # Not knowing what a note carries is worth less than not answering
             # at all. She simply says nothing about files, as she did before.

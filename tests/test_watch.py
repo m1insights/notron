@@ -272,4 +272,4 @@ def test_the_files_hanging_off_a_tagged_note_travel_with_the_question(monkeypatc
     monkeypatch.setattr(watch.graph, "run", fake_run)
     w.sweep_mentions()      # first sight — she waits for the typing to settle
     w.sweep_mentions()
-    assert seen["carried"] == [("audio", "recording.m4a")]
+    assert [(a.kind, a.name) for a in seen["carried"]] == [("audio", "recording.m4a")]

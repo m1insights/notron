@@ -181,3 +181,32 @@ def fetch(att: Attachment) -> pathlib.Path:
     if not dest.exists():
         notes.run(_EXTRACT, att.id, str(dest.resolve()))
     return dest
+
+
+#: How much of a text file the model sees. The same shape as
+#: `watch.here_text`: head and tail, with the gap marked, so she can say what
+#: she has not read rather than assume it is not there.
+MAX_TEXT = 24_000
+ELIDED = "\n\n[… the middle of this file is not shown …]\n\n"
+
+
+def read_text(att: Attachment) -> str:
+    """A text file dropped into a note, as the model should see it.
+
+    A file someone drags into a note is exactly where a `.env`, a diagnostics
+    dump or an export of a password manager arrives — in a note that holds no
+    secrets of its own and would never be flagged. So the same redaction a note
+    body gets is applied here, and a file *named* like a credential store gets
+    the treatment `privacy.filter_passages` gives a vault note the user asked
+    about by name: every value masked, every label kept. Nothing is dropped
+    outright, because the user dropped this file in themselves and is asking
+    about the note it is in — withholding it silently would be the dishonesty
+    invariant 12 exists to prevent.
+    """
+    from . import privacy
+
+    raw = fetch(att).read_bytes().decode("utf-8", errors="replace")
+    if len(raw) > MAX_TEXT:
+        half = MAX_TEXT // 2
+        raw = raw[:half] + ELIDED + raw[-half:]
+    return privacy.redact_vault(raw) if privacy.is_vault(att.name) else privacy.redact(raw)

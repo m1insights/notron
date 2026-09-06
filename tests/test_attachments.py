@@ -116,3 +116,51 @@ def test_a_note_ignored_since_the_list_was_made_is_not_pulled(
     with pytest.raises(attachments.NotAllowed):
         attachments.fetch(att)
     assert "extract" not in app.calls
+
+
+def test_a_text_file_comes_back_as_text(_notes_is_never_the_real_one, cache):
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("log.txt", "att/3")]
+    app.files["att/3"] = "line one\nline two\n".encode()
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    assert attachments.read_text(att) == "line one\nline two\n"
+
+
+def test_a_dropped_in_file_is_exactly_where_a_key_arrives(_notes_is_never_the_real_one, cache):
+    """A .env or a diagnostics dump is the normal way a secret enters a note
+    that holds no secrets at all. Redaction on the way in is not optional."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("diagnostics.txt", "att/4")]
+    app.files["att/4"] = b"host: prod\nAPI_KEY = sk-abcdefghijklmnopqrstuvwx\n"
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    out = attachments.read_text(att)
+    assert "sk-abcdefghijklmnopqrstuvwx" not in out
+    assert "host: prod" in out
+
+
+def test_a_file_named_like_a_password_note_is_masked_value_by_value(
+        _notes_is_never_the_real_one, cache):
+    """`passwords.txt` is `privacy.is_vault` by title. Inside a file that exists
+    to hold credentials every value is one, and none of them carry a keyword."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("passwords.txt", "att/5")]
+    app.files["att/5"] = b"gmail: hunter2\nbank: swordfish\n"
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    out = attachments.read_text(att)
+    assert "hunter2" not in out and "swordfish" not in out
+    assert "gmail" in out          # she can still say which accounts exist
+
+
+def test_a_huge_file_keeps_its_head_and_its_tail(_notes_is_never_the_real_one, cache):
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("big.txt", "att/6")]
+    app.files["att/6"] = (b"START" + b"x" * 60_000 + b"END")
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    out = attachments.read_text(att)
+    assert out.startswith("START") and out.endswith("END")
+    assert len(out) < 30_000
+    assert attachments.ELIDED.strip() in out
