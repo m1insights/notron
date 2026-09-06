@@ -133,6 +133,21 @@ class FakeNotesApp:
             ids = notes.US.join(i for _, i in rows)
             return f"{names}{notes.RS}{ids}"
 
+        if script is attachments._IN_FOLDER:
+            index = int(args[0])
+            self.calls.append("in_folder")
+            name, titles = self.folders[index - 1]
+            rows = []
+            for t in titles:
+                found = self.attachments.get(f"{name}/{t}", [])
+                if not found:
+                    continue
+                rows.append(attachments.GS.join((
+                    f"{name}/{t}",
+                    notes.US.join(n for n, _ in found),
+                    notes.US.join(i for _, i in found))))
+            return notes.RS.join([name, *rows])
+
         if script is attachments._EXTRACT:
             self.calls.append("extract")
             import pathlib as _pathlib

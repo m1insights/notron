@@ -86,7 +86,8 @@ def cmd_index(args):
     from . import index
 
     print("\n  Reading your notes…")
-    stats = index.build(_brain(), on_progress=lambda m: print(f"  {m}"), force=args.rebuild)
+    stats = index.build(_brain(), on_progress=lambda m: print(f"  {m}"),
+                        force=args.rebuild, extract=args.attachments)
     print(f"\n  Indexed {stats['notes']} notes "
           f"({stats['embedded']} passages embedded, {stats['reused']} already current)\n")
 
@@ -353,6 +354,10 @@ def main(argv=None):
 
     ix = sub.add_parser("index", help="teach Notron your notes (run after adding a lot)")
     ix.add_argument("--rebuild", action="store_true", help="re-embed everything from scratch")
+    ix.add_argument("--attachments", action="store_true",
+                    help="also look at pictures and listen to recordings (costs a "
+                         "vision call per picture; without it only what she has "
+                         "already read is indexed)")
     ix.set_defaults(fn=cmd_index)
 
     lb = sub.add_parser("library", help="which notes she may file into, and which she never reads")

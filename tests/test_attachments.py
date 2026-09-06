@@ -298,3 +298,37 @@ def test_a_recording_with_no_speech_in_it_is_not_cached_as_an_empty_answer(
     att = attachments.on_note("Notes/Recipes")[0]
     assert attachments.transcribe(att) == ""
     assert not (attachments.CACHE / "att-10.m4a.txt").exists()
+
+
+# ------------------------------------------------- a whole folder at once (E)
+
+def test_a_whole_folder_is_one_request(_notes_is_never_the_real_one):
+    """Per note it is 0.39s; for 222 notes that is 87 seconds of Notes being
+    unavailable to everything else. The folder-wide form is 0.18s and — the
+    plan had this backwards — it does say which note."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Parking Garages"] = [("ticket.png", "att/1")]
+    app.attachments["Notes/Supps"] = [("missing value", "att/2")]
+
+    found = attachments.in_folder("Notes")
+    assert list(found) == ["Notes/Parking Garages"]
+    assert found["Notes/Parking Garages"][0].note_id == "Notes/Parking Garages"
+    assert app.calls.count("in_folder") == 1
+
+
+def test_a_folder_that_moved_underneath_us_reports_nothing(
+        _notes_is_never_the_real_one, monkeypatch):
+    """A folder created above hers shifts every index below it and Notes raises
+    nothing — that is the 2026-09-03 bug. Reporting another folder's files as
+    this one's is the attachment-shaped version of it."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Parking Garages"] = [("ticket.png", "att/1")]
+    real = attachments.notes.run
+
+    def shifting(script, *args, **kw):
+        if script is attachments._IN_FOLDER:
+            app.insert_folder(1, "Aardvark")     # everything slides down one
+        return real(script, *args, **kw)
+
+    monkeypatch.setattr(attachments.notes, "run", shifting)
+    assert attachments.in_folder("Notes") == {}
