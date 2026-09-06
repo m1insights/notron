@@ -225,7 +225,14 @@ def _allowed(att: Attachment) -> None:
 
 
 def _cached_at(att: Attachment) -> pathlib.Path:
+    """Where this file lives once it is out of Notes."""
     return CACHE / (re.sub(r"[^A-Za-z0-9]+", "-", att.id).strip("-") + att.suffix)
+
+
+def _words_at(att: Attachment) -> pathlib.Path:
+    """Where what it says lives, beside it."""
+    at = _cached_at(att)
+    return at.with_name(at.name + ".txt")
 
 
 def known_text(att: Attachment) -> str:
@@ -235,9 +242,8 @@ def known_text(att: Attachment) -> str:
     another, is words on disk from then on. `notron index` reads them without
     asking Notes, a model, or the recogniser for anything.
     """
-    said = _cached_at(att).with_name(_cached_at(att).name + ".txt")
     try:
-        return said.read_text()
+        return _words_at(att).read_text()
     except OSError:
         return ""
 
@@ -374,14 +380,13 @@ def describe(att: Attachment, brain, question: str = DESCRIBE) -> str:
     known = known_text(att)
     if known:
         return known
-    path = fetch(att)
-    cached = path.with_name(path.name + ".txt")
 
+    path = fetch(att)
     small = downscale(path)
     out = privacy.redact(brain.see(
         image=small.read_bytes(), mime=_mime(small), question=question).strip())
     if out:
-        cached.write_text(out)
+        _words_at(att).write_text(out)
     return out
 
 
@@ -491,12 +496,10 @@ def transcribe(att: Attachment) -> str:
     known = known_text(att)
     if known:
         return known
-    path = fetch(att)
-    cached = path.with_name(path.name + ".txt")
 
-    said = privacy.redact(_listen(path))
+    said = privacy.redact(_listen(fetch(att)))
     if said:
-        cached.write_text(said)
+        _words_at(att).write_text(said)
     return said
 
 
