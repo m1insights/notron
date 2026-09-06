@@ -105,7 +105,21 @@ def _kind(name: str) -> str:
 
 def on_note(note_id: str, modified: str = "") -> list[Attachment]:
     """Every real file hanging off one note. Tables and other bodiless
-    attachments are dropped — they are structure, not content."""
+    attachments are dropped — they are structure, not content.
+
+    `modified` is the note's timestamp, and it matters: the library's "start
+    from 2026" cutoff hides a note as completely as an explicit ignore does,
+    and an id on its own cannot answer that question. Callers who have the
+    `Note` should pass it; callers who do not get the safe reading of an
+    unknown date, which is to treat the note as readable.
+    """
+    from . import library
+
+    if library.state_of(note_id, modified) == library.IGNORE:
+        # Invariant 11. Refused before the question is asked, not after the
+        # answer comes back — the point is that Notes is never queried at all,
+        # because a description of a photo is a read of the photo.
+        return []
     raw = notes.run(_ON_NOTE, note_id)
     if RS not in raw:
         return []

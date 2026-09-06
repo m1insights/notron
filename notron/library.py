@@ -105,6 +105,22 @@ def save(lib: Library) -> None:
     }, indent=1))
 
 
+def state_of(note_id: str, modified: str = "") -> str:
+    """The same rule as `Library.state_of`, asked with an id instead of a Note.
+
+    `attachments.on_note` only ever has an id, and it has to answer invariant 9
+    before it asks Notes anything. The modification date travels alongside
+    because the year cutoff is part of the rule: an id alone cannot say whether
+    a note the user never looked at falls before "start from 2026". Passing no
+    date reads the note rather than hiding it, exactly as `Library.hides` does
+    with a date it cannot parse.
+    """
+    lib = load()
+    if lib.hides(note_id, modified):
+        return IGNORE
+    return HOME if note_id in lib.homes else READ
+
+
 def user_notes(lib: Library | None = None) -> list[notes.Note]:
     """Every note of theirs she is allowed to read. The only way the core
     should ever list the user's notes."""
