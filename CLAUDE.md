@@ -140,6 +140,12 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
    fails to open — Notes busy, a bad decode, past the `nodes.MAX_LOOKS` cap —
    falls back into that list rather than disappearing from both. Silently losing
    a file is the outcome that reads as having looked.
+13. **No write ever lands on a note holding a picture.** Apple Notes hands an
+   embedded image back as inline base64 and discards it when the body is
+   written again, so a write there deletes the photo — silently, and after
+   `notedoc.preserves` has already passed. `markup.holds_media` is the check,
+   `guard.check` the only place it is enforced, for every mode including
+   `restore`; she answers in `📥 Ask Notron` instead of going quiet.
 
 ## Performance — measured on 358 notes, 1,263 reminders and 1,757 events
 
@@ -229,6 +235,20 @@ closes a 700× gap — use `notron/eventkit.py`.
 - `<a href>` loses its href. Emit bare URLs.
 - Native tap-to-tick checklists **cannot** be written by script. `☐`/`✅` text is the
   workaround — and the reason Reminders integration is the highest-value next step.
+- **A picture survives being read and does not survive being written.** The
+  `body` getter serialises an embedded photo as inline
+  `<img src="data:image/heic;base64,…">` — 1,867,394 characters for one
+  camera-roll image against 33 characters of real text — and the `body` setter
+  silently discards it, leaving `<div><br><br></div>`: no image, no attachment,
+  no error. Both directions measured 2026-09-06. So **any** scripted write to a
+  note holding a picture deletes the picture, at any size, and
+  `notedoc.preserves` cannot see it happen: every character NOTRON sends really
+  is preserved, and Notes throws the image away after the proof passes. The
+  Guard refuses every mode on such a note (`markup.holds_media`) and she
+  answers in `📥 Ask Notron` instead. Do not "fix" this by raising
+  `MAX_BODY_CHARS`: that was the only thing standing in the way, an image under
+  ~146KB clears it, and `ARG_MAX` is 1,048,576 so a 1.87MB body cannot reach
+  `osascript` at all.
 - A note's title is always the first line of its body. Every writer leads with it.
 - A launchd agent needs its own macOS Automation approval for Notes; until the user
   grants it, its first request hangs rather than failing.
