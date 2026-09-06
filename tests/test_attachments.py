@@ -164,3 +164,84 @@ def test_a_huge_file_keeps_its_head_and_its_tail(_notes_is_never_the_real_one, c
     assert out.startswith("START") and out.endswith("END")
     assert len(out) < 30_000
     assert attachments.ELIDED.strip() in out
+
+
+# ------------------------------------------------------- looking at it (C)
+
+class LookingBrain:
+    """Answers about a picture, and counts how many times it was asked."""
+
+    def __init__(self, answer="Text: BUY MILK. A whiteboard, three columns."):
+        self.answer = answer
+        self.seen = []
+
+    def see(self, **kw):
+        self.seen.append(kw)
+        return self.answer
+
+
+def test_she_reads_the_words_in_a_picture(_notes_is_never_the_real_one, cache, monkeypatch):
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("board.png", "att/7")]
+    app.files["att/7"] = b"\x89PNG pretend"
+    monkeypatch.setattr(attachments, "downscale", lambda p: p)
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    brain = LookingBrain()
+    assert "BUY MILK" in attachments.describe(att, brain)
+    assert brain.seen[0]["mime"] == "image/png"
+    assert brain.seen[0]["image"] == b"\x89PNG pretend"
+
+
+def test_a_picture_asked_about_twice_costs_one_look(
+        _notes_is_never_the_real_one, cache, monkeypatch):
+    """The description is cached beside the file. A vision call is the most
+    expensive thing in this module; paying for it twice buys nothing."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("board.png", "att/7")]
+    app.files["att/7"] = b"png"
+    monkeypatch.setattr(attachments, "downscale", lambda p: p)
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    brain = LookingBrain()
+    attachments.describe(att, brain)
+    attachments.describe(att, brain)
+    assert len(brain.seen) == 1
+
+
+def test_a_password_in_a_photo_is_redacted_once_it_becomes_words(
+        _notes_is_never_the_real_one, cache, monkeypatch):
+    """`privacy.py` only ever sees text, so a photo of a password is the one
+    thing it cannot catch. The moment the model reads it out it *is* text —
+    but only if the scan is actually run on what the model said."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("screenshot.png", "att/8")]
+    app.files["att/8"] = b"png"
+    monkeypatch.setattr(attachments, "downscale", lambda p: p)
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    out = attachments.describe(att, LookingBrain("The screen reads password: hunter2"))
+    assert "hunter2" not in out
+    assert "password" in out.lower()
+
+
+def test_a_heic_is_converted_because_the_endpoint_speaks_png_and_jpeg(
+        _notes_is_never_the_real_one, cache, monkeypatch):
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("photo.heic", "att/9")]
+    app.files["att/9"] = b"heic"
+    ran = []
+    monkeypatch.setattr(attachments.subprocess, "run",
+                        lambda cmd, **kw: ran.append(cmd) or _touch(cmd[-1]))
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    brain = LookingBrain()
+    attachments.describe(att, brain)
+    assert "png" in " ".join(ran[0])
+    assert brain.seen[0]["mime"] == "image/png"
+
+
+def _touch(path):
+    import pathlib as _p
+    _p.Path(path).write_bytes(b"converted")
+    return type("Done", (), {"returncode": 0})()

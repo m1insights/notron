@@ -572,3 +572,46 @@ def test_a_file_that_will_not_open_is_named_rather_than_silently_dropped(monkeyp
                         lambda a: (_ for _ in ()).throw(RuntimeError("Notes is busy")))
     s = nodes.retriever(State(request="what does it say?", carried=[att]), brain=None)
     assert [a.name for a in s.carried] == ["log.txt"]
+
+
+def test_a_picture_in_the_note_is_looked_at_and_quoted(monkeypatch):
+    from notron import attachments
+    att = attachments.Attachment(id="a1", name="board.png", kind="image")
+    monkeypatch.setattr(attachments, "describe",
+                        lambda a, brain, **kw: "Text: BUY MILK. A whiteboard.")
+
+    s = State(request="what's on the board?", carried=[att],
+              reply_to=("Kitchen", "Notes", 1))
+    s = nodes.retriever(s, brain=FakeBrain())
+
+    assert any("board.png" in c and "BUY MILK" in c for c in s.context)
+    assert s.carried == []
+
+
+def test_with_no_brain_behind_her_a_picture_is_named_not_guessed_at():
+    from notron import attachments
+    s = nodes.retriever(
+        State(request="what's on the board?",
+              carried=[attachments.Attachment(id="a1", name="board.png", kind="image")]),
+        brain=None)
+    assert [a.name for a in s.carried] == ["board.png"]
+
+
+def test_only_so_many_pictures_are_looked_at_for_one_question(monkeypatch):
+    """A note with fifteen screenshots would otherwise be fifteen vision calls
+    at ~3.5s each inside a listener poll — a minute with Notes blocked and a
+    bill to match. The rest stay named as unseen, which is the honest answer."""
+    from notron import attachments
+    looked = []
+    monkeypatch.setattr(attachments, "describe",
+                        lambda a, brain, **kw: looked.append(a.name) or f"a picture of {a.name}")
+
+    shots = [attachments.Attachment(id=f"a{i}", name=f"shot{i}.png", kind="image")
+             for i in range(nodes.MAX_LOOKS + 3)]
+    s = nodes.retriever(State(request="what do these show?", carried=shots),
+                        brain=FakeBrain())
+
+    assert len(looked) == nodes.MAX_LOOKS
+    assert len(s.context) == nodes.MAX_LOOKS
+    assert len(s.carried) == 3
+    assert "cannot read" in nodes._prompt(s).lower()

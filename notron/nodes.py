@@ -149,7 +149,14 @@ def router(state: State, *, brain) -> State:
 
 # -------------------------------------------------------------- Retriever
 
-def _attached(state: State) -> list[str]:
+#: How many pictures she will look at while answering one question. A note
+#: holding fifteen screenshots is otherwise fifteen vision calls at ~3.5s each,
+#: run inside a listener poll — a minute with the Notes app blocked, and a bill
+#: to match. Past this she says she has not seen them, which is true and cheap.
+MAX_LOOKS = 4
+
+
+def _attached(state: State, brain=None) -> list[str]:
     """The files hanging off this note that she can actually read, as passages.
 
     Whatever comes back stops being something she must warn the user she has
@@ -160,14 +167,17 @@ def _attached(state: State) -> list[str]:
     from . import attachments
 
     where = state.reply_to[0] if state.reply_to else "this note"
-    passages, unread = [], []
+    passages, unread, looks = [], [], 0
     for att in state.carried:
         text = ""
-        if att.kind == "text":
-            try:
+        try:
+            if att.kind == "text":
                 text = attachments.read_text(att)
-            except Exception:
-                text = ""       # Notes busy, deleted, unreadable — say so instead
+            elif att.kind == "image" and brain is not None and looks < MAX_LOOKS:
+                looks += 1
+                text = attachments.describe(att, brain)
+        except Exception:
+            text = ""       # Notes busy, deleted, unreadable — say so instead
         if text.strip():
             passages.append(f"### {att.name} (attached to {where})\n{text}")
         else:
@@ -184,7 +194,7 @@ def retriever(state: State, *, brain=None, limit: int = 12) -> State:
     not the router asked for context: the user put it there, in the note they
     are asking about, which is as explicit as a request gets.
     """
-    attached = _attached(state)
+    attached = _attached(state, brain)
     if attached:
         state.note("retriever", f"read {len(attached)} attached file(s)")
     if not state.needs_context:

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 from dataclasses import dataclass
 
 from . import notes
@@ -210,3 +211,77 @@ def read_text(att: Attachment) -> str:
         half = MAX_TEXT // 2
         raw = raw[:half] + ELIDED + raw[-half:]
     return privacy.redact_vault(raw) if privacy.is_vault(att.name) else privacy.redact(raw)
+
+
+# ------------------------------------------------------------- pictures
+
+#: The longest edge a picture is sent at. A 1.4MB screenshot came down to
+#: 282KB at this size with the text in it still readable, measured 2026-09-05.
+#: The payload is base64 inside a JSON request, so the raw file size is the
+#: request size plus a third.
+MAX_PIXELS = 1024
+
+#: What the vision endpoint will actually accept. Anything else — a HEIC off
+#: an iPhone, a TIFF off a scanner — is converted on the way, by the same
+#: `sips` that does the downscaling.
+SENDABLE = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp"}
+
+DESCRIBE = (
+    "Transcribe every word of text in this image, verbatim and in reading "
+    "order, before anything else. Then describe what the image shows in two "
+    "or three sentences. If it holds no text, say so and describe it. Do not "
+    "speculate about anything you cannot see."
+)
+
+
+def downscale(path: pathlib.Path) -> pathlib.Path:
+    """The picture at a size worth sending, converted if it has to be.
+
+    `sips` ships with macOS, so this adds no dependency — the same reasoning
+    that keeps EventKit behind `osascript` rather than a compiled helper.
+    """
+    suffix = path.suffix.lower()
+    out_png = suffix not in SENDABLE
+    small = path.with_name(f"{path.stem}-{MAX_PIXELS}{'.png' if out_png else suffix}")
+    if small.exists():
+        return small
+    cmd = ["sips", "-Z", str(MAX_PIXELS)]
+    if out_png:
+        cmd += ["-s", "format", "png"]
+    cmd += [str(path), "--out", str(small)]
+    try:
+        subprocess.run(cmd, capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    # A picture that will not convert is still worth sending as it is, unless
+    # the endpoint would not take it at all.
+    return small if small.exists() else path
+
+
+def _mime(path: pathlib.Path) -> str:
+    return SENDABLE.get(path.suffix.lower(), "image/png")
+
+
+def describe(att: Attachment, brain, question: str = DESCRIBE) -> str:
+    """What is in this picture, as words. Cached beside the file.
+
+    The answer is model-authored text about the user's own picture, and it goes
+    through `privacy.redact` before it goes anywhere else. A photo of a
+    password is the one secret `privacy.py` cannot catch, because it only ever
+    sees text — the moment the model reads it out it *is* text, and the
+    existing scan works, but only if it is actually run.
+    """
+    from . import privacy
+
+    path = fetch(att)
+    cached = path.with_name(path.name + ".txt")
+    if cached.exists():
+        return cached.read_text()
+
+    small = downscale(path)
+    out = privacy.redact(brain.see(
+        image=small.read_bytes(), mime=_mime(small), question=question).strip())
+    if out:
+        cached.write_text(out)
+    return out
