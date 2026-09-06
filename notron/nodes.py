@@ -876,8 +876,30 @@ def executor(state: State, *, brain=None, dry_run: bool = False) -> State:
             r = ex.replace(w.title, w.markdown, folder=folder,
                            rewrite_allowed=w.rewrite_allowed)
         state.results.append(f"{'✓' if r.ok else '✗'} {w.title} — {r.reason}")
+        if not r.ok and r.permanent and w.title != workspace.ASK:
+            state.stuck = r.reason
+            state.results.append(_say_it_elsewhere(ex, state, w))
     state.note("executor", f"{len(state.writes)} writes")
     return state
+
+
+def _say_it_elsewhere(ex: Executor, state: State, blocked: Write) -> str:
+    """Her answer, in the one note she can still write to.
+
+    Refusing to write is right. Going quiet is not: on 2026-09-06 a question
+    asked in a note holding a photo produced a correct answer, a Guard refusal,
+    and nothing the user could see anywhere — twice, then every half hour. The
+    answer is not the model's to lose, so it goes to 📥 Ask Notron with the
+    note it belongs to named at the top. No model runs here either; this is the
+    same reply, addressed somewhere else.
+    """
+    note = f"**{blocked.title}**" if blocked.title else "the note you tagged"
+    said = conversation.turn(
+        f"*(You asked in {note}. That note holds a picture, and Apple Notes "
+        f"deletes a picture from any note I write to — so I answered here "
+        f"instead of deleting it.)*\n\n{state.answer}")
+    r = ex.append(workspace.ASK, f"\n{said}\n", folder=workspace.FOLDER)
+    return f"{'✓' if r.ok else '✗'} {workspace.ASK} — {r.reason}"
 
 
 # ---------------------------------------------------------------- helpers

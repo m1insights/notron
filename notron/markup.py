@@ -4,6 +4,8 @@ Verified on macOS 26.2 (2026-08-29):
   renders   h1/h2/h3, <b>, <i>, <ul>, <ol>, <table>, <div>
   stripped  <a href> (href is dropped, text is underlined) -> emit bare URLs
   stripped  class="checklist" (no native tap-to-tick) -> emit U+2610 / U+2705
+  stripped  <img src="data:…"> — see `holds_media`, and read it before
+            writing anything that touches a body you did not build
 
 The first line of the body becomes the note's title in Notes, so `render`
 always emits the title as the opening block.
@@ -16,6 +18,34 @@ import re
 
 TODO = "☐"   # ☐
 DONE = "✅"   # ✅
+
+#: What Apple Notes hands back for an embedded picture — and will not take
+#: back. Measured 2026-09-06: the `body` getter serialises an attached photo as
+#: `<img style="…" src="data:image/heic;base64,…">` (1,867,394 characters for
+#: one camera-roll photo, against 33 characters of real text), and the `body`
+#: setter silently discards it, leaving `<div><br><br></div>` — no error, no
+#: attachment, no picture. Proved both directions on a throwaway note.
+#:
+#: So this is not a rendering quirk, it is a destruction risk: any scripted
+#: write to a note holding a picture deletes the picture. `notedoc.preserves`
+#: cannot catch it, because every character of the string NOTRON sends really
+#: is preserved — Notes throws the image away after the proof has passed.
+#:
+#: Matching `<img` at all, not only `data:`, is deliberate: nothing `to_html`
+#: emits can contain an image tag, so a false positive is impossible, and any
+#: image markup at all is something NOTRON cannot put back.
+_MEDIA = re.compile(r"<img\b|src\s*=\s*[\"']data:", re.I)
+
+
+def holds_media(html: str) -> bool:
+    """Does this note body carry a picture that a write-back would destroy?
+
+    Read the note on `_MEDIA` above before relaxing this. The honest summary:
+    Apple Notes will show you an embedded image when you ask for the body and
+    will throw it away when you hand the body back.
+    """
+    return bool(_MEDIA.search(html or ""))
+
 
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC = re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)")

@@ -90,6 +90,11 @@ DUMP_SETTLE = 900
 ASK_FURNITURE = (workspace.ASK, "Type anything below this line", conversation.QA_RULE)
 
 
+def _wrote(state) -> bool:
+    """Did anything actually land in Notes? A tick in front of a result line."""
+    return any(r.startswith("✓") for r in state.results)
+
+
 @dataclass
 class Watcher:
     brain: object
@@ -103,12 +108,20 @@ class Watcher:
 
     _pending: dict = field(default_factory=dict)   # key -> (text, first seen at)
     _failures: dict = field(default_factory=dict)  # key -> (count, last attempt at)
+    _stuck: set = field(default_factory=set)       # keys no amount of waiting can fix
     _ask_id: str | None = None
     _dump_id: str | None = None
 
     # A question that produced no write stays "unanswered" in the note, so the
     # next poll would send it to the model again, and again, forever — a quiet
     # API bill for one stuck message. Two honest tries, then a long pause.
+    #
+    # A pause is the right answer for a note that was busy or too big, because
+    # either may be different in half an hour. It is the wrong answer for a
+    # note holding a picture: that refusal is identical every time, and the
+    # pause turns it into a model call every thirty minutes for the life of
+    # the note. Those are set aside for good instead — she has already said
+    # her piece in 📥 Ask Notron.
     MAX_TRIES = 2
     COOLDOWN = 1800
 
@@ -122,7 +135,7 @@ class Watcher:
 
     def _answer(self, question: str, *, title: str, folder: str, after: int,
                 here: str = "", source: str = "",
-                carried: list | None = None) -> bool:
+                carried: list | None = None):
         self._say(f"\n> [{title}] {question}")
         state = graph.run(
             question, brain=self.brain, trigger="notes",
@@ -133,11 +146,10 @@ class Watcher:
             self._say(f"  {line}")
         for result in state.results:
             self._say(f"  {result}")
-        wrote = any(r.startswith("✓") for r in state.results)
-        if not wrote:
+        if not _wrote(state):
             self._say("  nothing was written — she will read this again")
         self._say(f"\n{state.answer}\n")
-        return wrote
+        return state
 
     def _carried(self, note_id: str, modified: str = "") -> list:
         """The files hanging off this note, for the prompt to be honest about.
@@ -155,10 +167,19 @@ class Watcher:
             return []
 
     def _worth_trying(self, key: str) -> bool:
+        if key in self._stuck:
+            return False
         count, at = self._failures.get(key, (0, 0.0))
         return count < self.MAX_TRIES or time.time() - at >= self.COOLDOWN
 
-    def _attempted(self, key: str, wrote: bool) -> None:
+    def _attempted(self, key: str, wrote: bool, stuck: str = "") -> None:
+        if stuck:
+            # Not a failure to retry — an answer that can never land where it
+            # was asked. She has said it in 📥 Ask Notron; asking the model
+            # again would buy the identical refusal.
+            self._stuck.add(key)
+            self._say(f"  [{key}] can't be answered in that note — {stuck}")
+            return
         if wrote:
             self._failures.pop(key, None)
         else:
@@ -206,10 +227,10 @@ class Watcher:
                 continue
             if not self._settled(key, q.text):
                 continue
-            wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
-                                 after=q.after, source=q.text,
-                                 carried=self._carried(self._ask_id))
-            self._attempted(key, wrote)
+            answered = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
+                                    after=q.after, source=q.text,
+                                    carried=self._carried(self._ask_id))
+            self._attempted(key, _wrote(answered), answered.stuck)
             # Only the Ask note moved underneath us; a tag elsewhere is still
             # settling on its own clock and keeps its timer.
             for stale in [k for k in self._pending if k.startswith("ask:")]:
@@ -227,10 +248,10 @@ class Watcher:
             if not self._settled(key, m.question):
                 continue
             body = notes.read_body(m.note_id)
-            wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                                 here=here_text(body, m.raw or m.question), source=m.raw,
-                                 carried=self._carried(m.note_id, m.modified))
-            self._attempted(key, wrote)
+            answered = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
+                                    here=here_text(body, m.raw or m.question), source=m.raw,
+                                    carried=self._carried(m.note_id, m.modified))
+            self._attempted(key, _wrote(answered), answered.stuck)
             self._pending.pop(key, None)
             return
 

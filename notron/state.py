@@ -68,6 +68,10 @@ class State:
     answer: str = ""
     writes: list[Write] = field(default_factory=list)
     results: list[str] = field(default_factory=list)
+    stuck: str = ""                  # why writing where she was asked can never
+                                     # work, if it never can — the listener stops
+                                     # asking rather than paying a model every
+                                     # half hour to be refused identically
     trace: list[str] = field(default_factory=list)
 
     def note(self, node: str, detail: str = "") -> None:

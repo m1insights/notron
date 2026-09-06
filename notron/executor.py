@@ -19,6 +19,7 @@ class WriteResult:
     reason: str
     note_id: str | None = None
     ref: str | None = None       # reminder id / event uid
+    permanent: bool = False      # trying again can never help — see guard.Verdict
 
 
 class Executor:
@@ -100,7 +101,8 @@ class Executor:
         )
         if not verdict:
             self._log(f"**BLOCKED** {mode} on *{title}* — {verdict.reason}")
-            return WriteResult(False, verdict.reason, note.id if note else None)
+            return WriteResult(False, verdict.reason, note.id if note else None,
+                               permanent=verdict.permanent)
 
         if self.dry_run:
             return WriteResult(True, "dry run — nothing written", note.id if note else None)

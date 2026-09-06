@@ -8,6 +8,11 @@ to call `notes.write_body` directly. Three guarantees, in plain terms:
      rewrite a note you wrote.
   3. No write may carry a password, PIN or key, whatever the model intended.
   4. Every allowed write is logged before it happens.
+  5. No write ever lands on a note holding a picture. Apple Notes hands an
+     embedded image back as inline base64 and then discards it when the body
+     is written again — so a write there deletes the photo, silently, and
+     `notedoc.preserves` cannot see it happen because the loss occurs after
+     the proof. See `markup.holds_media`.
 
 A fourth mode, `mark`, exists for the Filer: it may put a `✓ ` in front of a
 line and a receipt after it, and `notedoc.marks_between` proves that is all it
@@ -52,6 +57,11 @@ LATEST = re.compile(rf"(?i)\b(?:never|no|nothing|don'?t|not)\b[^.\n]{{0,40}}?\ba
 class Verdict:
     allowed: bool
     reason: str
+    #: True when trying again can never help — the note holds a picture, and it
+    #: will still hold one next time. The listener rests a note that failed for
+    #: an ordinary reason and stops asking about one that failed for this,
+    #: rather than paying a model every half hour to be refused identically.
+    permanent: bool = False
 
     def __bool__(self) -> bool:
         return self.allowed
@@ -73,6 +83,21 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str,
 
     if not new_body.strip():
         return Verdict(False, "refusing to write an empty body")
+
+    # Before the size check, because a note holding a photo is usually also an
+    # enormous one, and "over the 200000 limit" sends the reader looking for a
+    # bigger number instead of a deleted picture. Every mode, including
+    # `restore` — it is exempt from the preserve checks and the secret scan
+    # because it puts back the note's own words, but it is still a full-body
+    # write and would still throw the picture away.
+    if markup.holds_media(old_body):
+        return Verdict(
+            False,
+            f"{title!r} holds a picture. Apple Notes drops a picture from any "
+            "note a script writes to, so writing here would delete it — she "
+            "will answer somewhere else instead.",
+            permanent=True,
+        )
 
     if len(new_body) > MAX_BODY_CHARS:
         return Verdict(False, f"body is {len(new_body)} chars, over the {MAX_BODY_CHARS} limit")
