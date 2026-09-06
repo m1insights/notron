@@ -515,3 +515,21 @@ def test_the_opt_in_reaches_the_guard_and_only_when_it_was_set(dispatched):
         Write(title=workspace.TODAY, mode="replace", markdown="y"),
     ]))
     assert dispatched == [("replace", NOTE, True), ("replace", workspace.TODAY, False)]
+
+
+# ------------------------------------------ what she has not seen (Stage A)
+
+def test_she_is_told_about_a_file_she_cannot_read_yet():
+    """Apple Notes keeps an attachment out of the body entirely, so without
+    this she answers about a photo as if the photo were not there — which
+    sounds exactly like having looked."""
+    s = State(request="what does this say?", here="see attached",
+              carried=[("image", "whiteboard.png")])
+    p = nodes._prompt(s)
+    assert "whiteboard.png" in p
+    assert "cannot read" in p.lower()
+
+
+def test_a_note_with_no_files_says_nothing_about_files():
+    p = nodes._prompt(State(request="what's on today?"))
+    assert "cannot read" not in p.lower()

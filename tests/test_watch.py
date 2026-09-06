@@ -245,3 +245,31 @@ def test_the_lines_around_the_tag_survive_the_trim():
     assert "BURIED QUESTION @notron" in seen
     assert "opening line 0" in seen and "closing line 2999" in seen
     assert watch.ELIDED in seen
+
+
+def test_the_files_hanging_off_a_tagged_note_travel_with_the_question(monkeypatch):
+    """She was tagged in a note holding a voice memo. The body says nothing
+    about it — Notes keeps attachments out of the HTML — so unless the sweep
+    asks the second question, the model never learns the file exists."""
+    from notron import attachments, mentions
+
+    w = watch.Watcher(brain=None, settle=0)
+    w.scanner.scan = lambda: [mentions.Mention(
+        note_id="n1", title="New Recording", folder="Notes",
+        question="what's in this recording?", after=0, raw="@notron what's in this recording?",
+        modified="Wednesday, 2 September 2026 at 21:30:00")]
+    monkeypatch.setattr(watch.notes, "read_body", lambda note_id: "<div>New Recording</div>")
+    monkeypatch.setattr(attachments, "on_note", lambda note_id, modified="": [
+        attachments.Attachment(id="a1", name="recording.m4a", kind="audio")])
+
+    seen = {}
+
+    def fake_run(question, **kw):
+        seen.update(kw)
+        from notron.state import State
+        return State(request=question)
+
+    monkeypatch.setattr(watch.graph, "run", fake_run)
+    w.sweep_mentions()      # first sight — she waits for the typing to settle
+    w.sweep_mentions()
+    assert seen["carried"] == [("audio", "recording.m4a")]

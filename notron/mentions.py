@@ -32,6 +32,8 @@ class Mention:
     question: str
     after: int
     raw: str = ""        # the whole turn, tags intact — what the Filer ticks
+    modified: str = ""   # the note's timestamp, so anything asked about this
+                         # note afterwards can apply the library's year cutoff
 
 
 @dataclass
@@ -125,6 +127,7 @@ class Scanner:
                     question=conversation.strip_tag(conversation.tagged_lines(q.text)),
                     after=q.after,
                     raw=q.text,
+                    modified=n.modified,
                 ))
 
         # Save *after* working out what is still owed. Saving inside `changed()`

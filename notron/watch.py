@@ -29,7 +29,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from . import conversation, filer, graph, mentions, notes, workspace
+from . import attachments, conversation, filer, graph, mentions, notes, workspace
 from .markup import to_text
 from .applescript import AppleScriptError, NotesBusy
 
@@ -121,11 +121,13 @@ class Watcher:
     # --------------------------------------------------------------- answering
 
     def _answer(self, question: str, *, title: str, folder: str, after: int,
-                here: str = "", source: str = "") -> bool:
+                here: str = "", source: str = "",
+                carried: list[tuple[str, str]] | None = None) -> bool:
         self._say(f"\n> [{title}] {question}")
         state = graph.run(
             question, brain=self.brain, trigger="notes",
             reply_to=(title, folder, after), here=here, source=source,
+            carried=carried,
         )
         for line in state.trace:
             self._say(f"  {line}")
@@ -136,6 +138,21 @@ class Watcher:
             self._say("  nothing was written — she will read this again")
         self._say(f"\n{state.answer}\n")
         return wrote
+
+    def _carried(self, note_id: str, modified: str = "") -> list[tuple[str, str]]:
+        """The files hanging off this note, for the prompt to be honest about.
+
+        Asked here rather than in the poll: a note's attachments cost a 0.4s
+        request to Notes, and the Ask note is read every five seconds. Only a
+        note actually about to be answered pays for it.
+        """
+        try:
+            return [(a.kind, a.name) for a in attachments.on_note(note_id, modified)]
+        except Exception as e:
+            # Not knowing what a note carries is worth less than not answering
+            # at all. She simply says nothing about files, as she did before.
+            self._say(f"  (couldn't check for attached files: {type(e).__name__})")
+            return []
 
     def _worth_trying(self, key: str) -> bool:
         count, at = self._failures.get(key, (0, 0.0))
@@ -190,7 +207,8 @@ class Watcher:
             if not self._settled(key, q.text):
                 continue
             wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
-                                 after=q.after, source=q.text)
+                                 after=q.after, source=q.text,
+                                 carried=self._carried(self._ask_id))
             self._attempted(key, wrote)
             # Only the Ask note moved underneath us; a tag elsewhere is still
             # settling on its own clock and keeps its timer.
@@ -210,7 +228,8 @@ class Watcher:
                 continue
             body = notes.read_body(m.note_id)
             wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                                 here=here_text(body, m.raw or m.question), source=m.raw)
+                                 here=here_text(body, m.raw or m.question), source=m.raw,
+                                 carried=self._carried(m.note_id, m.modified))
             self._attempted(key, wrote)
             self._pending.pop(key, None)
             return

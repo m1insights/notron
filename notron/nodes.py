@@ -850,6 +850,17 @@ def _prompt(state: State) -> str:
         parts.append("# What you found on the web just now\n" + "\n\n".join(state.web))
     if state.here:
         parts.append(f"# The note they tagged you in\n{state.here}")
+    if state.carried:
+        # Invariant 12. She is blind to attachments, and the failure mode is not
+        # silence — it is a fluent answer about a photo she never saw, which
+        # reads exactly like having looked.
+        listed = "\n".join(f"- {name} ({kind})" for kind, name in state.carried)
+        parts.append(
+            "# Files attached to that note that you cannot read yet\n"
+            f"{listed}\n"
+            "You have NOT seen these. If the request is about one of them, say "
+            "plainly that you cannot open it yet — never guess at what it holds "
+            "and never answer as though it were not there.")
     if state.context:
         parts.append("# Their other relevant notes\n" + "\n\n".join(state.context))
     if state.agenda:
