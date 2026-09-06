@@ -34,6 +34,7 @@ is specced in `docs/design/04-onboarding-flow.md`.
 .venv/bin/python -m pytest tests -q      # 361 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
+.venv/bin/python -m notron index --attachments  # …also look at pictures, listen to recordings
 .venv/bin/python -m notron ask "..."       # one-shot, for testing
 .venv/bin/python -m notron listen          # foreground listener
 .venv/bin/python -m notron listen --install  # background listener via launchd
@@ -83,6 +84,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `calendar.py` | Bounded date-range reads; create-only. |
 | `when.py` | Dates, moved between model, Python and AppleScript without drift. |
 | `permissions.py` | Which apps she is actually allowed to read — including write-only. |
+| `attachments.py` | Pictures, recordings and files — the part of a note that is not text |
 | `markup.py` | Markdown ⇄ the HTML subset Notes actually renders |
 | `notedoc.py` | A note as addressable blocks; provably lossless inserts |
 | `conversation.py` | Reads a note as turns; finds what she has not answered |
@@ -125,6 +127,19 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
    lists the user's notes; `index`, `retrieval`, `mentions`, `care` and `filer` all
    go through it, and `index.search` re-checks at query time because the index may
    be older than the choice.
+10. **An attachment is only ever read.** Nothing in `attachments.py` creates,
+   renames, moves or deletes one. Notes offers `delete`; there is no code here
+   that calls it.
+11. **An ignored note's attachments are never touched** — not listed, not
+   extracted, not described. Invariant 9 covers the note; this covers what hangs
+   off it. `attachments.on_note` refuses *before* asking Notes, and `fetch`
+   asks the library again at the moment of use, because a list of attachments
+   held in a variable is older than a choice the user made since.
+12. **She never implies she has seen something she has not.** A file she cannot
+   read is named in the prompt with "you have NOT seen these", and anything that
+   fails to open — Notes busy, a bad decode, past the `nodes.MAX_LOOKS` cap —
+   falls back into that list rather than disappearing from both. Silently losing
+   a file is the outcome that reads as having looked.
 
 ## Performance — measured on 358 notes, 1,263 reminders and 1,757 events
 
@@ -156,6 +171,27 @@ when a name matches nothing — that fallback is what created the duplicate.
 `ensure_folder` is the one place a folder is ever created, and it refreshes the
 index the moment it does.
 
+**Attachments: the same two rules, measured again.** An attachment leaves no
+trace in the note body — a note holding a voice memo reads back as
+`<div><br><br></div>`, 39 characters, and `markup.to_text` returns `''`. So
+every part of Notron that works from a body is blind to it by construction, and
+`attachments.py` is the only place that asks Notes the second question.
+
+| Doing it the obvious way | Doing it right |
+|---|---|
+| `attachments of nt` then `name of atts` — **`-1728`** | `name of every attachment of nt` — **0.30s** |
+| Per-note query over a folder — **87s** for 222 notes | `attachments of every note of f` — **0.18s** |
+
+The bulk form does **not** flatten, contrary to a first reading: it returns one
+sub-list per note, in the same order as `id of every note of f`, so zipping the
+three lists names the note each file hangs off. (What does come back `missing
+value` is `id of container of …`.) Two traps beyond the ones above: a bare
+`nm as text` raises `-1700` the moment an inline table is in the list — Notes
+models a table as an attachment whose `name` is `missing value`, and most
+attachments in a real library are tables, not files — and a folder addressed by
+a stale index returns another folder's files with no error, so `in_folder`
+checks the name that comes back exactly as `notes.resolve` does.
+
 **Reminders and Calendar: never AppleScript. EventKit.**
 
 | Doing it the obvious way | Doing it right |
@@ -176,6 +212,13 @@ closes a 700× gap — use `notron/eventkit.py`.
   `finish_reason: "stop"` and no error. `brain.ask` adds `REASONING_HEADROOM` and
   retries once at double budget. Nothing turns reasoning off on this endpoint —
   `reasoning_effort="none"`, `/no_think` and `chat_template_kwargs` were all tried.
+- **The vision model reasons *inside* `content`.** `openbmb/MiniCPM-V-4_5` (used
+  by `brain.see`, still on Nebius) emits `<think>…</think>` ahead of its answer
+  rather than in the separate `reasoning` field Nemotron uses — so the headroom
+  fix alone is not enough, and the first real call had three paragraphs of the
+  model talking itself through a picture on their way into a note. `see` strips
+  it, and treats an *unterminated* block as having spent the whole budget
+  thinking: dropped, and asked again at double rather than printed.
 - **JSON mode truncates mid-string.** `brain.ask_json` tries the raw text, a fenced
   block, the outermost braces, then rebuilds from complete pairs. The router falls
   back to a safe intent rather than stopping the graph.
@@ -302,6 +345,48 @@ until the user has picked once (`RewriteDefaultState.needsChoice` in
 (misfiling), this one is a nice-to-have default. Writes through the same
 `Core.run` bridge as everywhere else, via a thin `notron rewrite --default
 ask|always|never` CLI flag over `rewrite.set_default_for_new_notes`.
+
+## Attachments (`attachments.py`)
+
+Apple Notes keeps a picture, a recording or a dropped-in file completely out of
+the note's HTML body, so until this module existed she answered questions about
+a photo as though the photo were not there — fluent, confident, and
+indistinguishable from having looked. Three things follow from that:
+
+*She says what she cannot read.* Every answering surface asks what the note
+carries on the way to an answer (never on an idle poll — the Ask note is read
+every five seconds and this costs 0.4s). What she cannot put into words is
+listed in the prompt under "you have NOT seen these", and anything that fails
+for any reason falls back into that list.
+
+*Everything becomes text, and text is untrusted.* A `.txt` is read directly; a
+picture goes to `brain.see` (Nebius, MiniCPM-V, downscaled with `sips` — a
+macOS built-in, no new dependency); a voice memo is transcribed by macOS itself.
+All three go through `privacy.py` on the way in — **a photo of a password is the
+one secret `privacy.py` cannot catch**, because it only ever sees text, and the
+moment the model reads it out loud it *is* text. Results are cached beside the
+file, so a picture asked about twice costs one look, and the cached words are
+what `notron index` makes searchable.
+
+*Speech is on-device, and its permission is backwards.* `SFSpeechRecognizer`
+through JXA, the same route EventKit takes and for the same reason (a compiled
+helper's identity changes on every rebuild; a background listener can never
+answer a prompt). Never call `requestAuthorization` — under `osascript` the
+callback never fires, because there is no usage string in its bundle, so a
+design that waits for a grant hangs forever. Recognising a *local file*
+on-device needs no grant: it works with `authorizationStatus` sitting at `0`.
+`requiresOnDeviceRecognition = true` is not an optimisation but the hackathon
+rule — without it Apple may send the audio to its own servers. This is the one
+permission `notron permissions` reports by capability rather than by its numeric
+status, because here the number says "not determined" forever while
+transcription works perfectly.
+
+Cost is bounded in two places. `nodes.MAX_LOOKS` caps how many pictures one
+answer will look at — a note of fifteen screenshots is otherwise fifteen vision
+calls at ~3.5s each inside a listener poll — and `notron index` describes or
+transcribes nothing without `--attachments`, indexing only what she has already
+read. Full design and the measurements behind it:
+`docs/plans/2026-09-05-attachments.md`.
 
 ## The self-improvement loop (`reflect.py`)
 
