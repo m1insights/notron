@@ -17,7 +17,7 @@ rather than whatever the person running the suite happens to have written down
 
 import pytest
 
-from notron import applescript, mentions, notes, rewrite, undo
+from notron import applescript, attachments, mentions, notes, rewrite, undo
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +78,9 @@ class FakeNotesApp:
             ("🤖 NOTRON", ["📌 About Me", "📥 Ask Notron", "🧠 Brain Dump", "📊 Log"]),
         ])]
         self.bodies: dict[str, str] = {}
+        #: note id -> [(attachment name, attachment id)]. Apple Notes keeps
+        #: these completely out of the body, so they live beside it here too.
+        self.attachments: dict[str, list[tuple[str, str]]] = {}
         self.calls: list[str] = []
 
     def insert_folder(self, position: int, name: str) -> None:
@@ -120,6 +123,13 @@ class FakeNotesApp:
                 return "exists"
             self.folders.append((args[0], []))
             return "created"
+
+        if script is attachments._ON_NOTE:
+            self.calls.append("attachments")
+            rows = self.attachments.get(args[0], [])
+            names = notes.US.join(n for n, _ in rows)
+            ids = notes.US.join(i for _, i in rows)
+            return f"{names}{notes.RS}{ids}"
 
         # A write, a `show note`, an EventKit JXA script — anything that would
         # have reached the real machine. Loud, with the script in the message,
