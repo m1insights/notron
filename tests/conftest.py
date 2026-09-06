@@ -81,6 +81,8 @@ class FakeNotesApp:
         #: note id -> [(attachment name, attachment id)]. Apple Notes keeps
         #: these completely out of the body, so they live beside it here too.
         self.attachments: dict[str, list[tuple[str, str]]] = {}
+        #: attachment id -> the bytes Notes would write out on `save`.
+        self.files: dict[str, bytes] = {}
         self.calls: list[str] = []
 
     def insert_folder(self, position: int, name: str) -> None:
@@ -130,6 +132,12 @@ class FakeNotesApp:
             names = notes.US.join(n for n, _ in rows)
             ids = notes.US.join(i for _, i in rows)
             return f"{names}{notes.RS}{ids}"
+
+        if script is attachments._EXTRACT:
+            self.calls.append("extract")
+            import pathlib as _pathlib
+            _pathlib.Path(args[1]).write_bytes(self.files.get(args[0], b""))
+            return "ok"
 
         # A write, a `show note`, an EventKit JXA script — anything that would
         # have reached the real machine. Loud, with the script in the message,

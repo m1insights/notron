@@ -67,3 +67,52 @@ def test_a_note_hidden_only_by_the_year_cutoff_is_also_never_asked(_notes_is_nev
 
     recent = "Wednesday, 2 September 2026 at 21:30:00"
     assert [a.name for a in attachments.on_note("Notes/Old", recent)] == ["scan.png"]
+
+
+# ------------------------------------------------- pulling the file out (B)
+
+@pytest.fixture
+def cache(monkeypatch, tmp_path):
+    monkeypatch.setattr(attachments, "CACHE", tmp_path / "attachments")
+    return tmp_path / "attachments"
+
+
+def test_a_file_comes_out_of_notes_onto_disk(_notes_is_never_the_real_one, cache):
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("pasta.png", "att/2")]
+    app.files["att/2"] = b"\x89PNG pretend"
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    path = attachments.fetch(att)
+    assert path.read_bytes() == b"\x89PNG pretend"
+    assert path.suffix == ".png"
+
+
+def test_notes_is_asked_for_the_same_file_only_once(_notes_is_never_the_real_one, cache):
+    """An attachment does not change. A note asked about twice should not pay
+    Notes twice — every request to it is a request nothing else can make."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Recipes"] = [("pasta.png", "att/2")]
+    app.files["att/2"] = b"bytes"
+
+    att = attachments.on_note("Notes/Recipes")[0]
+    attachments.fetch(att)
+    attachments.fetch(att)
+    assert app.calls.count("extract") == 1
+
+
+def test_a_note_ignored_since_the_list_was_made_is_not_pulled(
+        _notes_is_never_the_real_one, cache):
+    """`index.search` re-checks the ignore list at query time because the index
+    can be older than the choice. An Attachment handed around is older than the
+    choice in exactly the same way."""
+    app = _notes_is_never_the_real_one
+    app.attachments["Notes/Private"] = [("passport.png", "att/9")]
+    app.files["att/9"] = b"bytes"
+
+    att = attachments.on_note("Notes/Private")[0]
+    library.save(library.Library(ignore={"Notes/Private"}))
+
+    with pytest.raises(attachments.NotAllowed):
+        attachments.fetch(att)
+    assert "extract" not in app.calls

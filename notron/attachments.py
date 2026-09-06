@@ -28,10 +28,17 @@ module can.
 
 from __future__ import annotations
 
+import pathlib
+import re
 from dataclasses import dataclass
 
 from . import notes
 from .notes import RS, US
+
+#: Where a file pulled out of Notes lives once it is out. An attachment does
+#: not change, so this is a cache in the strict sense: asked twice, Notes is
+#: asked once. Beside every other piece of Notron's state.
+CACHE = pathlib.Path(__file__).resolve().parents[1] / ".notron" / "attachments"
 
 # Notes models an inline table as an attachment with no name and no file. The
 # developer's library holds 41 of them against 17 real files, so this is the
@@ -79,11 +86,19 @@ end run
 """
 
 
+class NotAllowed(PermissionError):
+    """This note is one she may not read. Invariant 11, said out loud."""
+
+
 @dataclass(frozen=True)
 class Attachment:
     id: str
     name: str
     kind: str      # "image" | "audio" | "pdf" | "text" | "other"
+    note_id: str = ""   # the note it hangs off, so the library rule can be
+                        # asked again later — a list made this morning is older
+                        # than a choice made this afternoon
+    modified: str = "" 
 
     @property
     def suffix(self) -> str:
@@ -128,5 +143,41 @@ def on_note(note_id: str, modified: str = "") -> list[Attachment]:
     for name, att_id in zip(names, ids):
         if name.strip() in _NOT_A_FILE or not att_id.strip():
             continue
-        out.append(Attachment(id=att_id, name=name, kind=_kind(name)))
+        out.append(Attachment(id=att_id, name=name, kind=_kind(name),
+                              note_id=note_id, modified=modified))
     return out
+
+
+_EXTRACT = """
+on run argv
+  tell application "Notes"
+    save attachment id (item 1 of argv) in (POSIX file (item 2 of argv))
+  end tell
+  return "ok"
+end run
+"""
+
+
+def _allowed(att: Attachment) -> None:
+    """Ask the library again, at the moment of use.
+
+    `index.search` re-checks the ignore list at query time because the index
+    may be older than the user's choice. An `Attachment` handed around in a
+    variable is older than the choice in exactly the same way, and pulling a
+    file out of a note she has since been told never to read is worse than
+    returning a stale search hit.
+    """
+    from . import library
+
+    if att.note_id and library.state_of(att.note_id, att.modified) == library.IGNORE:
+        raise NotAllowed(f"{att.name} hangs off a note Notron may not read")
+
+
+def fetch(att: Attachment) -> pathlib.Path:
+    """The attachment as a real file on disk. Cached; Notes is asked once."""
+    _allowed(att)
+    CACHE.mkdir(parents=True, exist_ok=True)
+    dest = CACHE / (re.sub(r"[^A-Za-z0-9]+", "-", att.id).strip("-") + att.suffix)
+    if not dest.exists():
+        notes.run(_EXTRACT, att.id, str(dest.resolve()))
+    return dest
