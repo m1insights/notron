@@ -520,6 +520,40 @@ any implementation. Record which macOS Speech permission is required — it is a
 fourth TCC permission with a fourth silent failure, and `notron permissions` must
 learn to report it either way.
 
+## Spike result (2026-09-05): path 1 works
+
+**JXA + ObjC bridge to `SFSpeechRecognizer`, on-device, no new permission.**
+Measured on this machine, in this order:
+
+| What was tried | What happened |
+|---|---|
+| `SFSpeechRecognizer.requestAuthorization` under `osascript` | The callback **never fires**. Twenty seconds of pumped run loop, `status_after: null`. `osascript` has no `NSSpeechRecognitionUsageDescription`, so there is no prompt to answer and nothing comes back. A design that waits for a grant here hangs forever. |
+| Recognising a file anyway, with `requiresOnDeviceRecognition = true` | **Works.** `isAvailable: true`, `supportsOnDeviceRecognition: true`, and a real result — while `authorizationStatus` is still `0` (notDetermined). The entitlement gates microphone capture and Apple's *server* recogniser; recognising a local file on-device needs neither. |
+| A 3.8s clip of known speech | `"Remember to pay the plumber on Friday and buy a magnesium glycinate"` in **0.37s** wall clock, spoken text back verbatim. |
+| The real `recording.m4a` in "New Recording" | `No speech detected` — that recording genuinely holds no speech. Not a failure of the path. |
+
+Three things this fixes in the design:
+
+* **Do not ask for authorization, and never gate on its status.** The request
+  never returns and the status stays `0` forever while transcription works
+  perfectly. `notron permissions` must report what is *available*
+  (`isAvailable` + `supportsOnDeviceRecognition`), not the TCC number — the
+  numeric read that is right for Calendar and Reminders is actively misleading
+  here, which is the opposite of every other permission in this codebase.
+* **`requiresOnDeviceRecognition = true` is not optional, it is the hackathon
+  rule.** Without it Apple may send the audio to its own servers, which would
+  make a second cloud provider out of a checkbox. With it, the audio never
+  leaves the machine — the same standing as the Notes app turning handwriting
+  into characters.
+* **The run loop still has to be pumped.** `recognitionTaskWithRequestResultHandler`
+  calls back exactly the way EventKit does, and JXA still has no `await`. This
+  is `eventkit.py`'s trap, in a second place.
+
+No Swift helper, no `shortcuts run`, no setup for the user. Path 2 was not needed
+and path 3 does not apply.
+
+---
+
 ### Task 9: Transcribe a voice memo
 
 Only if the spike found a path. `transcribe(att)` → cached `.txt` beside the file,
