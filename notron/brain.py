@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -33,6 +34,9 @@ EMBED_MODEL = "Qwen/Qwen3-Embedding-8B"
 # Override with NOTRON_MODEL_VISION. Still Nebius, so the hackathon rule holds:
 # every judgement about what a picture *means* is made by Nemotron afterwards.
 VISION_MODEL = "openbmb/MiniCPM-V-4_5"
+
+_THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
+_UNCLOSED_THINK = re.compile(r"<think>.*\Z", re.S | re.I)
 
 # Nemotron's chain of thought is billed against max_tokens but is not the answer.
 # Every request gets this much extra room so the reply itself survives.
@@ -144,6 +148,20 @@ class Brain:
             content = (msg.content or "").strip()
         return content
 
+    @staticmethod
+    def _answer_only(raw: str) -> str:
+        """The reply with the model's thinking taken out of it.
+
+        Nemotron puts its reasoning in a separate `reasoning` field, so `ask`
+        never has to do this. MiniCPM does not: measured live on 2026-09-05, it
+        returns `<think>…</think>` inside `content`, ahead of the answer. Left
+        alone that reasoning gets written into the user's own note. An
+        unterminated block is the model having spent the whole budget thinking
+        — nothing in it is an answer, so it is dropped and asked again bigger.
+        """
+        text = _THINK.sub("", raw)
+        return _UNCLOSED_THINK.sub("", text).strip()
+
     def _look(self, model: str, question: str, data_uri: str, budget: int,
               temperature: float):
         resp = self._client.chat.completions.create(
@@ -176,12 +194,13 @@ class Brain:
         budget = max_tokens + REASONING_HEADROOM
 
         msg = self._look(model, question, data_uri, budget, temperature)
-        content = (msg.content or "").strip()
+        raw = msg.content or ""
+        content = self._answer_only(raw)
         if content:
             return content
-        if getattr(msg, "reasoning", None):
+        if getattr(msg, "reasoning", None) or "<think" in raw.lower():
             msg = self._look(model, question, data_uri, budget * 2, temperature)
-            content = (msg.content or "").strip()
+            content = self._answer_only(msg.content or "")
         return content
 
     def embed(self, texts: list[str]) -> list[list[float]]:

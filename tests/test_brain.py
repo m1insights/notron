@@ -87,3 +87,21 @@ def test_the_vision_model_can_be_overridden_like_every_other_tier(brain, monkeyp
     fake = brain.use([("ok", None)])
     brain.see(image=b"x", mime="image/png", question="?")
     assert fake.sent[0]["model"] == "google/gemma-3-27b-it"
+
+
+def test_the_thinking_never_reaches_the_note(brain):
+    """Measured live 2026-09-05: MiniCPM puts its <think> block in `content`,
+    not in a separate `reasoning` field the way Nemotron does. Left alone it
+    would be written into the user's own note, reasoning and all."""
+    brain.use([("<think>\nlet me look at the columns...\n</think>\n\nThree columns.", None)])
+    assert brain.see(image=b"x", mime="image/png", question="?") == "Three columns."
+
+
+def test_thinking_that_ran_out_of_room_is_asked_again_not_shown(brain):
+    """An unterminated <think> is the model spending the whole budget on
+    reasoning — the plan's 300-token measurement. There is no answer in there
+    to salvage, so buy a bigger one rather than print the thought."""
+    fake = brain.use([("<think>\nfirst I should consider whether", None),
+                      ("Three columns.", None)])
+    assert brain.see(image=b"x", mime="image/png", question="?") == "Three columns."
+    assert len(fake.sent) == 2
