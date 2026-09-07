@@ -143,7 +143,10 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 13. **No write ever lands on a note holding a picture.** Apple Notes hands an
    embedded image back as inline base64 and discards it when the body is
    written again, so a write there deletes the photo — silently, and after
-   `notedoc.preserves` has already passed. `markup.holds_media` is the check,
+   `notedoc.preserves` has already passed. Leaving the `<img>` markup out of
+   the write does not help: tested 2026-09-06, the attachment behind it is
+   deleted too, so there is no scripted write that keeps a picture.
+   `markup.holds_media` is the check,
    `guard.check` the only place it is enforced, for every mode including
    `restore`; she answers in `📥 Ask Notron` instead of going quiet, and
    `mentions.answered_away` then retires that question — keyed by the question,
@@ -252,7 +255,13 @@ closes a 700× gap — use `notron/eventkit.py`.
   answers in `📥 Ask Notron` instead. Do not "fix" this by raising
   `MAX_BODY_CHARS`: that was the only thing standing in the way, an image under
   ~146KB clears it, and `ARG_MAX` is 1,048,576 so a 1.87MB body cannot reach
-  `osascript` at all.
+  `osascript` at all. **And do not try stripping the `<img>` markup out first
+  — that was tested on 2026-09-06 and it destroys the photo too.** Writing a
+  body with the image markup removed took the note from 1,867,394 characters
+  to 198 and left `attachments of note` empty: Notes treats the body it is
+  handed as the whole truth and deletes the attachment object behind it. There
+  is no scripted write that keeps a picture. Refusing is not a conservative
+  choice here, it is the only correct one.
 - A note's title is always the first line of its body. Every writer leads with it.
 - A launchd agent needs its own macOS Automation approval for Notes; until the user
   grants it, its first request hangs rather than failing.
