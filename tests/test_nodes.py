@@ -615,3 +615,73 @@ def test_only_so_many_pictures_are_looked_at_for_one_question(monkeypatch):
     assert len(s.context) == nodes.MAX_LOOKS
     assert len(s.carried) == 3
     assert "cannot read" in nodes._prompt(s).lower()
+
+
+# --- a blind calendar is not a free day ------------------------------------
+#
+# Measured 2026-09-06: from the background listener EventKit reports zero
+# calendars and zero events, with no error, because that process has never
+# been granted access and cannot ask for it (docs/spikes/2026-09-06-eventkit-
+# request-under-osascript.md). Every `agenda:` line in .notron/listen.log read
+# "125 chars of real commitments" — the exact length of "Nothing in the
+# calendar today" plus "Nothing outstanding in Reminders". She planned around
+# a day she could not see, and said nothing.
+
+def _blind(app="Calendar"):
+    from notron.permissions import Check
+    return lambda: [
+        Check(app, False, "is denied", "System Settings → Privacy & Security"),
+        Check("Reminders" if app == "Calendar" else "Calendar", True, "full access", ""),
+    ]
+
+
+def _sighted():
+    from notron.permissions import Check
+    return lambda: [Check("Calendar", True, "full access", ""),
+                    Check("Reminders", True, "full access", "")]
+
+
+def test_an_unreadable_calendar_is_not_reported_as_a_free_day():
+    state = State(intent="schedule")
+    nodes.agenda(state, checker=_blind("Calendar"),
+                 reader=lambda: ("Nothing in the calendar today.",
+                                 "Nothing outstanding in Reminders."))
+    assert "Nothing in the calendar today." not in state.agenda
+    assert "cannot read" in state.agenda.lower()
+    assert "is denied" in state.agenda
+
+
+def test_an_unreadable_reminders_list_is_not_reported_as_nothing_to_do():
+    state = State(intent="plan")
+    nodes.agenda(state, checker=_blind("Reminders"),
+                 reader=lambda: ("Nothing in the calendar today.",
+                                 "Nothing outstanding in Reminders."))
+    assert "Nothing outstanding in Reminders." not in state.agenda
+    assert "cannot read" in state.agenda.lower()
+
+
+def test_a_readable_but_genuinely_empty_day_still_says_nothing():
+    """The honest empty day must survive. Only an unreadable one changes."""
+    state = State(intent="schedule")
+    nodes.agenda(state, checker=_sighted(),
+                 reader=lambda: ("Nothing in the calendar today.",
+                                 "Nothing outstanding in Reminders."))
+    assert "Nothing in the calendar today." in state.agenda
+    assert "cannot read" not in state.agenda.lower()
+
+
+def test_what_she_did_manage_to_see_is_still_shown_alongside_the_warning():
+    state = State(intent="schedule")
+    nodes.agenda(state, checker=_blind("Calendar"),
+                 reader=lambda: ("- 09:00 Standup", "Nothing outstanding in Reminders."))
+    assert "Standup" in state.agenda
+    assert "cannot read" in state.agenda.lower()
+
+
+def test_a_permission_check_that_itself_fails_does_not_lose_the_agenda():
+    def boom():
+        raise RuntimeError("no osascript here")
+    state = State(intent="schedule")
+    nodes.agenda(state, checker=boom,
+                 reader=lambda: ("- 09:00 Standup", "Nothing outstanding in Reminders."))
+    assert "Standup" in state.agenda

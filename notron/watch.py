@@ -297,6 +297,26 @@ class Watcher:
 
     # ------------------------------------------------------------------- loop
 
+    def _report_blind_spots(self, checker=None) -> None:
+        """Say, once, which apps this process cannot read — and how to fix it.
+
+        `notron permissions` answers for the terminal it is typed into. The
+        listener is a different process with a different grant, and measured
+        2026-09-06 it had none: zero calendars, zero events, no error. The log
+        is the only place anyone looks when she is quietly wrong about the day,
+        so the answer has to be in it.
+        """
+        from . import permissions
+
+        try:
+            missing = permissions.blind(checker=checker)
+        except Exception as e:
+            self._say(f"  (couldn't check permissions: {type(e).__name__})")
+            return
+        for c in missing:
+            self._say(f"  ⚠️  {c.app} {c.detail} — she will say so rather than "
+                      f"plan around it." + (f" Fix: {c.fix}" if c.fix else ""))
+
     def run_forever(self) -> None:
         # Notes may have been idle for hours. Waking it is slow exactly once.
         try:
@@ -305,6 +325,8 @@ class Watcher:
                 self._say(f"woke the Notes app ({took:.0f}s — it had been asleep)")
         except Exception as e:
             self._say(f"  (Notes did not wake: {type(e).__name__}) — trying anyway")
+
+        self._report_blind_spots()
 
         self._say(f"listening to {workspace.ASK} — type in Notes on any device")
         try:

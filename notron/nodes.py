@@ -269,15 +269,58 @@ def researcher(state: State, *, brain=None) -> State:
 SCHEDULING = ("plan", "remind", "schedule")
 
 
-def _agenda_text() -> str:
+#: What the agenda says instead of "nothing", when nothing is all she can see
+#: because she was never allowed to look. The words matter: the model is told
+#: she *cannot read* the app, so it plans around an unknown day rather than a
+#: free one, and the user is told which switch to flip.
+BLIND = "I cannot read your {app} — it {detail}."
+
+
+def _read_day() -> tuple[str, str]:
     """Today's calendar and what is still outstanding. Two app reads, no model."""
     from . import calendar, reminders
 
-    return (f"## In your calendar today\n{calendar.brief()}\n\n"
-            f"## Still outstanding in Reminders\n{reminders.summary()}")
+    return calendar.brief(), reminders.summary()
 
 
-def agenda(state: State, *, brain=None) -> State:
+def _agenda_text(*, reader=None, checker=None) -> str:
+    """The day, with an honest word about any part of it she could not see.
+
+    An EventKit read from a process that has not been granted access returns
+    zero calendars and zero events — no exception, no warning, nothing to
+    distinguish it from a genuinely free week (measured 2026-09-06, see
+    docs/spikes/2026-09-06-eventkit-request-under-osascript.md). So the read
+    alone is never enough: ask what she is allowed to see before believing an
+    empty answer.
+    """
+    from . import permissions
+
+    day, todo = (reader or _read_day)()
+    try:
+        unreadable = {c.app: c for c in permissions.blind(checker=checker)}
+    except Exception:
+        # A permission check that cannot run is not a reason to lose the agenda.
+        # Better a day she may have misread than no day at all.
+        unreadable = {}
+
+    def section(heading: str, body: str, app: str, empty: str) -> str:
+        gone = unreadable.get(app)
+        if gone is None:
+            return f"## {heading}\n{body}"
+        warning = BLIND.format(app=app, detail=gone.detail)
+        if gone.fix:
+            warning += f" ({gone.fix})"
+        seen = "" if body.strip() in ("", empty) else f"\n{body}"
+        return f"## {heading}\n{warning}{seen}"
+
+    return (section("In your calendar today", day, "Calendar",
+                    "Nothing in the calendar today.")
+            + "\n\n"
+            + section("Still outstanding in Reminders", todo, "Reminders",
+                      "Nothing outstanding in Reminders."))
+
+
+def agenda(state: State, *, brain=None, reader=None, checker=None) -> State:
     """No model. Reads the real day, but only when the request is about the day.
 
     This is deliberately not in `watcher`: the watcher runs on every wake-up of the
@@ -287,7 +330,7 @@ def agenda(state: State, *, brain=None) -> State:
     if state.intent not in SCHEDULING:
         return state
     try:
-        state.agenda = _agenda_text()
+        state.agenda = _agenda_text(reader=reader, checker=checker)
     except Exception as e:
         # Automation approval can be revoked at any time, and Calendar hangs rather
         # than failing when it is. Losing context is survivable; losing the morning

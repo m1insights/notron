@@ -352,3 +352,51 @@ def test_a_note_that_no_longer_exists_is_dropped_from_the_to_do_list(tmp_path, m
     s.pending = {"p1", "a-note-that-was-deleted"}
     s.changed()
     assert s.pending == {"p1"}
+
+
+# --- the log answers "why is she blind" ------------------------------------
+
+def test_the_listener_log_names_an_app_it_cannot_read(monkeypatch):
+    """`notron permissions` reports the terminal's grant. The listener is a
+    different process with a different one, and on 2026-09-06 it had none —
+    zero calendars, zero events, no error, four hundred log lines saying
+    "125 chars of real commitments"."""
+    from notron import watch as watch_mod
+    from notron.permissions import Check
+
+    said = []
+    w = watch_mod.Watcher.__new__(watch_mod.Watcher)
+    w.on_event = said.append
+    w._report_blind_spots(checker=lambda: [
+        Check("Calendar", False, "has not been asked yet", "System Settings → Calendars"),
+        Check("Reminders", True, "full access", ""),
+    ])
+    joined = "\n".join(said)
+    assert "Calendar" in joined and "has not been asked yet" in joined
+    assert "System Settings → Calendars" in joined
+    assert "Reminders" not in joined, "a working app is not worth a warning"
+
+
+def test_a_fully_permitted_listener_says_nothing_at_startup(monkeypatch):
+    from notron import watch as watch_mod
+    from notron.permissions import Check
+
+    said = []
+    w = watch_mod.Watcher.__new__(watch_mod.Watcher)
+    w.on_event = said.append
+    w._report_blind_spots(checker=lambda: [Check("Calendar", True, "full access", ""),
+                                           Check("Reminders", True, "full access", "")])
+    assert said == []
+
+
+def test_a_permission_check_that_explodes_does_not_stop_the_listener_starting():
+    from notron import watch as watch_mod
+
+    def boom():
+        raise RuntimeError("no osascript")
+
+    said = []
+    w = watch_mod.Watcher.__new__(watch_mod.Watcher)
+    w.on_event = said.append
+    w._report_blind_spots(checker=boom)
+    assert any("couldn't check permissions" in m for m in said)

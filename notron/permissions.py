@@ -29,6 +29,14 @@ from .applescript import run
 
 PROBE_TIMEOUT = 8
 
+#: How long a *failing* check is believed before asking macOS again. A grant is
+#: precisely the thing that changes while the process is running — the user goes
+#: to System Settings *because* she said she was blind — so a listener that
+#: caches "denied" for its whole life keeps apologising for hours after the
+#: switch was flipped. A working check, by contrast, is cached for good: access
+#: can be revoked, but that shows up as a failed read, which is loud.
+RECHECK_SECONDS = 300
+
 # EKAuthorizationStatus
 NOT_DETERMINED, RESTRICTED, DENIED, FULL, WRITE_ONLY = 0, 1, 2, 3, 4
 
@@ -114,3 +122,39 @@ def check(reader=None, notes_runner=None, speech=None) -> list[Check]:
 
     out.append(_speech_check(speech))
     return out
+
+
+_CACHE: tuple[float, list[Check]] | None = None
+
+
+def forget() -> None:
+    """Drop the cached answer. For tests, and for anything that has just changed
+    a permission and wants the next question answered honestly."""
+    global _CACHE
+    _CACHE = None
+
+
+def cached(*, checker=None, now=None) -> list[Check]:
+    """`check()`, but not three osascript round trips per question.
+
+    The agenda consults this on every scheduling request and a listener answers
+    all day, so the answer is held. See RECHECK_SECONDS for why a bad answer is
+    held for minutes and a good one for ever.
+    """
+    global _CACHE
+    import time as _time
+
+    clock = now or _time.time
+    checker = checker or check
+    if _CACHE is not None:
+        when, answer = _CACHE
+        if all(c.ok for c in answer) or clock() - when < RECHECK_SECONDS:
+            return answer
+    answer = checker()
+    _CACHE = (clock(), answer)
+    return answer
+
+
+def blind(apps=("Calendar", "Reminders"), *, checker=None) -> list[Check]:
+    """The named apps she cannot currently read, cheapest first from the cache."""
+    return [c for c in cached(checker=checker) if c.app in apps and not c.ok]

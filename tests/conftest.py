@@ -169,3 +169,14 @@ def _notes_is_never_the_real_one(monkeypatch):
     monkeypatch.setattr(notes, "_folders_cache", None)
     yield app
     notes._folders_cache = None
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_permissions():
+    """`permissions.cached()` is module state that outlives a test. One test
+    finding Calendar denied must not be why the next test thinks so."""
+    from notron import permissions
+
+    permissions.forget()
+    yield
+    permissions.forget()

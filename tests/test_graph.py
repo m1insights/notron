@@ -227,7 +227,7 @@ def test_a_scheduling_reply_costs_no_smart_model_call():
 def test_planning_the_day_reads_the_real_calendar_first(monkeypatch):
     from notron import nodes
 
-    monkeypatch.setattr(nodes, "_agenda_text", lambda: "- 09:30 Standup")
+    monkeypatch.setattr(nodes, "_agenda_text", lambda **kw: "- 09:30 Standup")
     brain = FakeBrain(intent="plan")
     state = graph.run("plan my day", brain=brain, dry_run=True)
     assert "Standup" in state.agenda
@@ -238,7 +238,7 @@ def test_a_calendar_that_cannot_be_read_never_stops_the_plan(monkeypatch):
     her context, not the whole morning."""
     from notron import nodes
 
-    def boom():
+    def boom(**kw):
         raise RuntimeError("not approved")
 
     monkeypatch.setattr(nodes, "_agenda_text", boom)

@@ -65,3 +65,47 @@ def test_an_unreadable_calendar_does_not_hide_a_working_recogniser():
     checks = {c.app: c for c in permissions.check(
         reader=boom, notes_runner=lambda: "4", speech=lambda: True)}
     assert checks["Speech"].ok
+
+
+# --- the cache under permissions.check() -----------------------------------
+
+def test_a_working_permission_is_only_checked_once_per_process():
+    """`check()` is three osascript round trips. The agenda consults it on every
+    scheduling request, and a listener answers all day."""
+    from notron import permissions as perm
+
+    calls = []
+
+    def spy():
+        calls.append(1)
+        return [perm.Check("Calendar", True, "full access", ""),
+                perm.Check("Reminders", True, "full access", "")]
+
+    perm.forget()
+    perm.cached(checker=spy)
+    perm.cached(checker=spy)
+    assert len(calls) == 1
+    perm.forget()
+
+
+def test_a_broken_permission_is_checked_again_later():
+    """Caching a failure for the life of the process means a listener that was
+    blind at 9am is still saying so at 6pm, an hour after the user fixed it in
+    System Settings. A grant is exactly the thing that changes underneath us."""
+    from notron import permissions as perm
+
+    calls = []
+    clock = [1000.0]
+
+    def spy():
+        calls.append(1)
+        return [perm.Check("Calendar", False, "is denied", "")]
+
+    perm.forget()
+    perm.cached(checker=spy, now=lambda: clock[0])
+    perm.cached(checker=spy, now=lambda: clock[0])
+    assert len(calls) == 1, "not on every single call, either"
+    clock[0] += perm.RECHECK_SECONDS + 1
+    perm.cached(checker=spy, now=lambda: clock[0])
+    assert len(calls) == 2
+    perm.forget()
