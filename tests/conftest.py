@@ -24,7 +24,8 @@ makes that a rule rather than a habit.
 
 import pytest
 
-from notron import applescript, attachments, eventkit, mentions, notes, rewrite, undo
+from notron import (applescript, attachments, booked, eventkit, mentions, notes,
+                    rewrite, undo)
 
 
 @pytest.fixture(autouse=True)
@@ -195,6 +196,24 @@ def _eventkit_is_never_the_real_one(monkeypatch):
     # legitimately hand it a fake `runner`. This is the one line that actually
     # reaches the machine.
     monkeypatch.setattr(eventkit, "_osascript", refuse)
+
+
+@pytest.fixture(autouse=True)
+def _booked_is_never_the_real_store(tmp_path, monkeypatch):
+    """`.notron/actions.json` is real state in the developer's own checkout, and
+    it decides whether a reminder gets booked. A suite that shares it both
+    writes into it and lets one test's booking silently refuse another's."""
+    monkeypatch.setattr(booked, "STATE", tmp_path / "actions.json")
+
+
+@pytest.fixture(autouse=True)
+def _speech_is_never_probed_for_real(monkeypatch):
+    """`attachments.speech_available` runs its own `subprocess.run` — it goes
+    through neither the fake Notes app nor `eventkit`, so it was the third way a
+    test could reach the machine, and the slowest: `permissions.check()` calls
+    it, and a listener test that starts the watcher then paid a real osascript
+    launch inside a 0.3s window and looked like a hung loop."""
+    monkeypatch.setattr(attachments, "speech_available", lambda: False)
 
 
 @pytest.fixture(autouse=True)

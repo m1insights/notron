@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import calendar, guard, markup, notedoc, notes, reminders, undo, workspace
+from . import booked, calendar, guard, markup, notedoc, notes, reminders, undo, workspace
 
 
 @dataclass(frozen=True)
@@ -152,6 +152,18 @@ class Executor:
         if self.dry_run:
             return WriteResult(True, "dry run — nothing created")
 
+        # She books before she writes the note, and the note write can fail —
+        # after which the watcher retries the whole graph and the doer proposes
+        # the identical reminder again. Nothing downstream could tell the two
+        # apart. See booked.py. A match is a *blocked* write, so it is logged
+        # like one (invariant #4), and the caller gets the reference of the
+        # thing that already exists rather than a second one.
+        seen = booked.already(action)
+        if seen:
+            self._log(f"**BLOCKED** {action.op} {action.kind} *{action.title}* — "
+                      f"already set a moment ago")
+            return WriteResult(True, "already set", ref=seen)
+
         try:
             ref, detail = self._perform(action)
         except LookupError as e:
@@ -170,6 +182,7 @@ class Executor:
             self._log(f"**FAILED** {action.op} {action.kind} *{action.title}* — {type(e).__name__}: {e}")
             return WriteResult(False, _plainly(e, action.kind))
 
+        booked.remember(action, ref)
         self._log(f"{action.op} {action.kind} *{action.title}*{detail}")
         return WriteResult(True, detail.strip(" —") or "done", ref=ref)
 
