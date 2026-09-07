@@ -139,19 +139,33 @@ def test_she_says_why_she_could_not_answer_in_the_note(notes_app):
     assert "picture" in notes_app[workspace.ASK].lower()
 
 
-def test_a_question_that_can_never_be_answered_there_is_not_asked_again(notes_app):
+def test_a_question_that_can_never_be_answered_there_is_not_asked_again(
+        notes_app, monkeypatch, tmp_path):
     """`Watcher.COOLDOWN` rests a note for half an hour and then tries twice
     more, forever. For a refusal that cannot change that is a model call every
-    thirty minutes for the life of the note, and the same refusal every time."""
-    s = nodes.executor(_state_with_a_blocked_reply(), brain=None)
-    assert s.stuck
+    thirty minutes for the life of the note, and the same refusal every time —
+    and, because the tag stays unanswered, a full re-read of the note (1.8MB,
+    for a note holding a photo) on every twenty-second sweep in between."""
+    from notron import mentions
 
-    w = watch.Watcher(brain=None)
-    w._attempted("tag:n1", wrote=False, stuck=s.stuck)
-    assert not w._worth_trying("tag:n1")
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    # The stand-in keys notes by title, the way `find_note` hands them back.
+    m = mentions.Mention(note_id="Parking Garages", title="Parking Garages",
+                         folder="Notes", question="describe this image", after=3,
+                         raw="@notron describe this image", modified="monday")
 
-    w.COOLDOWN = 0        # even after any amount of waiting
-    assert not w._worth_trying("tag:n1")
+    w = watch.Watcher(brain=None, settle=0)
+    w.scanner.scan = lambda: [m]
+    monkeypatch.setattr(watch.attachments, "on_note", lambda note_id, modified="": [])
+    monkeypatch.setattr(watch.graph, "run", lambda q, **kw: nodes.executor(
+        _state_with_a_blocked_reply(), brain=None))
+
+    w.sweep_mentions()      # first sight — she waits for the typing to settle
+    w.sweep_mentions()
+
+    assert "smartwatch" in notes_app[workspace.ASK], "she answered where she could"
+    assert w.scanner.answered_elsewhere == {"Parking Garages": ["describe this image"]}, \
+        "and the tag is retired, so the note stops owing a reply it can never get"
 
 
 def test_an_ordinary_failure_still_gets_its_second_chance():

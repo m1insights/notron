@@ -108,7 +108,6 @@ class Watcher:
 
     _pending: dict = field(default_factory=dict)   # key -> (text, first seen at)
     _failures: dict = field(default_factory=dict)  # key -> (count, last attempt at)
-    _stuck: set = field(default_factory=set)       # keys no amount of waiting can fix
     _ask_id: str | None = None
     _dump_id: str | None = None
 
@@ -167,18 +166,18 @@ class Watcher:
             return []
 
     def _worth_trying(self, key: str) -> bool:
-        if key in self._stuck:
-            return False
         count, at = self._failures.get(key, (0, 0.0))
         return count < self.MAX_TRIES or time.time() - at >= self.COOLDOWN
 
     def _attempted(self, key: str, wrote: bool, stuck: str = "") -> None:
         if stuck:
-            # Not a failure to retry — an answer that can never land where it
-            # was asked. She has said it in 📥 Ask Notron; asking the model
-            # again would buy the identical refusal.
-            self._stuck.add(key)
-            self._say(f"  [{key}] can't be answered in that note — {stuck}")
+            # Not a failure to retry — an answer that could never land where it
+            # was asked, and did land in 📥 Ask Notron. The scanner retires the
+            # question (see `mentions.answered_away`); nothing here needs to
+            # remember it, and asking the model again would buy the identical
+            # refusal.
+            self._failures.pop(key, None)
+            self._say(f"  answered in {workspace.ASK} instead — {stuck}")
             return
         if wrote:
             self._failures.pop(key, None)
@@ -251,6 +250,10 @@ class Watcher:
             answered = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
                                     here=here_text(body, m.raw or m.question), source=m.raw,
                                     carried=self._carried(m.note_id, m.modified))
+            if answered.stuck:
+                # She answered, just not in that note — retire the tag so it
+                # stops owing a reply it can never be given.
+                self.scanner.answered_away(m)
             self._attempted(key, _wrote(answered), answered.stuck)
             self._pending.pop(key, None)
             return

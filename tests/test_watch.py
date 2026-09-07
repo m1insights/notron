@@ -273,3 +273,82 @@ def test_the_files_hanging_off_a_tagged_note_travel_with_the_question(monkeypatc
     w.sweep_mentions()      # first sight — she waits for the typing to settle
     w.sweep_mentions()
     assert [(a.kind, a.name) for a in seen["carried"]] == [("audio", "recording.m4a")]
+
+
+# ------------------- a question answered somewhere else is still answered
+
+def _picture_note(monkeypatch, mentions, question="what is in this picture?",
+                  modified="monday"):
+    from notron import markup
+
+    class Note:
+        id, title, folder = "p1", "Holiday", "Notes"
+
+    Note.modified = modified        # typing in a note moves its timestamp
+    body = markup.render("Holiday", f"@notron {question}")
+    monkeypatch.setattr(mentions.notes, "list_all_notes", lambda: [Note()])
+    monkeypatch.setattr(mentions.notes, "read_body", lambda i: body)
+    return Note
+
+
+def test_a_note_she_answered_elsewhere_stops_being_re_read(tmp_path, monkeypatch):
+    """A note holding a picture can never carry her receipt, so it stayed
+    `pending` forever — and `scan` re-reads every pending note on every sweep.
+    Live on 2026-09-06 that was a 1.8MB AppleScript read every twenty seconds,
+    for the life of the note, against the one app that serves one request at a
+    time."""
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    _picture_note(monkeypatch, mentions)
+
+    s = mentions.Scanner()
+    found = s.scan()
+    assert len(found) == 1 and s.pending == {"p1"}
+
+    s.answered_away(found[0])
+    assert s.scan() == [], "she has already answered this one"
+    assert s.pending == set(), "so the note must stop being read every sweep"
+
+
+def test_a_new_question_in_that_same_note_is_still_answered(tmp_path, monkeypatch):
+    """The first version of this remembered the *note*, not the question, so
+    every later question in a note holding a picture was silently ignored for
+    good."""
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    _picture_note(monkeypatch, mentions, "what is in this picture?")
+
+    s = mentions.Scanner()
+    s.answered_away(s.scan()[0])
+    assert s.scan() == []
+
+    _picture_note(monkeypatch, mentions, "and when was it taken?", modified="tuesday")
+    assert [m.question for m in s.scan()] == ["and when was it taken?"]
+
+
+def test_she_does_not_answer_it_again_after_a_restart(tmp_path, monkeypatch):
+    """In-memory only, every restart appended the same answer to 📥 Ask Notron
+    again — and paid for a graph run to do it."""
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    _picture_note(monkeypatch, mentions)
+
+    s = mentions.Scanner()
+    s.answered_away(s.scan()[0])
+
+    after_restart = mentions.Scanner()
+    after_restart.prime()
+    assert after_restart.scan() == []
+
+
+def test_a_note_that_no_longer_exists_is_dropped_from_the_to_do_list(tmp_path, monkeypatch):
+    """`pending` only ever discarded ids it saw again, so an id for a deleted
+    note — or one left by an old test — stayed in .notron/seen.json for ever."""
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    _picture_note(monkeypatch, mentions)
+
+    s = mentions.Scanner()
+    s.pending = {"p1", "a-note-that-was-deleted"}
+    s.changed()
+    assert s.pending == {"p1"}
