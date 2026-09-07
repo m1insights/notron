@@ -110,3 +110,20 @@ def test_the_create_script_carries_macos_reason_home():
     from notron import eventkit
     assert "reason(err)" in cal._CREATE
     assert "localizedDescription" in eventkit.PRELUDE
+
+
+def test_no_script_here_builds_its_own_date_formatter():
+    """`NSDateFormatter` with a fixed `dateFormat` and no locale uses the Mac's
+    region. Under a Buddhist or Japanese region setting `yyyy` is not the year we
+    mean, so `stringFromDate` writes a date nobody asked for and `dateFromString`
+    returns nil — a wrong date, or a save that fails for no visible reason. This
+    Mac happens to be en_US/gregorian; the next one is not our call.
+
+    So there is exactly one formatter constructor, in `eventkit.DATES`, and this
+    test is what stops a sixth script quietly growing its own."""
+    from notron import eventkit
+
+    for script in (cal._WINDOW, cal._CREATE, cal._NAMES):
+        assert "NSDateFormatter" not in script, "build it with pinned() instead"
+    assert "en_US_POSIX" in eventkit.PRELUDE
+    assert "gregorian" in eventkit.PRELUDE

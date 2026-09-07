@@ -64,7 +64,36 @@ function reason(err) {
 }
 """
 
-PRELUDE = "ObjC.import('EventKit');\nObjC.import('Foundation');\n" + AWAIT + REASON
+#: Dates, pinned. An `NSDateFormatter` with a fixed `dateFormat` and no locale
+#: reads the Mac's region setting, and `yyyy` in a Buddhist or Japanese calendar
+#: is not the year we mean: `stringFromDate` writes a date nobody asked for and
+#: `dateFromString` returns nil, so an event silently lands in the wrong year or
+#: a save fails for no visible reason. `en_US_POSIX` plus an explicit Gregorian
+#: calendar is Apple's own prescription for a fixed-format date. The time zone
+#: is deliberately *not* pinned — `calendarWithIdentifier` keeps the system one
+#: (checked 2026-09-07: America/New_York, matching `currentCalendar`), and the
+#: user's 2pm means 2pm where they are standing.
+#:
+#: Nothing in this package builds an `NSDateFormatter` of its own. Going through
+#: `pinned()` is what makes that a rule a test can enforce rather than a habit.
+DATES = """
+function gregorian() {
+  return $.NSCalendar.calendarWithIdentifier('gregorian');
+}
+function pinned(fmt) {
+  var f = $.NSDateFormatter.alloc.init;
+  f.dateFormat = fmt;
+  f.locale = $.NSLocale.localeWithLocaleIdentifier('en_US_POSIX');
+  f.calendar = gregorian();
+  return f;
+}
+"""
+
+ISO_MINUTES = "yyyy-MM-dd'T'HH:mm"
+ISO_DAY = "yyyy-MM-dd"
+
+PRELUDE = ("ObjC.import('EventKit');\nObjC.import('Foundation');\n"
+           + AWAIT + REASON + DATES)
 
 
 class EventKitError(RuntimeError):

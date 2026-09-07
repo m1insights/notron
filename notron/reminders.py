@@ -31,11 +31,9 @@ store.fetchRemindersMatchingPredicateCompletion(pred, function (arr) {
     var r = arr.objectAtIndex(i);
     var due = '';
     if (!r.dueDateComponents.isNil()) {
-      var d = $.NSCalendar.currentCalendar.dateFromComponents(r.dueDateComponents);
+      var d = gregorian().dateFromComponents(r.dueDateComponents);
       if (!d.isNil()) {
-        var f = $.NSDateFormatter.alloc.init;
-        f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mm';
-        due = ObjC.unwrap(f.stringFromDate(d));
+        due = ObjC.unwrap(pinned("yyyy-MM-dd'T'HH:mm").stringFromDate(d));
       }
     }
     rows.push({
@@ -75,13 +73,12 @@ if (target.isNil()) target = store.defaultCalendarForNewReminders;
 r.calendar = target;
 var iso = %(when)s;
 if (iso) {
-  var f = $.NSDateFormatter.alloc.init;
-  f.dateFormat = iso.length > 10 ? 'yyyy-MM-dd\\'T\\'HH:mm' : 'yyyy-MM-dd';
+  var f = pinned(iso.length > 10 ? "yyyy-MM-dd'T'HH:mm" : 'yyyy-MM-dd');
   var d = f.dateFromString(iso);
   var units = iso.length > 10
     ? ($.NSCalendarUnitYear | $.NSCalendarUnitMonth | $.NSCalendarUnitDay | $.NSCalendarUnitHour | $.NSCalendarUnitMinute)
     : ($.NSCalendarUnitYear | $.NSCalendarUnitMonth | $.NSCalendarUnitDay);
-  r.dueDateComponents = $.NSCalendar.currentCalendar.componentsFromDate(units, d);
+  r.dueDateComponents = gregorian().componentsFromDate(units, d);
   if (iso.length > 10) r.addAlarm($.EKAlarm.alarmWithAbsoluteDate(d));
 }
 var err = Ref();

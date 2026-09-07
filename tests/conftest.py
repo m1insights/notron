@@ -13,11 +13,18 @@ that library. `_notes_is_never_the_real_one` puts a small fake Notes app under
 every test instead, so a forgotten patch produces a deterministic fake library
 rather than whatever the person running the suite happens to have written down
 — and no test can ever write into it.
+
+EventKit was the same hole, one door along, and open until 2026-09-07: the fake
+Notes app never covered `eventkit.run`, which does not go through
+`applescript.run` at all. Any test reaching it ran a real `osascript` against
+the developer's own 1,263 reminders and 1,757 events. Every EventKit test in
+this suite passes its own fake `caller`; `_eventkit_is_never_the_real_one`
+makes that a rule rather than a habit.
 """
 
 import pytest
 
-from notron import applescript, attachments, mentions, notes, rewrite, undo
+from notron import applescript, attachments, eventkit, mentions, notes, rewrite, undo
 
 
 @pytest.fixture(autouse=True)
@@ -169,6 +176,25 @@ def _notes_is_never_the_real_one(monkeypatch):
     monkeypatch.setattr(notes, "_folders_cache", None)
     yield app
     notes._folders_cache = None
+
+
+@pytest.fixture(autouse=True)
+def _eventkit_is_never_the_real_one(monkeypatch):
+    """No test may reach the real Calendar or Reminders store.
+
+    There is no useful fake here the way there is for Notes — every caller of
+    `eventkit.run` already takes a `caller=` for exactly this — so this refuses
+    instead, naming the script, the same way the fake Notes app refuses a write.
+    """
+    def refuse(script, timeout):
+        raise AssertionError(
+            "a test reached the real Calendar/Reminders store — pass caller=:\n"
+            + str(script).strip()[:200])
+
+    # `_osascript`, not `run`: `run` is itself under test, and every caller may
+    # legitimately hand it a fake `runner`. This is the one line that actually
+    # reaches the machine.
+    monkeypatch.setattr(eventkit, "_osascript", refuse)
 
 
 @pytest.fixture(autouse=True)
