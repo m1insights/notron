@@ -81,7 +81,8 @@ e.calendar = target;
 var err = Ref();
 var ok = store.saveEventSpanCommitError(e, $.EKSpanThisEvent, true, err);
 JSON.stringify(ok ? {id: ObjC.unwrap(e.eventIdentifier),
-                     calendar: ObjC.unwrap(target.title)} : {error: 'save failed'});
+                     calendar: ObjC.unwrap(target.title)}
+                  : {error: 'save failed', why: reason(err)});
 """
 
 
@@ -175,5 +176,5 @@ def create(title: str, *, start_iso: str, end_iso: str | None = None,
     }
     out = (caller or eventkit.run)(body)
     if "error" in out:
-        raise eventkit.EventKitError(f"could not create the event: {out['error']}")
+        raise eventkit.EventKitError(eventkit.failure(out, "could not create the event"))
     return out["id"]

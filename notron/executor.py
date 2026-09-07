@@ -160,8 +160,15 @@ class Executor:
         except Exception as e:
             # An app that is not approved yet hangs rather than failing, so a real
             # exception here is worth saying out loud instead of swallowing.
+            #
+            # And say what macOS said, not what Python called it. This used to
+            # read "event app said no (EventKitError)", which is the same
+            # sentence whether the calendar is denied, read-only or missing —
+            # the user cannot act on a class name. `eventkit.failure` has
+            # already folded `err.localizedDescription` into the message by the
+            # time it reaches here; all this has to do is not throw it away.
             self._log(f"**FAILED** {action.op} {action.kind} *{action.title}* — {type(e).__name__}: {e}")
-            return WriteResult(False, f"{action.kind} app said no ({type(e).__name__})")
+            return WriteResult(False, _plainly(e, action.kind))
 
         self._log(f"{action.op} {action.kind} *{action.title}*{detail}")
         return WriteResult(True, detail.strip(" —") or "done", ref=ref)
@@ -217,3 +224,23 @@ class Executor:
             # again rather than trusting the cached folder list.
             seed = markup.render(workspace.LOG, workspace.SEEDS[workspace.LOG])
             notes.create_note(workspace.FOLDER, seed + markup.to_html(entry))
+
+
+#: How long a macOS failure may be before it stops being readable in a note.
+MAX_REASON_CHARS = 200
+
+
+def _plainly(e: Exception, kind: str) -> str:
+    """One failed action, in words the user can act on.
+
+    The exception text is the interesting part — "could not create the event:
+    save failed — Calendar access denied" names a switch in System Settings.
+    The class name never did. A message with nothing in it (some ObjC bridges
+    raise bare) falls back to naming the app, which is still more than nothing.
+    """
+    said = " ".join(str(e).split())
+    if not said:
+        return f"the {kind} app refused it and said nothing"
+    if len(said) > MAX_REASON_CHARS:
+        said = said[:MAX_REASON_CHARS - 1].rstrip() + "…"
+    return said

@@ -218,3 +218,45 @@ def test_a_folder_she_cannot_see_never_multiplies_the_log_note(monkeypatch):
         ex_mod.Executor()._log("insert on *Parking Garages* (462 chars)")
 
     assert created == [], "she invented a new 📊 Log instead of finding hers"
+
+
+# --- a failed action says what macOS said ----------------------------------
+
+def test_a_failed_action_reports_what_macos_said_not_a_python_class_name():
+    """It used to read "event app said no (EventKitError)" whether the calendar
+    was denied, read-only or gone. Only the first of those has a fix the user
+    can carry out, and only if she says which one it is."""
+    from datetime import datetime, timedelta
+
+    from notron import eventkit
+    from notron.state import Action
+
+    soon = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT14:00")
+    ex = ex_mod.Executor(audit=False)
+    boom = eventkit.EventKitError(
+        "could not create the event: save failed — Calendar access denied")
+
+    def explode(_action):
+        raise boom
+
+    ex._perform = explode
+    result = ex.do(Action(kind="event", op="create", title="Dentist", when=soon))
+    assert result.ok is False
+    assert "Calendar access denied" in result.reason
+    assert "EventKitError" not in result.reason
+
+
+def test_a_failure_message_stays_short_enough_to_read_in_a_note():
+    from datetime import datetime, timedelta
+
+    from notron.state import Action
+
+    soon = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT14:00")
+    ex = ex_mod.Executor(audit=False)
+
+    def explode(_action):
+        raise RuntimeError("x" * 5000)
+
+    ex._perform = explode
+    result = ex.do(Action(kind="reminder", op="create", title="Call back", when=soon))
+    assert len(result.reason) <= ex_mod.MAX_REASON_CHARS

@@ -49,7 +49,22 @@ function awaitDone(check, seconds) {
 }
 """
 
-PRELUDE = "ObjC.import('EventKit');\nObjC.import('Foundation');\n" + AWAIT
+#: Every write here ends `saveXCommitError(…, err)` with an `err` that macOS fills
+#: in and that this code used to throw away — so "could not create the event" was
+#: the whole story whether the calendar was denied, read-only, or gone. Ask the
+#: `Ref()` what happened. A Ref that was never written to raises rather than
+#: reading nil, hence the try.
+REASON = """
+function reason(err) {
+  try {
+    var e = err[0];
+    if (e && !e.isNil()) return ObjC.unwrap(e.localizedDescription) || '';
+  } catch (x) {}
+  return '';
+}
+"""
+
+PRELUDE = "ObjC.import('EventKit');\nObjC.import('Foundation');\n" + AWAIT + REASON
 
 
 class EventKitError(RuntimeError):
@@ -83,3 +98,15 @@ def run(body: str, *, timeout: int = DEFAULT_TIMEOUT, runner=None) -> dict | lis
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise EventKitError(f"EventKit returned unparseable output: {raw[:200]!r}") from e
+
+
+def failure(out: dict, prefix: str) -> str:
+    """The message a failed EventKit write should carry.
+
+    `out["error"]` is our own four words; `out["why"]` is macOS's. The second one
+    is the one that tells the user what to do — "Calendar access denied" names a
+    switch in System Settings, "save failed" names nothing.
+    """
+    why = str(out.get("why") or "").strip()
+    said = str(out.get("error") or "failed").strip()
+    return f"{prefix}: {said}" + (f" — {why}" if why else "")

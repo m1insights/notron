@@ -63,3 +63,27 @@ def test_a_reminder_can_be_found_by_what_the_user_actually_called_it():
     ]
     assert reminders.find_open("call the pharmacy", caller=_fake(payload)).id == "x-1"
     assert reminders.find_open("book a flight", caller=_fake(payload)) is None
+
+
+def test_a_failed_reminder_save_says_what_macos_actually_said():
+    import pytest
+    from notron import eventkit
+    def caller(_body, **kw):
+        return {"error": "save failed", "why": "Reminders access denied"}
+    with pytest.raises(eventkit.EventKitError, match="Reminders access denied"):
+        reminders.create("x", caller=caller)
+
+
+def test_a_failed_tick_says_what_macos_actually_said():
+    import pytest
+    def caller(_body, **kw):
+        return {"error": "save failed", "why": "Reminders access denied"}
+    with pytest.raises(LookupError, match="Reminders access denied"):
+        reminders.complete("x-1", caller=caller)
+
+
+def test_both_write_scripts_carry_the_macos_reason_home():
+    from notron import eventkit
+    for script in (reminders._CREATE, reminders._COMPLETE):
+        assert "reason(err)" in script
+    assert "localizedDescription" in eventkit.PRELUDE

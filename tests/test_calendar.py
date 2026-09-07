@@ -93,3 +93,20 @@ def test_an_unusable_start_is_refused_before_anything_is_saved():
 
     with pytest.raises(ValueError):
         cal.create("X", start_iso="next Thursday", caller=lambda *a, **kw: {})
+
+
+def test_a_failed_save_says_what_macos_actually_said():
+    """`err` is filled in by EventKit and was being thrown away, so every failure
+    read as the same four words. The user needs to read "Calendar access denied"."""
+    def caller(_body, **kw):
+        return {"error": "save failed", "why": "Calendar access denied"}
+    import pytest
+    from notron import eventkit
+    with pytest.raises(eventkit.EventKitError, match="Calendar access denied"):
+        cal.create("x", start_iso="2026-09-07T11:00", caller=caller)
+
+
+def test_the_create_script_carries_macos_reason_home():
+    from notron import eventkit
+    assert "reason(err)" in cal._CREATE
+    assert "localizedDescription" in eventkit.PRELUDE
