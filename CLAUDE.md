@@ -145,7 +145,11 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
    written again, so a write there deletes the photo — silently, and after
    `notedoc.preserves` has already passed. `markup.holds_media` is the check,
    `guard.check` the only place it is enforced, for every mode including
-   `restore`; she answers in `📥 Ask Notron` instead of going quiet.
+   `restore`; she answers in `📥 Ask Notron` instead of going quiet, and
+   `mentions.answered_away` then retires that question — keyed by the question,
+   not the note, and persisted in `seen.json`. Without that the tag owes an
+   answer for ever, `pending` never clears, and `scan` re-reads the note (1.8MB
+   of base64) on every twenty-second sweep.
 
 ## Performance — measured on 358 notes, 1,263 reminders and 1,757 events
 
