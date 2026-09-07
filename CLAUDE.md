@@ -94,6 +94,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `library.py` | Per-note home / read only / ignore choices; the one place "never reads it" lives |
 | `rewrite.py` | Per-note permission to rewrite in place instead of only adding — off by default |
 | `undo.py` | One saved copy per note, consumed on use — the safety net under rewrite |
+| `booked.py` | What she just created outside Notes, so a retry cannot book it twice |
 | `guard.py` | The single choke point for every write |
 | `executor.py` | Applies writes. No model runs here, ever. |
 | `graph.py` / `nodes.py` / `state.py` | The graph and what flows along it |
@@ -217,6 +218,42 @@ so cost scales with the user's history, not the answer. Reminders cannot even re
 properties from a filtered set: `name of rs` raises
 `Can't get name of {reminder id "x-apple-reminder://…"}`. There is no tuning that
 closes a 700× gap — use `notron/eventkit.py`.
+
+**And EventKit's speed is worthless if the process was never granted access.**
+Measured 2026-09-06/07 (`docs/spikes/2026-09-06-eventkit-request-under-osascript.md`):
+from the terminal the status is `3` (full) and reads work; from the **launchd
+listener** it is `0` (not determined), `calendarsForEntityType` returns an empty
+array, a seven-day window returns zero events, and **nothing raises**. Every
+`agenda:` line in `.notron/listen.log` read `125 chars of real commitments` —
+the exact length of "Nothing in the calendar today" plus "Nothing outstanding
+in Reminders". She had never once seen a real event from the background
+listener.
+
+Asking does not fix it. `requestFullAccessToEvents…`,
+`requestFullAccessToReminders…` and the legacy
+`requestAccessToEntityTypeCompletion` all resolve as functions under JXA and
+**none of them calls back** from launchd — the same failure mode as Speech, and
+for the same reason: `osascript` carries no usage string. (The legacy one
+appears to work from the terminal only because access is already granted there
+and it has nothing to ask.) So do **not** build an `ensure_access()`; it is a
+ten-second stall that buys nothing. The grant has to come from a real bundle —
+`mac/Info.plist` now carries the three usage strings — and until the listener
+has a signed identity of its own (`docs/production/plans/06-mac-distribution.md`)
+it stays blind unless run in the foreground from an approved terminal.
+
+What the code does about it: `permissions.cached()` (a failing check re-asked
+every `RECHECK_SECONDS`, a passing one held for the process), `nodes.agenda`
+saying *"I cannot read your Calendar"* in the words the model gets rather than
+letting an empty read read as a free day, and the listener naming the gap in
+`.notron/listen.log` at startup.
+
+**Every date crossing into EventKit is pinned.** An `NSDateFormatter` with a
+fixed `dateFormat` and no locale reads the Mac's region, so `yyyy` under a
+non-Gregorian region is not the year we mean — the wrong date is written, or
+`dateFromString` returns nil and the save fails silently. There is exactly one
+formatter constructor, `pinned()` in `eventkit.DATES` (`en_US_POSIX` + explicit
+Gregorian calendar), no script builds its own, and a test enforces both. The
+time zone is deliberately *not* pinned: 2pm means 2pm where the user is.
 
 ## Nemotron gotchas
 
@@ -439,6 +476,14 @@ by editing the note. Run record: `.notron/reflect.json`, append-only.
   `**Notron:**` on its own line, prose italicised by `markup.voice`
   (structure — headings, lists, tables — stays upright), closed with `———`.
   `conversation.SIGNATURE` matches that bold signature; change both or neither.
+- **She answers to "Norton".** macOS autocorrects "Notron" the first time you
+  type it, and she is addressed by name in every note she is tagged in — an
+  unrecognised tag is silence, indistinguishable from her being asleep.
+  `conversation.TAG` accepts `notron|nortron|norton|notrn` and is the only place
+  the name is ever matched; `\b` still holds, so "@nortonantivirus" is not her.
+  **Her own writing never changes** — she signs `**Notron:**`, `SIGNATURE` is
+  untouched. Onboarding also teaches the Mac's speller the word
+  (`teachTheSpellerHerName`), which fixes the Mac but not the phone.
 - The router may never return `ignore` for notes/manual triggers — everything on
   those surfaces is addressed to her, and silence makes the listener re-ask the
   model forever. A question that still produces no write gets `Watcher.MAX_TRIES`
@@ -451,7 +496,13 @@ by editing the note. Run record: `.notron/reflect.json`, append-only.
 - Plain functions and dataclasses. No agent framework — the graph is the point.
 - Comments explain **why**, especially where a fix encodes a bug that actually
   happened. Several tests are named after real failures; keep them that way.
-- Tests run with no API key, no network and no real Notes app. Fake brains, and a
+- Tests run with no API key, no network and no real Notes app — and, since
+  2026-09-07, no real Calendar, Reminders or speech recogniser either. Those
+  three do not go through `applescript.run`, so the fake Notes app never covered
+  them: `eventkit._osascript` and `attachments.speech_available` are refused or
+  faked autouse, and `booked.STATE` is pointed at a `tmp_path` because it is live
+  state in the developer's own checkout that decides whether a reminder is booked
+  at all. Fake brains, and a
   fake Notes app (`conftest.FakeNotesApp`) under **every** test, autouse — it
   answers the same AppleScript the real one does, so index addressing and name
   verification are genuinely exercised, and anything else (a write, a `show
