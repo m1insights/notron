@@ -35,7 +35,7 @@ nor tell whether one is pinned; that screen instructs and opens
 ## Commands
 
 ```bash
-.venv/bin/python -m pytest tests -q      # 369 tests, no API key or network needed
+.venv/bin/python -m pytest tests -q      # 494 tests, no API key or network needed
 .venv/bin/python -m notron setup           # create the 🤖 NOTRON folder in Notes
 .venv/bin/python -m notron index           # embed all the user's notes (~2 min)
 .venv/bin/python -m notron index --attachments  # …also look at pictures, listen to recordings
@@ -225,13 +225,18 @@ closes a 700× gap — use `notron/eventkit.py`.
 
 **And EventKit's speed is worthless if the process was never granted access.**
 Measured 2026-09-06/07 (`docs/spikes/2026-09-06-eventkit-request-under-osascript.md`):
-from the terminal the status is `3` (full) and reads work; from the **launchd
-listener** it is `0` (not determined), `calendarsForEntityType` returns an empty
-array, a seven-day window returns zero events, and **nothing raises**. Every
+from the terminal the status was `3` (full) and reads worked; from the **launchd
+listener** it was `0` (not determined), `calendarsForEntityType` returned an empty
+array, a seven-day window returned zero events, and **nothing raised**. Every
 `agenda:` line in `.notron/listen.log` read `125 chars of real commitments` —
 the exact length of "Nothing in the calendar today" plus "Nothing outstanding
 in Reminders". She had never once seen a real event from the background
-listener.
+listener. **That grant has since appeared** — re-measured 2026-09-08 from a
+job shaped like `watch.plist`, the listener reads 5 calendars and 23 reminders
+— but not because of anything in this repo, and every fresh install starts at
+`notDetermined`. The honesty layer below is insurance, not a workaround. When
+re-measuring, go through `eventkit.run`: a bare `osascript` from the same job
+still reads zero, because TCC answers per responsible process.
 
 Asking does not fix it. `requestFullAccessToEvents…`,
 `requestFullAccessToReminders…` and the legacy

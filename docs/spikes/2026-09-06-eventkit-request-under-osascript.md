@@ -85,3 +85,41 @@ no way to know it.
   the listener in the foreground from an already-approved terminal, or to give
   it an identity the user can approve. That is P06's problem, and this spike is
   the reason P06 is on the critical path rather than being packaging polish.
+
+---
+
+## Amendment, 2026-09-08: the listener can see the calendar again
+
+The table above is still what was measured on the dates given, and the central
+finding is unchanged: **no request selector calls back under `osascript`**, so
+`ensure_access()` remains a thing not to build.
+
+What has changed is the listener's grant. Re-measured today from a launchd job
+with the same shape as `watch.plist` (`.venv/bin/python`, same working
+directory):
+
+    status              {'events': '3', 'reminders': '3'}   (was 0 / 0)
+    calendars           MRS, Calendar, US Holidays, Birthdays, Home   (was none)
+    calendar.brief()    - 11:30 Seoul skin appointment   (was "Nothing…")
+    open reminders      23   (was 0)
+
+So the outage itself is over, and the restarted listener prints no warning at
+startup because there is nothing to warn about — `permissions.check()` from
+that identity now reports full access for both.
+
+Two things worth holding on to.
+
+**We did not fix this in code, and should not claim we did.** Access appeared
+between 2026-09-07 and 2026-09-08, most plausibly as a side effect of the
+request calls this spike made. That is not a mechanism anyone can rely on or
+reproduce on a user's Mac, which is why the honesty layer stays: it is now
+insurance against the state coming back, not a workaround for it being broken.
+The first user to install this will be at `notDetermined` exactly as the
+listener was.
+
+**A bare `osascript` from the same job still reads zero.** In the same launchd
+job, `/bin/zsh → /usr/bin/osascript` reported `0 / 0` and no calendars while
+`/bin/zsh → .venv/bin/python → osascript` returned real data. TCC is answering
+per responsible process, not per user, so a probe that skips the Python layer
+is not measuring what Notron does. Any future measurement here must go through
+`eventkit.run`, not a hand-written `osascript` line.
