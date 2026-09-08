@@ -238,13 +238,27 @@ def preserves(old: str, new: str) -> bool:
     Rather than infer the edit, we simply try every boundary a legitimate insert
     could have used. There are only as many as there are blocks.
     """
+    return inserted(old, new) is not None
+
+
+def inserted(old: str, new: str) -> str | None:
+    """The text an insert put in, or None if `new` is not a legitimate insert.
+
+    `preserves` answers whether the insert was allowed; this answers *what she
+    added*, which is what the Guard should judge her on. Judging the whole new
+    body instead means the user's own words are held against her: one
+    key-shaped string anywhere in a note they wrote blocks every answer she
+    ever tries to write into it, and her reply never removes their text, so the
+    block never lifts. Seen live on a story bible whose scene tags include the
+    word SECRET.
+    """
     grown = len(new) - len(old)
     if grown <= 0:
-        return False
-    return any(
-        new[:at] == old[:at] and new[at + grown:] == old[at:]
-        for at in _boundaries(old)
-    )
+        return None
+    for at in _boundaries(old):
+        if new[:at] == old[:at] and new[at + grown:] == old[at:]:
+            return new[at:at + grown]
+    return None
 
 
 def _boundaries(html: str) -> list[int]:

@@ -167,3 +167,32 @@ def test_the_light_rule_is_never_mistaken_for_your_own_words():
     body = note(f"header\n\n———\n\nwhat's on today?\n\n{conversation.QA_RULE}\n\nstill waiting")
     qs = conversation.unanswered(body, ignore=IGNORE)
     assert all(conversation.QA_RULE not in q.text for q in qs)
+
+
+# --- she answers to what autocorrect makes of her name ---------------------
+
+def test_she_answers_to_what_autocorrect_makes_of_her_name():
+    """macOS autocorrects "Notron" to "Norton" the moment you type it, and the
+    iPhone has its own dictionary we cannot reach. A tag she does not recognise
+    is not a small annoyance — it is silence, and the user has no way to tell
+    that from her being asleep."""
+    for tag in ("@notron", "@Norton", "#norton", "@nortron", "@notrn", "#NOTRON"):
+        assert conversation.TAG.search(f"hey {tag} what's on today"), tag
+
+
+def test_the_misspellings_are_stripped_from_the_question_too():
+    """`without_tag` feeds the model. Leaving "@Norton" in the question is how
+    she ends up introducing herself by the wrong name."""
+    assert conversation.strip_tag("@Norton what's on today") == "what's on today"
+
+
+def test_she_does_not_answer_to_a_word_that_merely_contains_her_name():
+    for text in ("@nortonantivirus scan", "#notronic music", "email norton@x.com"):
+        assert not conversation.TAG.search(text), text
+
+
+def test_her_own_signature_is_untouched():
+    """She still signs *Notron*. Accepting a misspelling in must never change
+    what goes out — `SIGNATURE` is matched against her own writing."""
+    assert conversation.SIGNATURE == "Notron:"
+    assert not conversation.TAG.search("**Notron:** here is your day")

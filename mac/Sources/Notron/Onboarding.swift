@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The five screens a fresh install walks through, in order, before handing
@@ -52,6 +53,37 @@ final class OnboardingModel: ObservableObject {
     static let file = Core.home.appendingPathComponent(".notron/onboarding.json")
 
     static var done: Bool { FileManager.default.fileExists(atPath: file.path) }
+
+    /// macOS autocorrects "Notron" to "Norton" the first time you type it, and
+    /// she is addressed by name in every note she is ever tagged in — so the
+    /// user spends the rest of their life fighting a spelling, or she never
+    /// answers. Teaching the system speller once, on the screen that teaches
+    /// how to address her, is cheaper than either.
+    ///
+    /// Done automatically and without a toggle on purpose: learning a proper
+    /// noun is not a preference, and a switch nobody understands is worse than
+    /// a spelling that just works. It is reversible anywhere in macOS
+    /// (right-click → Unlearn Spelling), it needs no entitlement, and there is
+    /// nothing extra to ship in the DMG — the word lands in the user's own
+    /// account, not in the bundle.
+    ///
+    /// Measured on macOS 26.2, 2026-09-07: `~/Library/Spelling/LocalDictionary`
+    /// is *not* where it goes — that file stays 0 bytes. Do not verify this by
+    /// reading it. What is true is that the word persists: a fresh process
+    /// reports `hasLearnedWord("Notron") == true` and `checkSpelling(of:)`
+    /// returns NSNotFound, meaning the speller now considers it correct. Those
+    /// two are the check.
+    ///
+    /// This only fixes the Mac. The iPhone keeps its own dictionary and there
+    /// is no reaching it, which is why the core also answers to "Norton"
+    /// (`conversation.TAG`).
+    func teachTheSpellerHerName() {
+        let speller = NSSpellChecker.shared
+        guard !speller.hasLearnedWord(Self.herName) else { return }
+        speller.learnWord(Self.herName)
+    }
+
+    static let herName = "Notron"
 
     func markDone() {
         let payload = ["completed_at": ISO8601DateFormatter().string(from: Date())]

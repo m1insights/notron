@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -27,6 +28,15 @@ DEFAULT_MODELS = {
 
 # Nebius has no NVIDIA embedding model; all reasoning still runs on Nemotron.
 EMBED_MODEL = "Qwen/Qwen3-Embedding-8B"
+
+# Nor an NVIDIA vision model. This one read a screenshot correctly in 3.5s on
+# 2026-09-05; `google/gemma-3-27b-it` is the fallback — cleaner output, 14.1s.
+# Override with NOTRON_MODEL_VISION. Still Nebius, so the hackathon rule holds:
+# every judgement about what a picture *means* is made by Nemotron afterwards.
+VISION_MODEL = "openbmb/MiniCPM-V-4_5"
+
+_THINK = re.compile(r"<think>.*?</think>", re.S | re.I)
+_UNCLOSED_THINK = re.compile(r"<think>.*\Z", re.S | re.I)
 
 # Nemotron's chain of thought is billed against max_tokens but is not the answer.
 # Every request gets this much extra room so the reply itself survives.
@@ -136,6 +146,61 @@ class Brain:
         if getattr(msg, "reasoning", None):
             msg = self._call(tier, system, user, budget * 2, json_mode, temperature)
             content = (msg.content or "").strip()
+        return content
+
+    @staticmethod
+    def _answer_only(raw: str) -> str:
+        """The reply with the model's thinking taken out of it.
+
+        Nemotron puts its reasoning in a separate `reasoning` field, so `ask`
+        never has to do this. MiniCPM does not: measured live on 2026-09-05, it
+        returns `<think>…</think>` inside `content`, ahead of the answer. Left
+        alone that reasoning gets written into the user's own note. An
+        unterminated block is the model having spent the whole budget thinking
+        — nothing in it is an answer, so it is dropped and asked again bigger.
+        """
+        text = _THINK.sub("", raw)
+        return _UNCLOSED_THINK.sub("", text).strip()
+
+    def _look(self, model: str, question: str, data_uri: str, budget: int,
+              temperature: float):
+        resp = self._client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": question},
+                {"type": "image_url", "image_url": {"url": data_uri}},
+            ]}],
+            max_tokens=budget,
+            temperature=temperature,
+        )
+        self._record("vision", getattr(resp, "usage", None))
+        return resp.choices[0].message
+
+    def see(self, *, image: bytes, mime: str, question: str,
+            max_tokens: int = 1200, temperature: float = 0.2) -> str:
+        """Ask the vision model about one picture.
+
+        Same shape as `ask`, and for the same reason: MiniCPM reasons in a
+        <think> block billed against `max_tokens` exactly the way Nemotron
+        does, and a 300-token budget came back 100% reasoning and 0% answer on
+        the first live test. Headroom up front, and one bigger try if it still
+        thinks itself out of room — but only when there really was thinking to
+        blame, or an empty answer is bought twice at twice the price.
+        """
+        import base64
+
+        model = os.environ.get("NOTRON_MODEL_VISION", VISION_MODEL)
+        data_uri = f"data:{mime};base64,{base64.b64encode(image).decode()}"
+        budget = max_tokens + REASONING_HEADROOM
+
+        msg = self._look(model, question, data_uri, budget, temperature)
+        raw = msg.content or ""
+        content = self._answer_only(raw)
+        if content:
+            return content
+        if getattr(msg, "reasoning", None) or "<think" in raw.lower():
+            msg = self._look(model, question, data_uri, budget * 2, temperature)
+            content = self._answer_only(msg.content or "")
         return content
 
     def embed(self, texts: list[str]) -> list[list[float]]:

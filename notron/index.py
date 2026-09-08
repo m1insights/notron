@@ -25,6 +25,10 @@ class Chunk:
     modified: str
     text: str
     vector: list[float] | None = None
+    attachment: str = ""     # the file this chunk came out of, if it is not
+                             # the note's own words. What she saw and heard is
+                             # searchable from anywhere, not only in the note
+                             # it hangs off.
 
 
 def split(text: str) -> list[str]:
@@ -89,7 +93,52 @@ def _vector_at(row: int | None):
 _MMAP = None
 
 
-def build(brain, *, on_progress=None, force: bool = False) -> dict:
+def _carried(live: list, on_progress=None) -> dict[str, list]:
+    """Every file in the library, by note id — one request per folder.
+
+    `attachments.in_folder` is 0.18s for a 222-note folder against 87s of
+    per-note queries for the same answer, so a full index run can afford to ask
+    about every folder rather than guessing which ones might hold something.
+    A folder that cannot be read costs the attachments in it, not the run.
+    """
+    from . import attachments
+
+    out: dict[str, list] = {}
+    for folder in sorted({n.folder for n in live}):
+        try:
+            out.update(attachments.in_folder(folder))
+        except Exception as e:
+            if on_progress:
+                on_progress(f"couldn't check {folder} for files ({type(e).__name__})")
+    return out
+
+
+def _attachment_rows(note, atts: list, brain, extract: bool, on_progress=None) -> list[Chunk]:
+    """One chunk per file she can put into words, titled after the file.
+
+    Without `extract` nothing is described or transcribed — only what is
+    already on disk is read. A first index run over a library of screenshots
+    must not quietly spend a vision call on each of them.
+    """
+    from . import attachments
+
+    rows = []
+    for att in atts:
+        try:
+            text = attachments.as_text(att, brain) if extract else attachments.known_text(att)
+        except Exception as e:
+            if on_progress:
+                on_progress(f"couldn't read {att.name} ({type(e).__name__})")
+            continue
+        if not text.strip():
+            continue
+        for piece in split(text):
+            rows.append(Chunk(note.id, f"{att.name} (attached to {note.title})",
+                              note.folder, note.modified, piece, attachment=att.id))
+    return rows
+
+
+def build(brain, *, on_progress=None, force: bool = False, extract: bool = False) -> dict:
     """Embed every note that is new or has changed since the last run."""
     from . import markup, notes, workspace
 
@@ -97,6 +146,7 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
     from . import library
 
     live = library.user_notes()
+    carried = _carried(live, on_progress)
 
     fresh: dict[str, list[dict]] = {}
     pending: list[tuple[str, Chunk]] = []
@@ -104,7 +154,16 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
 
     for n in live:
         old = cached.get(n.id)
-        if old and old[0].get("modified") == n.modified and old[0].get("row") is not None:
+        atts = carried.get(n.id, [])
+        att_rows = _attachment_rows(n, atts, brain, extract, on_progress)
+        # A note can be untouched while what she knows about the file hanging
+        # off it has changed — she looked at the picture yesterday answering
+        # something else. Reusing the cached chunks would lose that for good.
+        same_files = old is not None and (
+            {c["attachment"] for c in old if c.get("attachment")}
+            == {c.attachment for c in att_rows})
+        if (old and same_files and old[0].get("modified") == n.modified
+                and old[0].get("row") is not None):
             for c in old:
                 c["vector"] = _vector_at(c["row"])
             fresh[n.id] = old
@@ -114,6 +173,9 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
         rows = []
         for piece in split(text):
             c = Chunk(n.id, n.title, n.folder, n.modified, piece)
+            rows.append(asdict(c))
+            pending.append((n.id, c))
+        for c in att_rows:
             rows.append(asdict(c))
             pending.append((n.id, c))
         fresh[n.id] = rows
@@ -159,7 +221,8 @@ def search(query: str, brain, *, limit: int = 8) -> list[Chunk]:
         if key in seen:
             continue
         seen.add(key)
-        out.append(Chunk(**{k: row[k] for k in ("note_id", "title", "folder", "modified", "text")}))
+        out.append(Chunk(**{k: row[k] for k in ("note_id", "title", "folder", "modified", "text")},
+                         attachment=row.get("attachment", "")))
         if len(out) >= limit:
             break
     return out

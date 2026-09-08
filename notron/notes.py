@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
-from .applescript import run
+from .applescript import AppleScriptError, run
 
 # The first request after Notes has been idle wakes the app, and that wake-up
 # can take forty seconds while every later call takes a tenth of one. Nothing is
@@ -87,20 +87,18 @@ on run argv
 end run
 """
 
-_CREATE = """
+# Addressed by index, like every other read, so a write can never land in a
+# different folder than the one reads come from — and, crucially, so a name
+# that matches nothing cannot quietly `make new folder`. That fallback is how
+# an empty second "Notes" folder appeared on 2026-09-03, and a duplicate
+# folder shifts the index of every folder below it. Only `ensure_folder`
+# creates a folder now, and it says so.
+_CREATE_AT_INDEX = """
 on run argv
-  set folderName to item 1 of argv
+  set idx to (item 1 of argv) as integer
   set theBody to item 2 of argv
   tell application "Notes"
-    set theFolder to missing value
-    repeat with f in folders
-      if name of f is folderName then
-        set theFolder to f
-        exit repeat
-      end if
-    end repeat
-    if theFolder is missing value then set theFolder to make new folder with properties {name:folderName}
-    set n to make new note at theFolder with properties {body:theBody}
+    set n to make new note at folder idx with properties {body:theBody}
     return id of n
   end tell
 end run
@@ -120,6 +118,10 @@ end run
 """
 
 SKIP_FOLDERS = {"Recently Deleted"}
+
+
+class FolderMissing(LookupError):
+    """No folder by that name. Notron waits; it never invents one."""
 
 
 @dataclass(frozen=True)
@@ -166,6 +168,12 @@ def folders(*, refresh: bool = False) -> list[str]:
     if not refresh and _folders_cache and time.time() - _folders_cache[0] < FOLDER_CACHE_SECONDS:
         return _folders_cache[1]
     names = [f for f in run(_FOLDER_NAMES).split(US) if f.strip()]
+    if not names:
+        # A timed-out or wedged request answers with nothing, and caching that
+        # poisons every folder lookup for the next ten minutes. Forget it and
+        # ask again next time instead.
+        _folders_cache = None
+        return []
     _folders_cache = (time.time(), names)
     return names
 
@@ -178,24 +186,84 @@ def folder_at(index: int) -> tuple[str, list[Note]]:
 
 
 def ensure_folder(name: str) -> str:
-    return run(_ENSURE_FOLDER, name)
+    """The one place in NOTRON that ever creates a folder."""
+    result = run(_ENSURE_FOLDER, name)
+    if result == "created":
+        # Notes keeps folders in alphabetical order, so a new one shifts the
+        # index of every folder below it. Re-ask now rather than address the
+        # wrong folder for the rest of the cache window.
+        folders(refresh=True)
+    return result
+
+
+def resolve(folder: str) -> tuple[int, list[Note]]:
+    """The position of this folder and its notes — proven, not assumed.
+
+    The index comes from a list that may be ten minutes old, and a folder
+    created above this one shifts it down without any error being raised: the
+    cached index then addresses the folder *next to* the one asked for and
+    hands back its notes as if they were these. On 2026-09-03 that made her
+    read Recently Deleted as her own folder for two minutes (see
+    tests/test_notes.py). The name comes back in the same request as the
+    notes, so checking it is free — and if it does not match, the list is
+    stale by definition and worth re-asking for once.
+    """
+    for refresh in (False, True):
+        for i, name in enumerate(folders(refresh=refresh), start=1):
+            if name != folder:
+                continue
+            if refresh:
+                actual, items = folder_at(i)
+            else:
+                try:
+                    actual, items = folder_at(i)
+                except AppleScriptError:
+                    # A cached index past the end of a shrunken list. Stale,
+                    # not broken — ask again before giving up on the folder.
+                    break
+            if actual == folder:
+                return i, items
+            break  # the list is stale — ask Notes again before believing it
+    raise FolderMissing(folder)
+
+
+def folder_exists(folder: str) -> bool:
+    """Is there really a folder by this name? Asks Notes again before saying no.
+
+    The honest answer to "I cannot see her folder" is to wait, not to build a
+    replacement — so anything that would otherwise recreate a missing note
+    checks here first.
+    """
+    try:
+        resolve(folder)
+    except FolderMissing:
+        return False
+    return True
 
 
 def list_notes(folder: str) -> list[Note]:
-    """Notes in the first folder with this name."""
-    for i, name in enumerate(folders(), start=1):
-        if name == folder:
-            return folder_at(i)[1]
-    return []
+    """Notes in the first folder with this name, or [] if there is no such folder."""
+    try:
+        return resolve(folder)[1]
+    except FolderMissing:
+        return []
 
 
 def list_all_notes() -> list[Note]:
-    """Every note outside Recently Deleted. Titles and timestamps, no bodies."""
+    """Every note outside Recently Deleted. Titles and timestamps, no bodies.
+
+    Skipping by the *cached* name meant a stale index could skip the wrong
+    folder and sweep Recently Deleted instead — deleted notes read for
+    `#notron` tags and fed to the index. The name each folder reports is the
+    one that decides now, and a full sweep is heavy enough that one fresh
+    folder list costs nothing next to it.
+    """
     out: list[Note] = []
-    for i, name in enumerate(folders(), start=1):
+    for i in range(1, len(folders(refresh=True)) + 1):
+        name, items = folder_at(i)
         if name in SKIP_FOLDERS:
             continue
-        out.extend(folder_at(i)[1])
+        out.extend(items)
     return out
 
 
@@ -214,7 +282,9 @@ def show_note(note_id: str) -> None:
 
 
 def create_note(folder: str, body: str) -> str:
-    return run(_CREATE, folder, body)
+    """Add a note to an existing folder. Never creates the folder itself."""
+    index, _ = resolve(folder)
+    return run(_CREATE_AT_INDEX, str(index), body)
 
 
 def find_note(folder: str, title: str) -> Note | None:

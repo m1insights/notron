@@ -32,6 +32,8 @@ class Mention:
     question: str
     after: int
     raw: str = ""        # the whole turn, tags intact — what the Filer ticks
+    modified: str = ""   # the note's timestamp, so anything asked about this
+                         # note afterwards can apply the library's year cutoff
 
 
 @dataclass
@@ -40,6 +42,21 @@ class Scanner:
 
     seen: dict[str, str] = field(default_factory=dict)   # note id -> modified stamp
     pending: set[str] = field(default_factory=set)       # notes that still owe an answer
+    #: note id -> the questions she has already answered somewhere other than in
+    #: the note itself. Normally a tag is retired by her reply landing under it,
+    #: but a note holding a picture can never carry one: Apple Notes deletes the
+    #: picture from any note a script writes to (invariant 13), so she answers in
+    #: 📥 Ask Notron instead. Without this the tag stays unanswered for ever —
+    #: which means `pending` never clears, which means `scan` re-reads the note
+    #: on every sweep. Measured live on 2026-09-06: a 1.8MB AppleScript read
+    #: every twenty seconds, for the life of the note, against the one app that
+    #: serves a single request at a time.
+    #:
+    #: Keyed by the question and not just the note, because the note is not
+    #: finished — the next thing they ask in it deserves an answer like any
+    #: other. And persisted, because in memory alone every restart re-answered
+    #: it and appended the same reply to 📥 Ask Notron again.
+    answered_elsewhere: dict[str, list[str]] = field(default_factory=dict)
     primed: bool = False
 
     def prime(self) -> int:
@@ -57,6 +74,7 @@ class Scanner:
                 saved = json.loads(STATE.read_text())
                 self.seen = saved.get("seen", {})
                 self.pending = set(saved.get("pending", []))
+                self.answered_elsewhere = saved.get("answered_elsewhere", {})
                 self.primed = True
                 return len(self.seen)
             except (OSError, ValueError):
@@ -71,7 +89,11 @@ class Scanner:
     def _save(self) -> None:
         try:
             STATE.parent.mkdir(parents=True, exist_ok=True)
-            STATE.write_text(json.dumps({"seen": self.seen, "pending": sorted(self.pending)}))
+            STATE.write_text(json.dumps({
+                "seen": self.seen,
+                "pending": sorted(self.pending),
+                "answered_elsewhere": self.answered_elsewhere,
+            }))
         except OSError:
             pass
 
@@ -88,7 +110,15 @@ class Scanner:
 
         lib = library.load()
         out = []
-        for n in notes.list_all_notes():
+        live = notes.list_all_notes()
+        # An id that is no longer in the library is a deleted note, and it was
+        # only ever discarded by being seen again — so it sat in
+        # .notron/seen.json for ever, owing an answer nobody could give.
+        alive = {n.id for n in live}
+        self.pending &= alive
+        self.answered_elsewhere = {k: v for k, v in self.answered_elsewhere.items()
+                                   if k in alive}
+        for n in live:
             if n.folder == workspace.FOLDER or lib.is_ignored(n):
                 # Hers, or the user's business: remembered as seen, never read.
                 # Un-ignoring later then means "read it from now", not "answer
@@ -100,6 +130,18 @@ class Scanner:
             self.seen[n.id] = n.modified
         self._save()
         return out
+
+    def answered_away(self, mention: Mention) -> None:
+        """This question has been answered, but not inside the note itself.
+
+        Retires the tag the way a reply under it normally would, so the note
+        stops owing an answer — and stops being re-read every sweep — without
+        anything being written into it. See `answered_elsewhere`.
+        """
+        said = self.answered_elsewhere.setdefault(mention.note_id, [])
+        if mention.question not in said:
+            said.append(mention.question)
+        self._save()
 
     def scan(self) -> list[Mention]:
         """Every unanswered `#notron` in a note that changed since the last look."""
@@ -115,9 +157,15 @@ class Scanner:
                 self._save()
                 continue
             asks = conversation.unanswered(body, ignore=(n.title,), require_tag=True)
+            said = self.answered_elsewhere.get(n.id, [])
+            asks = [q for q in asks
+                    if conversation.strip_tag(conversation.tagged_lines(q.text)) not in said]
             if asks:
                 self.pending.add(n.id)
             else:
+                # Nothing left owing — including the case where every tag in it
+                # was answered in 📥 Ask Notron. Dropping it here is what stops
+                # the note being re-read on every sweep.
                 self.pending.discard(n.id)
             for q in asks:
                 found.append(Mention(
@@ -125,6 +173,7 @@ class Scanner:
                     question=conversation.strip_tag(conversation.tagged_lines(q.text)),
                     after=q.after,
                     raw=q.text,
+                    modified=n.modified,
                 ))
 
         # Save *after* working out what is still owed. Saving inside `changed()`

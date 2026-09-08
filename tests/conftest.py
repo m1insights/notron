@@ -1,14 +1,31 @@
-"""Tests run with no API key and no network — always.
+"""Tests run with no API key, no network and no real Notes app — always.
 
 Every world question now routes to the researcher by design, so a Tavily key
 exported in the developer's shell would quietly turn the graph tests into
 live web searches. Strip it before every test; a test that wants a key sets
 one itself.
+
+The same went for the Notes app itself, and that one had teeth. Any test that
+reached code calling `applescript.run` without patching it first talked to the
+developer's own Apple Notes — 358 real notes, read as if they were fixtures.
+On 2026-09-03 live work on this machine left fourteen junk `📊 Log` notes in
+that library. `_notes_is_never_the_real_one` puts a small fake Notes app under
+every test instead, so a forgotten patch produces a deterministic fake library
+rather than whatever the person running the suite happens to have written down
+— and no test can ever write into it.
+
+EventKit was the same hole, one door along, and open until 2026-09-07: the fake
+Notes app never covered `eventkit.run`, which does not go through
+`applescript.run` at all. Any test reaching it ran a real `osascript` against
+the developer's own 1,263 reminders and 1,757 events. Every EventKit test in
+this suite passes its own fake `caller`; `_eventkit_is_never_the_real_one`
+makes that a rule rather than a habit.
 """
 
 import pytest
 
-from notron import mentions, rewrite, undo
+from notron import (applescript, attachments, booked, eventkit, mentions, notes,
+                    rewrite, undo)
 
 
 @pytest.fixture(autouse=True)
@@ -51,3 +68,160 @@ def _rewrite_state_is_disposable(monkeypatch, tmp_path):
     standing permission to rewrite a real note in place. Redirect it
     everywhere, same as undo above."""
     monkeypatch.setattr(rewrite, "STATE", tmp_path / "rewrite.json")
+
+
+class FakeNotesApp:
+    """An in-memory Notes app, addressed exactly the way the real one is.
+
+    It answers the same scripts `notron/notes.py` sends, so it exercises the
+    real index-addressing and name-verification logic rather than stubbing it
+    out. `insert_folder` reproduces the one move that broke everything: a new
+    folder appearing above an existing one and shifting its index.
+    """
+
+    def __init__(self, folders=None):
+        self.folders = [(name, list(titles)) for name, titles in (folders or [
+            ("Notes", ["Parking Garages", "Supps"]),
+            ("Recently Deleted", ["an old thing"]),
+            ("🤖 NOTRON", ["📌 About Me", "📥 Ask Notron", "🧠 Brain Dump", "📊 Log"]),
+        ])]
+        self.bodies: dict[str, str] = {}
+        #: note id -> [(attachment name, attachment id)]. Apple Notes keeps
+        #: these completely out of the body, so they live beside it here too.
+        self.attachments: dict[str, list[tuple[str, str]]] = {}
+        #: attachment id -> the bytes Notes would write out on `save`.
+        self.files: dict[str, bytes] = {}
+        self.calls: list[str] = []
+
+    def insert_folder(self, position: int, name: str) -> None:
+        self.folders.insert(position - 1, (name, []))
+
+    def run(self, script: str, *args: str, **kw) -> str:
+        if script is notes._FOLDER_NAMES:
+            self.calls.append("folders")
+            return notes.US.join(name for name, _ in self.folders)
+
+        if script is notes._LIST_BY_INDEX:
+            index = int(args[0])
+            self.calls.append(f"list:{index}")
+            if index > len(self.folders):
+                raise applescript.AppleScriptError(
+                    'Can\'t get folder %d of application "Notes"' % index)
+            name, titles = self.folders[index - 1]
+            ids = [f"{name}/{t}" for t in titles]
+            dates = ["Wednesday, 2 September 2026 at 21:30:00"] * len(titles)
+            rest = notes.RS.join(
+                (notes.US.join(ids), notes.US.join(titles), notes.US.join(dates)))
+            return f"{name}{notes.RS}{rest}"
+
+        if script is notes._BODY:
+            self.calls.append("body")
+            return self.bodies.get(args[0], f"<div>{args[0].split('/')[-1]}</div>")
+
+        if script is notes._CREATE_AT_INDEX:
+            index = int(args[0])
+            self.calls.append(f"create:{index}")
+            name, titles = self.folders[index - 1]
+            title = args[1].splitlines()[0]
+            titles.append(title)
+            self.bodies[f"{name}/{title}"] = args[1]
+            return f"{name}/{title}"
+
+        if script is notes._ENSURE_FOLDER:
+            self.calls.append("ensure")
+            if any(name == args[0] for name, _ in self.folders):
+                return "exists"
+            self.folders.append((args[0], []))
+            return "created"
+
+        if script is attachments._ON_NOTE:
+            self.calls.append("attachments")
+            rows = self.attachments.get(args[0], [])
+            names = notes.US.join(n for n, _ in rows)
+            ids = notes.US.join(i for _, i in rows)
+            return f"{names}{notes.RS}{ids}"
+
+        if script is attachments._IN_FOLDER:
+            index = int(args[0])
+            self.calls.append("in_folder")
+            name, titles = self.folders[index - 1]
+            rows = []
+            for t in titles:
+                found = self.attachments.get(f"{name}/{t}", [])
+                if not found:
+                    continue
+                rows.append(attachments.GS.join((
+                    f"{name}/{t}",
+                    notes.US.join(n for n, _ in found),
+                    notes.US.join(i for _, i in found))))
+            return notes.RS.join([name, *rows])
+
+        if script is attachments._EXTRACT:
+            self.calls.append("extract")
+            import pathlib as _pathlib
+            _pathlib.Path(args[1]).write_bytes(self.files.get(args[0], b""))
+            return "ok"
+
+        # A write, a `show note`, an EventKit JXA script — anything that would
+        # have reached the real machine. Loud, with the script in the message,
+        # so the test that forgot to patch is obvious from the failure alone.
+        raise AssertionError(
+            "a test reached the real Notes app — patch it:\n" + script.strip()[:200])
+
+
+@pytest.fixture(autouse=True)
+def _notes_is_never_the_real_one(monkeypatch):
+    app = FakeNotesApp()
+    monkeypatch.setattr(applescript, "run", app.run)
+    monkeypatch.setattr(notes, "run", app.run)
+    monkeypatch.setattr(notes, "_folders_cache", None)
+    yield app
+    notes._folders_cache = None
+
+
+@pytest.fixture(autouse=True)
+def _eventkit_is_never_the_real_one(monkeypatch):
+    """No test may reach the real Calendar or Reminders store.
+
+    There is no useful fake here the way there is for Notes — every caller of
+    `eventkit.run` already takes a `caller=` for exactly this — so this refuses
+    instead, naming the script, the same way the fake Notes app refuses a write.
+    """
+    def refuse(script, timeout):
+        raise AssertionError(
+            "a test reached the real Calendar/Reminders store — pass caller=:\n"
+            + str(script).strip()[:200])
+
+    # `_osascript`, not `run`: `run` is itself under test, and every caller may
+    # legitimately hand it a fake `runner`. This is the one line that actually
+    # reaches the machine.
+    monkeypatch.setattr(eventkit, "_osascript", refuse)
+
+
+@pytest.fixture(autouse=True)
+def _booked_is_never_the_real_store(tmp_path, monkeypatch):
+    """`.notron/actions.json` is real state in the developer's own checkout, and
+    it decides whether a reminder gets booked. A suite that shares it both
+    writes into it and lets one test's booking silently refuse another's."""
+    monkeypatch.setattr(booked, "STATE", tmp_path / "actions.json")
+
+
+@pytest.fixture(autouse=True)
+def _speech_is_never_probed_for_real(monkeypatch):
+    """`attachments.speech_available` runs its own `subprocess.run` — it goes
+    through neither the fake Notes app nor `eventkit`, so it was the third way a
+    test could reach the machine, and the slowest: `permissions.check()` calls
+    it, and a listener test that starts the watcher then paid a real osascript
+    launch inside a 0.3s window and looked like a hung loop."""
+    monkeypatch.setattr(attachments, "speech_available", lambda: False)
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_permissions():
+    """`permissions.cached()` is module state that outlives a test. One test
+    finding Calendar denied must not be why the next test thinks so."""
+    from notron import permissions
+
+    permissions.forget()
+    yield
+    permissions.forget()

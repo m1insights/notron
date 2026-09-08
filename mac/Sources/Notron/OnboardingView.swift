@@ -20,6 +20,10 @@ struct OnboardingView: View {
                     PermissionsStep(model: model) { model.step = .talk }
                 case .talk:
                     TalkStep { model.step = .listening }
+                        // Learned here, on the screen that teaches how to
+                        // address her, so it is done before the user ever
+                        // types her name.
+                        .onAppear { model.teachTheSpellerHerName() }
                 case .listening:
                     ListeningStep(model: model) { model.step = .pins }
                 case .pins:
@@ -218,8 +222,11 @@ private struct TalkStep: View {
                     ExampleRow(glyph: row.glyph, name: row.name, example: row.example)
                 }
             }
-            Text("All three live in 🤖 NOTRON — already in your Notes.")
-                .font(DS.Font.caption).foregroundStyle(DS.Color.textFaint)
+            VStack(alignment: .leading, spacing: DS.Space.s1) {
+                Text("All three live in 🤖 NOTRON — already in your Notes.")
+                Text("We've taught your Mac her name, so it stops changing Notron to Norton.")
+            }
+            .font(DS.Font.caption).foregroundStyle(DS.Color.textFaint)
             Spacer()
             HStack {
                 Button("Skip", action: advance)

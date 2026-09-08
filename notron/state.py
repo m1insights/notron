@@ -51,6 +51,15 @@ class State:
     here: str = ""                   # the note she was tagged in, if any
     source: str = ""                 # the exact lines she was tagged in, tags intact —
                                      # what the Filer copies and ticks
+    carried: list = field(default_factory=list)
+                                     # `attachments.Attachment` for every file
+                                     # hanging off the note she was tagged in.
+                                     # Apple Notes keeps them out of the body
+                                     # entirely, so without this she answers as
+                                     # if they did not exist. The retriever
+                                     # takes out the ones it can turn into text;
+                                     # what is left is what she must say she has
+                                     # not seen.
     reply_to: tuple | None = None    # (title, folder, block index) to answer under
     context: list[str] = field(default_factory=list)
     web: list[str] = field(default_factory=list)
@@ -59,6 +68,10 @@ class State:
     answer: str = ""
     writes: list[Write] = field(default_factory=list)
     results: list[str] = field(default_factory=list)
+    stuck: str = ""                  # why writing where she was asked can never
+                                     # work, if it never can — the listener stops
+                                     # asking rather than paying a model every
+                                     # half hour to be refused identically
     trace: list[str] = field(default_factory=list)
 
     def note(self, node: str, detail: str = "") -> None:

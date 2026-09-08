@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import calendar, guard, markup, notedoc, notes, reminders, undo, workspace
+from . import booked, calendar, guard, markup, notedoc, notes, reminders, undo, workspace
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,7 @@ class WriteResult:
     reason: str
     note_id: str | None = None
     ref: str | None = None       # reminder id / event uid
+    permanent: bool = False      # trying again can never help — see guard.Verdict
 
 
 class Executor:
@@ -100,7 +101,8 @@ class Executor:
         )
         if not verdict:
             self._log(f"**BLOCKED** {mode} on *{title}* — {verdict.reason}")
-            return WriteResult(False, verdict.reason, note.id if note else None)
+            return WriteResult(False, verdict.reason, note.id if note else None,
+                               permanent=verdict.permanent)
 
         if self.dry_run:
             return WriteResult(True, "dry run — nothing written", note.id if note else None)
@@ -150,6 +152,18 @@ class Executor:
         if self.dry_run:
             return WriteResult(True, "dry run — nothing created")
 
+        # She books before she writes the note, and the note write can fail —
+        # after which the watcher retries the whole graph and the doer proposes
+        # the identical reminder again. Nothing downstream could tell the two
+        # apart. See booked.py. A match is a *blocked* write, so it is logged
+        # like one (invariant #4), and the caller gets the reference of the
+        # thing that already exists rather than a second one.
+        seen = booked.already(action)
+        if seen:
+            self._log(f"**BLOCKED** {action.op} {action.kind} *{action.title}* — "
+                      f"already set a moment ago")
+            return WriteResult(True, "already set", ref=seen)
+
         try:
             ref, detail = self._perform(action)
         except LookupError as e:
@@ -158,9 +172,17 @@ class Executor:
         except Exception as e:
             # An app that is not approved yet hangs rather than failing, so a real
             # exception here is worth saying out loud instead of swallowing.
+            #
+            # And say what macOS said, not what Python called it. This used to
+            # read "event app said no (EventKitError)", which is the same
+            # sentence whether the calendar is denied, read-only or missing —
+            # the user cannot act on a class name. `eventkit.failure` has
+            # already folded `err.localizedDescription` into the message by the
+            # time it reaches here; all this has to do is not throw it away.
             self._log(f"**FAILED** {action.op} {action.kind} *{action.title}* — {type(e).__name__}: {e}")
-            return WriteResult(False, f"{action.kind} app said no ({type(e).__name__})")
+            return WriteResult(False, _plainly(e, action.kind))
 
+        booked.remember(action, ref)
         self._log(f"{action.op} {action.kind} *{action.title}*{detail}")
         return WriteResult(True, detail.strip(" —") or "done", ref=ref)
 
@@ -199,11 +221,39 @@ class Executor:
         if log:
             body = notes.read_body(log.id)
             notes.write_body(log.id, body + markup.to_html(entry))
-        else:
+        elif notes.folder_exists(workspace.FOLDER):
             # Every write is supposed to land here (invariant #4). If the note
             # itself got deleted, recreate it from its seed instead of
             # silently losing the audit trail from here on — the same
             # self-heal 📖 Lessons already gets from `replace` recreating it
             # the next time there's something to write.
+            #
+            # But only once the folder itself has answered. A missing 📊 Log
+            # can also mean the *folder* read went astray, and then the honest
+            # move is to wait, not to build a replacement: on 2026-09-03 a
+            # shifted folder index made every read of 🤖 NOTRON return
+            # Recently Deleted, and this branch fired on each write — fourteen
+            # duplicate 📊 Log notes in two minutes. `folder_exists` asks Notes
+            # again rather than trusting the cached folder list.
             seed = markup.render(workspace.LOG, workspace.SEEDS[workspace.LOG])
             notes.create_note(workspace.FOLDER, seed + markup.to_html(entry))
+
+
+#: How long a macOS failure may be before it stops being readable in a note.
+MAX_REASON_CHARS = 200
+
+
+def _plainly(e: Exception, kind: str) -> str:
+    """One failed action, in words the user can act on.
+
+    The exception text is the interesting part — "could not create the event:
+    save failed — Calendar access denied" names a switch in System Settings.
+    The class name never did. A message with nothing in it (some ObjC bridges
+    raise bare) falls back to naming the app, which is still more than nothing.
+    """
+    said = " ".join(str(e).split())
+    if not said:
+        return f"the {kind} app refused it and said nothing"
+    if len(said) > MAX_REASON_CHARS:
+        said = said[:MAX_REASON_CHARS - 1].rstrip() + "…"
+    return said

@@ -29,7 +29,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from . import conversation, filer, graph, mentions, notes, workspace
+from . import attachments, conversation, filer, graph, mentions, notes, workspace
+from .markup import to_text
 from .applescript import AppleScriptError, NotesBusy
 
 ASK_POLL = 5           # seconds between checks of the Ask note
@@ -38,6 +39,48 @@ SETTLE = 6             # how long your typing must be still before she answers
 MIN_CHARS = 2
 
 DUMP_POLL = 60         # seconds between looks at the Brain Dump (one cheap read)
+
+HERE_CHARS = 40_000    # how much of the note she was tagged in the model sees
+ELIDED = "\n\n[… a part of this note is not shown …]\n\n"
+
+
+def here_text(body_html: str, anchor: str = "", *, budget: int = HERE_CHARS) -> str:
+    """The note she was tagged in, as the model should see it.
+
+    Whole, whenever it fits — and it almost always does. Some cap is
+    unavoidable (a note may run to 200,000 characters), but a cap that simply
+    keeps the opening is worse than it looks: a question like "would my first
+    scene idea, written at the end of this note, work?" then points at text she
+    was never given, and she answers, reasonably and wrongly, that she cannot
+    find it. That happened on a 25,000-character story bible against the old
+    4,000-character cut.
+
+    So an oversized note is sent as three parts — how it opens, the passage
+    around the line she was tagged in, and how it ends — with the gaps marked
+    so she can say what she has not read rather than assume it is not there.
+    Parts that turn out to touch are joined back into one, so the marker only
+    ever appears where something really was left out.
+    """
+    text = to_text(body_html)
+    if len(text) <= budget:
+        return text
+
+    third = budget // 3
+    spans = [(0, third), (len(text) - third, len(text))]
+    at = text.find(anchor.strip()) if anchor.strip() else -1
+    if at >= 0:
+        window = budget - 2 * third
+        start = max(0, min(at - window // 2, len(text) - window))
+        spans.append((start, start + window))
+
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return ELIDED.join(text[start:end] for start, end in merged)
+
 # How long the dump must be untouched before she files it. A dump session is a
 # burst of half-thoughts; filing on a timer would file the half. Fifteen quiet
 # minutes means the session is over.
@@ -45,6 +88,11 @@ DUMP_SETTLE = 900
 
 # The Ask note's own standing text, which nobody said out loud.
 ASK_FURNITURE = (workspace.ASK, "Type anything below this line", conversation.QA_RULE)
+
+
+def _wrote(state) -> bool:
+    """Did anything actually land in Notes? A tick in front of a result line."""
+    return any(r.startswith("✓") for r in state.results)
 
 
 @dataclass
@@ -66,6 +114,13 @@ class Watcher:
     # A question that produced no write stays "unanswered" in the note, so the
     # next poll would send it to the model again, and again, forever — a quiet
     # API bill for one stuck message. Two honest tries, then a long pause.
+    #
+    # A pause is the right answer for a note that was busy or too big, because
+    # either may be different in half an hour. It is the wrong answer for a
+    # note holding a picture: that refusal is identical every time, and the
+    # pause turns it into a model call every thirty minutes for the life of
+    # the note. Those are set aside for good instead — she has already said
+    # her piece in 📥 Ask Notron.
     MAX_TRIES = 2
     COOLDOWN = 1800
 
@@ -78,27 +133,52 @@ class Watcher:
     # --------------------------------------------------------------- answering
 
     def _answer(self, question: str, *, title: str, folder: str, after: int,
-                here: str = "", source: str = "") -> bool:
+                here: str = "", source: str = "",
+                carried: list | None = None):
         self._say(f"\n> [{title}] {question}")
         state = graph.run(
             question, brain=self.brain, trigger="notes",
             reply_to=(title, folder, after), here=here, source=source,
+            carried=carried,
         )
         for line in state.trace:
             self._say(f"  {line}")
         for result in state.results:
             self._say(f"  {result}")
-        wrote = any(r.startswith("✓") for r in state.results)
-        if not wrote:
+        if not _wrote(state):
             self._say("  nothing was written — she will read this again")
         self._say(f"\n{state.answer}\n")
-        return wrote
+        return state
+
+    def _carried(self, note_id: str, modified: str = "") -> list:
+        """The files hanging off this note, for the prompt to be honest about.
+
+        Asked here rather than in the poll: a note's attachments cost a 0.4s
+        request to Notes, and the Ask note is read every five seconds. Only a
+        note actually about to be answered pays for it.
+        """
+        try:
+            return attachments.on_note(note_id, modified)
+        except Exception as e:
+            # Not knowing what a note carries is worth less than not answering
+            # at all. She simply says nothing about files, as she did before.
+            self._say(f"  (couldn't check for attached files: {type(e).__name__})")
+            return []
 
     def _worth_trying(self, key: str) -> bool:
         count, at = self._failures.get(key, (0, 0.0))
         return count < self.MAX_TRIES or time.time() - at >= self.COOLDOWN
 
-    def _attempted(self, key: str, wrote: bool) -> None:
+    def _attempted(self, key: str, wrote: bool, stuck: str = "") -> None:
+        if stuck:
+            # Not a failure to retry — an answer that could never land where it
+            # was asked, and did land in 📥 Ask Notron. The scanner retires the
+            # question (see `mentions.answered_away`); nothing here needs to
+            # remember it, and asking the model again would buy the identical
+            # refusal.
+            self._failures.pop(key, None)
+            self._say(f"  answered in {workspace.ASK} instead — {stuck}")
+            return
         if wrote:
             self._failures.pop(key, None)
         else:
@@ -146,9 +226,10 @@ class Watcher:
                 continue
             if not self._settled(key, q.text):
                 continue
-            wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
-                                 after=q.after, source=q.text)
-            self._attempted(key, wrote)
+            answered = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
+                                    after=q.after, source=q.text,
+                                    carried=self._carried(self._ask_id))
+            self._attempted(key, _wrote(answered), answered.stuck)
             # Only the Ask note moved underneath us; a tag elsewhere is still
             # settling on its own clock and keeps its timer.
             for stale in [k for k in self._pending if k.startswith("ask:")]:
@@ -166,10 +247,14 @@ class Watcher:
             if not self._settled(key, m.question):
                 continue
             body = notes.read_body(m.note_id)
-            from .markup import to_text
-            wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                                 here=to_text(body)[:4000], source=m.raw)
-            self._attempted(key, wrote)
+            answered = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
+                                    here=here_text(body, m.raw or m.question), source=m.raw,
+                                    carried=self._carried(m.note_id, m.modified))
+            if answered.stuck:
+                # She answered, just not in that note — retire the tag so it
+                # stops owing a reply it can never be given.
+                self.scanner.answered_away(m)
+            self._attempted(key, _wrote(answered), answered.stuck)
             self._pending.pop(key, None)
             return
 
@@ -212,6 +297,26 @@ class Watcher:
 
     # ------------------------------------------------------------------- loop
 
+    def _report_blind_spots(self, checker=None) -> None:
+        """Say, once, which apps this process cannot read — and how to fix it.
+
+        `notron permissions` answers for the terminal it is typed into. The
+        listener is a different process with a different grant, and measured
+        2026-09-06 it had none: zero calendars, zero events, no error. The log
+        is the only place anyone looks when she is quietly wrong about the day,
+        so the answer has to be in it.
+        """
+        from . import permissions
+
+        try:
+            missing = permissions.blind(checker=checker)
+        except Exception as e:
+            self._say(f"  (couldn't check permissions: {type(e).__name__})")
+            return
+        for c in missing:
+            self._say(f"  ⚠️  {c.app} {c.detail} — she will say so rather than "
+                      f"plan around it." + (f" Fix: {c.fix}" if c.fix else ""))
+
     def run_forever(self) -> None:
         # Notes may have been idle for hours. Waking it is slow exactly once.
         try:
@@ -220,6 +325,8 @@ class Watcher:
                 self._say(f"woke the Notes app ({took:.0f}s — it had been asleep)")
         except Exception as e:
             self._say(f"  (Notes did not wake: {type(e).__name__}) — trying anyway")
+
+        self._report_blind_spots()
 
         self._say(f"listening to {workspace.ASK} — type in Notes on any device")
         try:
