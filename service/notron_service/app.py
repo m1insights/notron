@@ -110,6 +110,15 @@ class BillingPortal(BaseModel):
     return_url: str = Field(min_length=1,max_length=2048)
 
 
+class LeaseFence(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    fence: int = Field(gt=0,strict=True)
+
+
+class EmptyLeaseRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+
+
 def create_app(settings: Settings, services: Services) -> FastAPI:
     app = FastAPI(debug=False, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.services = services
@@ -189,6 +198,35 @@ def create_app(settings: Settings, services: Services) -> FastAPI:
         return {'account_id':str(principal.account_id),'device_id':str(principal.device_id),
                 'status':account['status'],'entitlement':asdict(entitlement),'subscription_status':statuses}
 
+    from .devices import Devices
+    from .deletion import Deletion
+    lease_service=Devices(services.store)
+
+    @app.post('/v1/worker/lease/acquire')
+    def acquire_lease(body:EmptyLeaseRequest,principal=Depends(require_principal)):
+        return lease_service.acquire(principal)
+
+    @app.post('/v1/worker/lease/transfer')
+    def transfer_lease(body:EmptyLeaseRequest,principal=Depends(require_principal)):
+        return lease_service.transfer(principal)
+
+    @app.post('/v1/worker/lease/renew')
+    def renew_lease(body:LeaseFence,principal=Depends(require_principal)):
+        return lease_service.renew(principal,body.fence)
+
+    @app.post('/v1/worker/lease/check')
+    def check_lease(body:LeaseFence,principal=Depends(require_principal)):
+        return lease_service.check(principal,body.fence)
+
+    @app.post('/v1/worker/lease/release')
+    def release_lease(body:LeaseFence,principal=Depends(require_principal)):
+        lease_service.release(principal,body.fence)
+        return {'status':'released'}
+
+    @app.delete('/v1/account')
+    def delete_account(principal=Depends(require_principal)):
+        return Deletion(services.store,settings.financial_retention_days).delete(principal)
+
     @app.get('/v1/devices')
     def devices(principal=Depends(require_principal)):
         return services.store.list_devices(principal)
@@ -199,7 +237,7 @@ def create_app(settings: Settings, services: Services) -> FastAPI:
 
     @app.post('/v1/me/deletion',status_code=202)
     def deletion(principal=Depends(require_principal)):
-        services.store.request_account_deletion(principal)
+        Deletion(services.store,settings.financial_retention_days).delete(principal)
         return {'status':'deletion_requested'}
 
     @app.post('/v1/oidc/verify')

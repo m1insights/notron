@@ -73,6 +73,17 @@ class StripeGateway:
         return [s.to_dict() for s in self.client.v1.subscriptions.list(
             {'customer':customer,'status':'all','limit':100}).auto_paging_iter()]
 
+    def checkout_sessions(self,customer):
+        return [s.to_dict() for s in self.client.v1.checkout.sessions.list(
+            {'customer':customer,'limit':100}).auto_paging_iter()]
+
+    def expire_checkout(self,session_id,idempotency_key):
+        return self.client.v1.checkout.sessions.expire(session_id,{},options={'idempotency_key':idempotency_key}).to_dict()
+
+    def cancel_subscription(self,subscription_id,idempotency_key):
+        return self.client.v1.subscriptions.cancel(subscription_id,{'invoice_now':False,'prorate':False},
+            options={'idempotency_key':idempotency_key}).to_dict()
+
     def paid_invoices(self, customer, subscription):
         result=[]
         for inv in self.client.v1.invoices.list({'customer':customer,'subscription':subscription,
@@ -360,6 +371,8 @@ class Billing:
                     current=conn.execute("SELECT processed_at FROM webhook_events WHERE provider='stripe' AND event_id=%s FOR UPDATE",(event['event_id'],)).fetchone()
                     if current['processed_at']: continue
                     if active: self._reconcile_locked(conn,row['account_id'])
+                    elif row and account['status']=='deleted':
+                        conn.execute('UPDATE account_deletions SET billing_cleanup_pending=true WHERE account_id=%s',(row['account_id'],))
                     conn.execute("UPDATE webhook_events SET account_id=%s,status='processed',processed_at=now(),attempts=attempts+1 WHERE provider='stripe' AND event_id=%s",
                                  (row['account_id'] if row else None,event['event_id']))
                     counts['processed']+=1
@@ -377,6 +390,9 @@ class Billing:
                     conn.execute('UPDATE billing_accounts SET last_attempt_at=now() WHERE account_id=%s',(account['account_id'],))
                 self.reconcile(account['account_id']); counts['reconciled']+=1
             except Exception: counts['failed']+=1
+        from .deletion import Deletion
+        cleanup=Deletion(self.store).repair_remote(self.gateway,limit)
+        counts['deletion_completed']=cleanup['completed'];counts['failed']+=cleanup['failed']
         return counts
 
     @staticmethod

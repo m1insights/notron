@@ -43,7 +43,7 @@ def enqueue(line, operation_id=None):
     if operations.current().get(oid):
         return oid
     label = 'BLOCKED / NEEDS REVIEW' if 'BLOCKED' in line or 'FAILED' in line else 'Operation verified'
-    recovery.put(oid, oid, {'outcome': label}, ())
+    recovery.put(oid, oid, {'outcome': label, 'primary_id': operation_id}, ())
     prune()
     return oid
 

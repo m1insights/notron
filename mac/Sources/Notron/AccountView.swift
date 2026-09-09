@@ -86,11 +86,23 @@ extension KeychainStore: SessionVault {}
             busy=false
         }
     }
+    func transferToThisMac() {
+        guard let session else{return};busy=true
+        operation=Task {
+            do {
+                let wait=try await session.transferToThisMac()
+                Core.managedIPC?.stop()
+                if let config {Core.managedIPC=ManagedIPCSession(session:session,serviceURL:config.service)}
+                status=wait>0 ? "Transfer requested. Wait up to \(wait) seconds, then review any unfinished operations before resuming." : "This Mac has the managed worker grant. Setup and operation review still apply."
+            } catch {status="Transfer could not be confirmed. Processing remains paused; try again."}
+            busy=false
+        }
+    }
     func deleteAccount() {
         guard let session else{return};busy=true
         operation=Task {
-            do {try await session.requestDeletion();status="Account deletion requested. Managed processing is stopped. Your Notes are unchanged."}
-            catch {status="Account deletion could not be confirmed. Please try again."}
+            do {try await session.requestDeletion();status="Service access stopped and cached responses erased. Subscription cancellation and provider account cleanup are pending. Your Notes are unchanged."}
+            catch {status="Processing is stopped locally. Remote deletion could not be confirmed; sign in again to check or retry."}
             busy=false
         }
     }
@@ -103,6 +115,7 @@ extension Notification.Name {
 struct AccountView:View {
     @StateObject private var account=AccountController()
     @State private var confirmDeletion=false
+    @State private var confirmTransfer=false
     var body:some View {
         VStack(alignment:.leading,spacing:DS.Space.s5) {
             Text("Your account").font(DS.Font.headline)
@@ -111,18 +124,24 @@ struct AccountView:View {
             if account.session?.credentialCleanupFailed == true {Button("Retry sign-out"){account.signOut()}}
             if account.session?.isSignedIn == true {
                 Button("Sign out"){account.signOut()}
+                Button("Use this Mac for managed processing…"){confirmTransfer=true}.disabled(account.busy)
                 Button("Revoke this device"){account.revokeThisDevice()}.disabled(account.busy)
                 Button("Delete account…"){confirmDeletion=true}.disabled(account.busy)
             } else {
                 Button("Sign in with email"){account.signIn()}.disabled(account.session==nil || account.busy)
             }
+            Text("Using your own provider keys supports one active Mac. It does not use account worker leases.").font(DS.Font.caption).foregroundStyle(DS.Color.textDim)
             if account.busy {Button("Cancel sign-in"){account.cancel()}}
         }
         .padding(DS.Space.s7).foregroundStyle(DS.Color.text).background(DS.Color.bg)
         .preferredColorScheme(.light)
+        .confirmationDialog("Move managed processing to this Mac?",isPresented:$confirmTransfer,titleVisibility:.visible) {
+            Button("Use this Mac"){account.transferToThisMac()}
+            Button("Cancel",role:.cancel){}
+        } message: {Text("The previous Mac loses permission for new work. This Mac waits for its previous lease to expire. An Apple write already sent can still finish; review unfinished operations before resuming.")}
         .confirmationDialog("Request account deletion?",isPresented:$confirmDeletion,titleVisibility:.visible) {
             Button("Request deletion",role:.destructive){account.deleteAccount()}
             Button("Cancel",role:.cancel){}
-        } message: {Text("Managed access will stop on every device. Your Apple Notes will remain on your devices.")}
+        } message: {Text("Managed access stops and cached responses are erased. Billing records follow the published retention policy; a pseudonymous identity record prevents accidental account recreation. Apple Notes, Reminders, Calendar, local recovery data and backups remain. Paid launch requires an approved retention policy.")}
     }
 }

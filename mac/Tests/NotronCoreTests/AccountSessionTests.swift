@@ -2,6 +2,22 @@ import XCTest
 @testable import NotronCore
 
 final class AccountSessionTests: XCTestCase {
+    @MainActor func testDeletionStopsLocallyBeforeRemoteRequest() async throws {
+        let vault=MemoryVault();let transport=FakeTransport();var stopped=false
+        let session=AccountSession(vault:vault,transport:transport,barrier:MemoryBarrier(),stopManaged:{stopped=true})
+        try await session.complete(code:"code",verifier:"verifier",nonce:"expected")
+        transport.onDelete={XCTAssertTrue(stopped);XCTAssertNil(vault.values["managed-refresh"])}
+        try await session.requestDeletion()
+    }
+    @MainActor func testTransferUsesCurrentSessionAndReportsDrainWait() async throws {
+        let vault=MemoryVault();let transport=FakeTransport()
+        let session=AccountSession(vault:vault,transport:transport,barrier:MemoryBarrier(),stopManaged:{})
+        try await session.complete(code:"code",verifier:"verifier",nonce:"expected")
+        let wait=try await session.transferToThisMac()
+        XCTAssertEqual(wait,60)
+        XCTAssertTrue(session.isSignedIn)
+        XCTAssertNotNil(vault.values["managed-refresh"])
+    }
     func testPKCEUsesS256AndCallbackIsOneUse() throws {
         let flow = try AuthorizationAttempt(authorizationURL: URL(string:"https://issuer.test/authorize")!, clientID:"native", audience:"api", redirectURI:"com.m1labs.notron:/callback")
         let items = URLComponents(url:flow.url,resolvingAgainstBaseURL:false)!.queryItems!
@@ -172,6 +188,7 @@ final class MemoryVault: SessionVault {
     func delete(_ name:String)throws{deleteCalls+=1;if deleteFails{throw SessionError.unavailable};values.removeValue(forKey:name)}
 }
 @MainActor final class FakeTransport: SessionTransport {
+    var onDelete:(()->Void)?
     var nonce="expected";var rejected=false
     var revocationFails=false;var refreshCalls=0
     func exchange(code:String,verifier:String)async throws->TokenSet{TokenSet(accessToken:"access",refreshToken:"refresh",idToken:"id",expiresIn:300)}
@@ -179,7 +196,8 @@ final class MemoryVault: SessionVault {
     func verify(access:String,idToken:String)async throws->String{nonce}
     func identify(access:String)async throws->DeviceIdentity{if rejected{throw SessionError.unavailable};return DeviceIdentity(accountID:"account",deviceID:"device")}
     func revoke(access:String,deviceID:String)async throws{if revocationFails{throw SessionError.unavailable}}
-    func deleteAccount(access:String)async throws{}
+    func deleteAccount(access:String)async throws{onDelete?()}
+    func transferLease(access:String)async throws->Int {60}
     func revokeRefresh(_ token:String)async throws{if revocationFails{throw SessionError.unavailable}}
 }
 

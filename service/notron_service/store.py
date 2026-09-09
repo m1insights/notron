@@ -77,7 +77,10 @@ class PostgresStore:
                     'billing_accounts','billing_subscriptions','billing_orders','billing_grants','billing_allocations')),
                 (5, MIGRATION.parent / '005_usage.sql', _TABLES + ('identity_sessions',
                     'billing_accounts','billing_subscriptions','billing_orders','billing_grants','billing_allocations',
-                    'usage_meter','usage_cache'))]
+                    'usage_meter','usage_cache')),
+                (6, MIGRATION.parent / '006_devices.sql', _TABLES + ('identity_sessions',
+                    'billing_accounts','billing_subscriptions','billing_orders','billing_grants','billing_allocations',
+                    'usage_meter','usage_cache','account_deletions','identity_deletion_tombstones'))]
 
     def _check(self, conn, *, allow_inactive=False, allow_prefix=False):
         rows = conn.execute('SELECT version,checksum,fingerprint,active FROM schema_migrations ORDER BY version').fetchall()
@@ -145,15 +148,21 @@ class PostgresStore:
         with self._connect() as conn:
             # Serialize concurrent first registrations before creating an account.
             conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (issuer+'|'+subject,))
+            from .deletion import identity_digest
+            if conn.execute('SELECT 1 FROM identity_deletion_tombstones WHERE digest=%s',(identity_digest(issuer,subject),)).fetchone():
+                raise AccessDenied('managed account access required')
             row=conn.execute('SELECT account_id FROM identities WHERE issuer=%s AND subject=%s', (issuer,subject)).fetchone()
             if row is None:
+                # Deletion may commit between the first tombstone and identity reads.
+                if conn.execute('SELECT 1 FROM identity_deletion_tombstones WHERE digest=%s',(identity_digest(issuer,subject),)).fetchone():
+                    raise AccessDenied('managed account access required')
                 account_id=uuid4()
                 conn.execute("INSERT INTO accounts(id,status,contact_email) VALUES (%s,'active',%s)",(account_id,email))
                 conn.execute('INSERT INTO identities VALUES (%s,%s,%s)',(issuer,subject,account_id))
             else:
                 account_id=row['account_id']
             account=conn.execute('SELECT status FROM accounts WHERE id=%s FOR UPDATE',(account_id,)).fetchone()
-            if account['status']!='active':
+            if not account or account['status']!='active':
                 raise AccessDenied('managed account access required')
             session=conn.execute('SELECT device_id FROM identity_sessions WHERE issuer=%s AND subject=%s AND session_id=%s',
                                  (issuer,subject,session_id)).fetchone()
@@ -169,16 +178,13 @@ class PostgresStore:
 
     def revoke_device(self, principal, device_id):
         with self._connect() as conn:
-            self._authorize(conn,principal)
             conn.execute('SELECT id FROM accounts WHERE id=%s FOR UPDATE',(principal.account_id,))
+            self._authorize(conn,principal)
             row=conn.execute('UPDATE devices SET revoked_at=COALESCE(revoked_at,now()) WHERE account_id=%s AND id=%s RETURNING id',
                              (principal.account_id,device_id)).fetchone()
             if row is None:
                 raise AccessDenied('managed account access required')
 
     def request_account_deletion(self, principal):
-        # Durable immediate stop; later erasure never deletes local Apple Notes.
-        with self._connect() as conn:
-            self._authorize(conn,principal)
-            conn.execute("UPDATE accounts SET status='deleting' WHERE id=%s",(principal.account_id,))
-            conn.execute('UPDATE devices SET revoked_at=COALESCE(revoked_at,now()) WHERE account_id=%s',(principal.account_id,))
+        from .deletion import Deletion
+        return Deletion(self).delete(principal)

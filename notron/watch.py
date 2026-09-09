@@ -370,7 +370,7 @@ class Watcher:
             HealthStore().success()
         self._pending.pop("dump", None)
 
-    def recover_pending(self) -> bool:
+    def recover_pending(self, *, local_only=False) -> bool:
         """Repair one persisted request, including one hidden by its own receipt."""
         from contextlib import nullcontext
         from . import recovery, operations
@@ -378,6 +378,14 @@ class Watcher:
             if not recovery.available(record):
                 continue
             envelope = record.envelope
+            if local_only:
+                checkpoint=recovery.get(envelope.request_id+':checkpoint:writer')
+                actions=checkpoint.get('actions',[]) if checkpoint else []
+                if not checkpoint or checkpoint.get('intent') not in ('remind','schedule') or len(actions)!=1:
+                    continue
+                primary=operations.current().get(actions[0].get('operation_id',''))
+                if not primary or primary.status not in (operations.S.APPLIED,operations.S.RECEIPTED):
+                    continue
             key = 'recover:' + envelope.request_id
             if not self._worth_trying(key):
                 continue
@@ -460,9 +468,20 @@ class Watcher:
             self._pending.clear()  # Sleep/pause never makes a half-typed turn settled.
             self._intent_version = intent['intent_version']
             store.update(state='starting', reason_code='resuming')
+        # Local verified receipt repair does not depend on cloud entitlement or
+        # connectivity. Its executor still validates durable identity and policy.
+        try:
+            from . import credentials
+            if credentials._provider is not None:
+                audit.drain()
+                if self.recover_pending(local_only=True):return
+        except Exception:
+            pass
         if not self._runtime_ready and not self.prepare_runtime():
             return
         try:
+            from .managed_lease import require_effect
+            require_effect()
             # Recovery wins over fresh jobs after every restart/resume.
             if self.recover_pending():
                 return
@@ -505,6 +524,9 @@ class Watcher:
                     self.tick(resumed=now < previous or now - previous > STALE_AFTER)
                     previous = now
                     time.sleep(self.ask_poll)
+            from .transport import configured
+            managed=configured()
+            if managed is not None:managed.stop()
 
 
 WATCH_LABEL = "io.m1labs.notron.listen"

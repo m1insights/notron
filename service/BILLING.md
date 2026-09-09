@@ -151,3 +151,14 @@ Primary contract references checked during implementation:
 [test clocks](https://docs.stripe.com/billing/testing/test-clocks),
 [official Python SDK](https://github.com/stripe/stripe-python), and
 [SDK release](https://pypi.org/project/stripe/15.6.1/).
+
+## Account deletion integration (Task 5)
+
+See [DEVICES.md](DEVICES.md) and [RETENTION.md](RETENTION.md). Billing configuration
+now additionally requires explicit `NOTRON_SERVICE_FINANCIAL_RETENTION_DAYS`.
+The existing repair scheduler processes durable deletion cancellation, adding
+`deletion_completed` and including cancellation failures in `failed`. Deleted
+accounts never regain access; late webhooks reopen cancellation instead of
+reconciling entitlements. No new invoice, proration or refund is requested by this
+cleanup path. Current-month and uncertain monetary rows cannot be erased to reset
+the spending cap, even when an operator chooses a short retention period.

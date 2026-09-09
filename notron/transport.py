@@ -66,10 +66,12 @@ class ManagedTransport:
         self.service_url=service_url.rstrip('/'); self.session=session; self.lease_fence=lease_fence
         self.http=http or self._http; self.stopped=False
     def stop(self):
+        lease=getattr(self,'worker_lease',None)
+        if lease:lease.stop()
         self.stopped=True
         if hasattr(self.session,'stop'): self.session.stop()
     def _http(self,operation,body,token,deadline):
-        if operation not in {'infer','embed','vision','search'}: raise ManagedError('permission_required')
+        if operation not in {'infer','embed','vision','search',*(f'worker/lease/{x}' for x in ('acquire','renew','release','check'))}: raise ManagedError('permission_required')
         host=urlsplit(self.service_url).hostname
         connection=network._ProviderConnection(host,443,timeout=max(.001,deadline-time.monotonic()),context=ssl.create_default_context())
         connection.write_timeout=max(.001,deadline-time.monotonic())
@@ -89,6 +91,24 @@ class ManagedTransport:
                     if len(data)>4*1024*1024: raise ManagedError('outcome_uncertain')
                 return response.status,json.loads(data)
         finally: connection.close()
+    def control(self,operation,body):
+        if operation not in {'acquire','renew','release','check'}:raise ManagedError('permission_required')
+        deadline=time.monotonic()+10
+        for attempt in range(2):
+            if self.stopped:raise ManagedError('signin_required')
+            try:
+                token=self.session.access_token(force_refresh=bool(attempt))
+                if self.stopped:raise ManagedError('signin_required')
+                status,data=self.http('worker/lease/'+operation,body,token,deadline)
+            except ManagedError:raise
+            except Exception:raise ManagedError('provider_unavailable') from None
+            if self.stopped:raise ManagedError('signin_required')
+            if status==401 and attempt==0:continue
+            if status!=200 or not isinstance(data,dict):
+                raise ManagedError('signin_required' if status==401 else 'permission_required')
+            return data
+        raise ManagedError('signin_required')
+
     def _identity(self,operation,payload):
         from .requests import active_request
         from . import securestore
@@ -272,6 +292,13 @@ def bootstrap_inherited():
             raw.extend(chunk)
         info=json.loads(raw)
         if set(info)!={'service_url'}: raise ValueError()
-        configure(ManagedTransport(info['service_url'],NativeTokenChannel(channel),lease_fence=lambda:_lease_fence_supplier()))
+        transport=ManagedTransport(info['service_url'],NativeTokenChannel(channel),lease_fence=lambda:_lease_fence_supplier())
+        from .managed_lease import ManagedLease
+        transport.worker_lease=ManagedLease(transport)
+        configure_lease_fence(transport.worker_lease.fence)
+        configure(transport)
+        transport.worker_lease.start()
+    except ManagedError:
+        channel.close();raise
     except Exception:
         channel.close();raise ManagedError('signin_required') from None

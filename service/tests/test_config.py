@@ -12,6 +12,7 @@ from notron_service.app import Services, create_app
 def env():
     return {
         'NOTRON_SERVICE_ENVIRONMENT': 'production',
+        'NOTRON_SERVICE_FINANCIAL_RETENTION_DAYS': '30',  # Synthetic policy only.
         'NOTRON_SERVICE_DATABASE_URL': 'postgresql://app:secret@db.internal/notron?sslmode=verify-full',
         'NOTRON_SERVICE_PUBLIC_URL': 'https://service.example.test',
         'NOTRON_SERVICE_OIDC_ISSUER': 'https://identity.example.test',
@@ -132,3 +133,9 @@ def test_unexpected_exception_does_not_escape_to_server_logs(env, caplog):
     assert response.status_code == 503
     assert response.json() == {'code':'service_unavailable'}
     assert 'private note' not in response.text + caplog.text
+
+def test_billing_requires_explicit_financial_retention(env):
+    env['NOTRON_SERVICE_BILLING_PRICES']='{"price_plan":{"kind":"subscription","units":100}}'
+    env['NOTRON_SERVICE_BILLING_RETURN_URLS']='["https://app.example.test/billing"]'
+    env.pop('NOTRON_SERVICE_FINANCIAL_RETENTION_DAYS',None)
+    with pytest.raises(ConfigError,match='FINANCIAL_RETENTION_DAYS'):Settings.from_env(env)

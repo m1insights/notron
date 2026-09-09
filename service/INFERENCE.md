@@ -137,3 +137,11 @@ Task 5 leases/deletion/periodic cache purge; TLS deployment and edge per-IP/acco
 rate limiting; restore/backup retention and key rotation procedure; P06/P07 approval.
 Aggregate provider spend and account concurrency are enforced locally in code;
 edge abuse controls remain a deployment gate, not a claimed implemented feature.
+
+## Lease and deletion integration (Task 5)
+
+[DEVICES.md](DEVICES.md) documents the implemented default-app lease endpoints,
+60-second leases/20-second renewals, delayed transfer admission and protected
+desktop worker lifecycle. Usage checks not-before and released state as well as
+account/device/fence/expiry. [RETENTION.md](RETENTION.md) specifies immediate
+response purge on account deletion and accounting retention without budget reset.

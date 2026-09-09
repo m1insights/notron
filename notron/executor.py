@@ -417,6 +417,16 @@ class Executor:
                 return result(False, 'source permission changed; nothing written')
             if store.get(write.operation_id).status != operations.S.APPLYING:
                 return result(False, 'operation invalidated before mutation; nothing written')
+            from .managed_lease import require_effect
+            try:
+                require_effect(write)
+            except Exception as exc:
+                from .transport import ManagedError
+                if not isinstance(exc,ManagedError):raise
+                store.transition(write.operation_id,operations.S.APPLYING,operations.S.NEEDS_REVIEW,failure_code='policy_changed')
+                from .worker import failure
+                failure(exc)
+                return result(False,exc.code+'; nothing written')
             # Apple exposes no CAS. Remote edits after this read remain a final race.
             attempted = True
             if note:
@@ -648,6 +658,16 @@ class Executor:
             if not self._content_readable(prior.content_source_ids or ()) or store.get(oid).status != operations.S.APPLYING:
                 return WriteResult(False, 'source permission changed; action paused')
             try:
+                from .managed_lease import require_effect
+                try:
+                    require_effect()
+                except Exception as exc:
+                    from .transport import ManagedError
+                    if not isinstance(exc,ManagedError):raise
+                    store.transition(oid,operations.S.APPLYING,operations.S.NEEDS_REVIEW,failure_code='policy_changed')
+                    from .worker import failure
+                    failure(exc)
+                    return WriteResult(False,exc.code+'; action not issued',operation_id=oid)
                 ref, detail = self._perform(action)
                 recovery.boundary('after_external_save', oid)
                 recovery.boundary('before_external_id', oid)

@@ -147,8 +147,13 @@ public struct DeviceIdentity: Codable {
     func verify(access:String,idToken:String) async throws -> String
     func identify(access:String) async throws -> DeviceIdentity
     func revoke(access:String,deviceID:String) async throws
+    func transferLease(access:String) async throws -> Int
     func deleteAccount(access:String) async throws
     func revokeRefresh(_ token:String) async throws
+}
+
+public extension SessionTransport {
+    func transferLease(access:String) async throws -> Int {throw SessionError.unavailable}
 }
 
 @MainActor public final class AccountSession: ObservableObject {
@@ -256,10 +261,23 @@ public struct DeviceIdentity: Codable {
         try await transport.revoke(access:token,deviceID:deviceID)
         if identity?.deviceID==deviceID {await signOut()}
     }
+    public func transferToThisMac() async throws -> Int {
+        let epoch=generation
+        let token=try await accessToken()
+        let wait=try await transport.transferLease(access:token)
+        guard epoch==generation,!locallySignedOut,(0...60).contains(wait) else {throw SessionError.cancelled}
+        return wait
+    }
     public func requestDeletion() async throws {
         let token=try await accessToken()
-        try await transport.deleteAccount(access:token)
-        await signOut()
+        let refresh=try? vault.get("managed-refresh")
+        try? clear() // Stop local scheduling and credential supply before HTTP.
+        do {try await transport.deleteAccount(access:token)}
+        catch {
+            if let refresh,let value=String(data:refresh,encoding:.utf8) {try? await transport.revokeRefresh(value)}
+            throw error
+        }
+        if let refresh,let value=String(data:refresh,encoding:.utf8) {try? await transport.revokeRefresh(value)}
     }
 }
 
@@ -352,8 +370,16 @@ private final class RefuseRedirects:NSObject,URLSessionTaskDelegate {
         guard UUID(uuidString:deviceID) != nil else {throw SessionError.invalidIdentity}
         _=try await request(config.service.appendingPathComponent("v1/devices/\(deviceID)/revoke"),method:"POST",access:access)
     }
+    public func transferLease(access:String) async throws -> Int {
+        let data=try await request(config.service.appendingPathComponent("v1/worker/lease/transfer"),method:"POST",
+                                   body:Data("{}".utf8),contentType:"application/json",access:access)
+        struct Grant:Decodable {let wait_seconds:Int}
+        let wait=try JSONDecoder().decode(Grant.self,from:data).wait_seconds
+        guard (0...60).contains(wait) else {throw SessionError.invalidIdentity}
+        return wait
+    }
     public func deleteAccount(access:String) async throws {
-        _=try await request(config.service.appendingPathComponent("v1/me/deletion"),method:"POST",access:access)
+        _=try await request(config.service.appendingPathComponent("v1/account"),method:"DELETE",access:access)
     }
     public func revokeRefresh(_ token:String) async throws {
         _=try await request(endpoint("revocation_endpoint"),method:"POST",body:form(["token":token,"token_type_hint":"refresh_token","client_id":config.clientID]),contentType:"application/x-www-form-urlencoded")

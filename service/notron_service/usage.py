@@ -28,7 +28,7 @@ class Usage:
         self.store._authorize(c,p)
         lease=c.execute('SELECT * FROM worker_leases WHERE account_id=%s',(p.account_id,)).fetchone()
         now=c.execute('SELECT clock_timestamp() AS now').fetchone()['now']
-        if not lease or lease['device_id']!=p.device_id or lease['fence']!=fence or lease['expires_at']<=now:
+        if not lease or lease['device_id']!=p.device_id or lease['fence']!=fence or lease['expires_at']<=now or lease['not_before']>now or lease['released_at'] is not None:
             raise UsageError('permission_required')
 
     def check_admission(self,p,fence):

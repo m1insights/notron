@@ -73,6 +73,7 @@ class Settings:
     nebius_key: str = field(default='',repr=False)
     tavily_key: str = field(default='',repr=False)
     billing_prices: str = field(default='', repr=False)
+    financial_retention_days: int | None = None
     billing_return_urls: str = ''
     oidc_client_id: str = ''
     stripe_mode: str = 'test'
@@ -116,7 +117,10 @@ class Settings:
         if self.stripe_mode != 'test' or not self.stripe_secret_key.startswith('sk_test_') or not self.stripe_webhook_secret.startswith('whsec_'):
             _invalid('STRIPE_CONFIGURATION')
         self.inference_rates
-        self.billing_policy  # Validate optional billing configuration atomically.
+        if self.financial_retention_days is not None and (type(self.financial_retention_days) is not int or self.financial_retention_days<=0):
+            _invalid('FINANCIAL_RETENTION_DAYS')
+        if self.billing_policy and self.financial_retention_days is None:
+            _invalid('FINANCIAL_RETENTION_DAYS')
         self._validate_database(local)
 
     @property
@@ -189,7 +193,12 @@ class Settings:
             conversion=int(env.get('NOTRON_SERVICE_UNITS_PER_MICRO_USD','0'))
         except ValueError:
             _invalid('UNITS_PER_MICRO_USD')
+        try:
+            retention=int(env['NOTRON_SERVICE_FINANCIAL_RETENTION_DAYS']) if 'NOTRON_SERVICE_FINANCIAL_RETENTION_DAYS' in env else None
+        except ValueError:
+            _invalid('FINANCIAL_RETENTION_DAYS')
         return cls(
+            financial_retention_days=retention,
             provider_rates=env.get('NOTRON_SERVICE_PROVIDER_RATES',''),units_per_micro_usd=conversion,
             nebius_key=env.get('NOTRON_SERVICE_NEBIUS_KEY',''),tavily_key=env.get('NOTRON_SERVICE_TAVILY_KEY',''),
             environment=get('ENVIRONMENT', 'production'), database_url=get('DATABASE_URL'),
