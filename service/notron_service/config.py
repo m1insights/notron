@@ -68,6 +68,7 @@ class Settings:
     signing_key: bytes = field(repr=False)
     stripe_secret_key: str = field(repr=False)
     stripe_webhook_secret: str = field(repr=False)
+    oidc_client_id: str = ''
     stripe_mode: str = 'test'
     nebius_url: str = NEBIUS_URL
     tavily_url: str = TAVILY_URL
@@ -84,6 +85,8 @@ class Settings:
         callback = _url(self.callback_url, 'CALLBACK_URL', local=local)
         if (callback.scheme, callback.netloc) != (public.scheme, public.netloc):
             _invalid('CALLBACK_URL')
+        if self.oidc_client_id and (self.oidc_client_id == self.oidc_audience or any(ord(c)<33 for c in self.oidc_client_id)):
+            _invalid('OIDC_CLIENT_ID')
         if not self.oidc_audience.strip() or not self.region.strip():
             _invalid('IDENTITY_OR_REGION')
         if any(ord(c) < 33 for c in self.oidc_audience):
@@ -149,6 +152,7 @@ class Settings:
         return cls(
             environment=get('ENVIRONMENT', 'production'), database_url=get('DATABASE_URL'),
             public_url=get('PUBLIC_URL'), oidc_issuer=get('OIDC_ISSUER'), oidc_audience=get('OIDC_AUDIENCE'),
+            oidc_client_id=env.get('NOTRON_SERVICE_OIDC_CLIENT_ID',''),
             callback_url=get('CALLBACK_URL'), region=get('REGION'), monthly_spend_ceiling=ceiling,
             encryption_key=_key(get('ENCRYPTION_KEY'), 'ENCRYPTION_KEY'),
             signing_key=_key(get('SIGNING_KEY'), 'SIGNING_KEY'),

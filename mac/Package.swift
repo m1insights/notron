@@ -1,5 +1,8 @@
 // swift-tools-version: 5.10
 import PackageDescription
+import Foundation
+
+let appFiles = try! FileManager.default.contentsOfDirectory(atPath: "Sources/Notron").filter { $0 != "AccountSession.swift" }
 
 let package = Package(
     name: "Notron",
@@ -7,7 +10,11 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Notron",
-            path: "Sources/Notron"
-        )
+            dependencies: ["NotronCore"],
+            path: "Sources/Notron",
+            exclude: ["AccountSession.swift"]
+        ),
+        .target(name: "NotronCore", path: "Sources/Notron", exclude: appFiles, sources: ["AccountSession.swift"]),
+        .testTarget(name: "NotronCoreTests", dependencies: ["NotronCore"])
     ]
 )

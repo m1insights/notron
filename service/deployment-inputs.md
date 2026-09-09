@@ -79,3 +79,68 @@ References checked during implementation: [FastAPI deployment concepts](https://
 [Psycopg transaction management](https://www.psycopg.org/psycopg3/docs/basic/transactions.html).
 
 Proxy buffering reference: [nginx proxy buffering](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_request_buffering).
+
+## Task 2 identity profile and release gate
+
+Set `NOTRON_SERVICE_OIDC_CLIENT_ID` to the native public client's configured ID,
+different from `OIDC_AUDIENCE`. Omitting it keeps managed account APIs closed (503).
+No passwords are stored or accepted by this service. Email login is hosted by the
+selected managed issuer. Apple is **not enabled** until its separate managed
+connection and team configuration have been validated.
+
+The selected issuer must issue RS256 RFC 9068 `typ: at+jwt` access tokens with
+exact API audience, `iss`, `sub`, `iat`, `nbf`, `exp`, `sid`, verified `email`, and
+`email_verified: true`; lifetime <=900 seconds, 30-second validation skew. Scope
+`account:read` is required for managed identity. The signed `sid` must be stable
+across refresh and distinct for a new browser login. Tokens with a generic JWT
+header (including ID tokens) cannot call account/paid routes. The native client
+ID-token audience is distinct, and ID-token nonce and subject are verified by the
+service before the native client accepts login. The deployment is deliberately
+fail-closed for issuers lacking this exact profile; configure validated claims
+at the issuer, do not weaken verification to accommodate a mocked test.
+
+Discovery uses only configured issuer HTTPS URLs. Issuer, JWKS, authorization,
+token and revocation endpoints must share the reviewed issuer origin; redirects
+are refused. Native refresh tokens must rotate. Provider token/revocation bodies
+are POSTed, never put in URL queries or logs. Refresh material stays in the native
+Keychain (`managed-refresh`), and the P01 Python credential bridge explicitly
+refuses that name.
+
+The signed app bundle must supply `NotronOIDCIssuer`, `NotronOIDCClientID`,
+`NotronOIDCAudience`, `NotronServiceURL`, and set
+`NotronManagedIdentityValidated=true` **only after** live staging evidence.
+The checked-in value is false. Register native callback
+`com.m1labs.notron:/callback`; use a public native client without a client secret.
+Never enable this gate with arbitrary client-entered issuer URLs.
+
+Staging gates: genuine email verification, cancel and retry in the system
+browser, callback delivery to signed app, JWKS rotation, short access expiry,
+refresh rotation/stable sid, offline sign-out and remote revocation recovery,
+Keychain accessibility and signed-helper boundaries, and separate Apple
+connection approval. No live provisioning/provider calls were performed locally.
+
+### Contracts for subsequent tasks
+
+- `Depends(require_principal)` authenticates JWT plus current account/device
+  state on every request. A `Principal` is server-generated; do not reconstruct
+  it from body IDs. Before billable provider work, recheck store authorization in
+  the same transaction as usage reservation/worker validation. Never cache a
+  positive revocation decision across requests.
+- GET `/v1/me` returns account_id, device_id, status; GET `/v1/devices` lists only
+  this account's devices. POST `/v1/devices/{uuid}/revoke` returns 204 and refuses
+  devices outside the account. Revocation tombstones survive refresh.
+- POST `/v1/me/deletion` returns 202 `deletion_requested`, marks account deleting
+  and revokes every device immediately. This is the durable **entry point**, not
+  completed erasure: later deletion workflow must reconcile billing, providers,
+  retention and permitted account metadata. No local Notes are deleted.
+- Native `AccountSession.accessToken(forceRefresh:)` supplies a short-lived access
+  token. Never export refresh tokens to Python. Task 4 may refresh once after 401;
+  paid operations retain their request ID and must not blindly retry.
+- Native stop notification `com.m1labs.notron.managedSessionStopped` is posted
+  synchronously on sign-out/auth failure; Task 4 cancels pending managed work.
+  P06 signed startup remains separately disabled. Access is cleared even if
+  Keychain deletion fails, and the UI offers a retry instead of claiming cleanup.
+- Schema version 3 is additive. Migration validates version-2 checksum/fingerprint
+  before upgrade, then records the new entire schema fingerprint. Each newer
+  migration must extend `_migrations()` and its table set; rollback is the paired
+  non-destructive `003_identity_sessions.rollback.sql`, not the old v2 script.

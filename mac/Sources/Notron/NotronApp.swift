@@ -77,6 +77,7 @@ struct NotronApp: App {
             Text("Say \u{201C}Hey Siri, ask Notron\u{2026}\u{201D} anytime.")
             Divider()
             OpenWindowButton(title: LibraryModel.exists ? "Your notes\u{2026}" : "Set up your notes\u{2026}", id: "library")
+            OpenWindowButton(title: "Your account…", id: "account")
             OpenWindowButton(title: "Pin her notes\u{2026}", id: "pins")
             Divider()
             Button("Quit Notron") { NSApplication.shared.terminate(nil) }
@@ -84,6 +85,9 @@ struct NotronApp: App {
             MenuBarLabel(emoji: mood.emoji)
         }
         .menuBarExtraStyle(.menu)
+
+        Window("Your account", id: "account") { AccountView() }
+        .windowResizability(.contentSize)
 
         Window("Your notes", id: "library") {
             YourNotesView()

@@ -6,7 +6,7 @@ import LocalAuthentication
 /// Secrets are never command arguments, standard output, or diagnostic messages.
 struct KeychainStore {
     static let service = "com.m1labs.notron"
-    static let names: Set<String> = ["storage-key", "nebius-api-key", "tavily-api-key", "development-nebius-api-key"]
+    static let names: Set<String> = ["managed-refresh", "storage-key", "nebius-api-key", "tavily-api-key", "development-nebius-api-key"]
     enum Failure: Error { case unavailable, invalidRequest }
 
     private func query(_ name: String) throws -> [String: Any] {
@@ -62,6 +62,8 @@ struct KeychainStore {
                   let name = request["name"], let operation = request["operation"] else {
                 throw Failure.invalidRequest
             }
+            // Refresh material is native-only; never expose it through the Python bridge.
+            guard name != "managed-refresh" else { throw Failure.invalidRequest }
             let store = KeychainStore()
             switch operation {
             case "get":

@@ -118,7 +118,7 @@ def test_rollback_preserves_data_and_forward_restores(db):
     store = store_for(db)
     store.migrate()
     a,b = seed(db)
-    rollback = Path(__file__).parents[1] / 'migrations' / '002_accounts.rollback.sql'
+    rollback = Path(__file__).parents[1] / 'migrations' / '003_identity_sessions.rollback.sql'
     with psycopg.connect(db) as conn:
         conn.execute(rollback.read_text())
         assert conn.execute('SELECT count(*) FROM accounts').fetchone()[0] == 2
@@ -175,7 +175,7 @@ def test_constraints_are_part_of_readiness(db):
     store = store_for(db)
     store.migrate()
     with psycopg.connect(db) as conn:
-        conn.execute('ALTER TABLE identities DROP CONSTRAINT identities_pkey')
+        conn.execute('ALTER TABLE identities DROP CONSTRAINT identities_pkey CASCADE')
     assert not store.readiness()
 
 
@@ -194,7 +194,7 @@ def test_backup_restore_after_rollback_keeps_identity_and_data(db, tmp_path):
     subprocess.run([str(Path(pg_bin)/'pg_dump'), '--dbname', db, '--schema', schema,
                     '--format=custom', '--no-owner', '--no-privileges', '--file', str(backup)],
                    check=True, capture_output=True)
-    rollback = Path(__file__).parents[1] / 'migrations' / '002_accounts.rollback.sql'
+    rollback = Path(__file__).parents[1] / 'migrations' / '003_identity_sessions.rollback.sql'
     with psycopg.connect(db) as conn:
         conn.execute(rollback.read_text())
     assert not store.readiness()
