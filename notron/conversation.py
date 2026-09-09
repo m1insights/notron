@@ -166,7 +166,8 @@ def unanswered(
     require_tag: bool = False,
 ) -> list[Question]:
     """Find unanswered source-positioned user runs, including mid-note inserts."""
-    pieces = list(_pieces(body_html, ignore))
+    title = next((text.strip() for text in notedoc.texts(body_html) if text.strip()), '')
+    pieces = list(_pieces(body_html, ignore, exact_ignore=(title,) if title else ()))
     return [Question(piece.text, piece.after, piece.before)
             for index, piece in enumerate(pieces)
             if piece.role == 'user'

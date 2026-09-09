@@ -151,3 +151,11 @@ def test_missing_latest_answer_does_not_resurrect_older_antecedent():
     for missing in (c.turn(''), '\n———\n', '\n\n\n\n'):
         html = body('First?\n' + c.turn('Old answer') + '\nLatest?\n' + missing + '\nMake that simpler')
         assert c.history_before(html, last(html)) == []
+
+
+def test_title_prefix_in_current_tagged_thought_survives_question_capture():
+    html = markup.render('Budget', 'Budget assumptions: ten dollars\n@notron explain?')
+    question = c.unanswered(html, ignore=('Budget',), require_tag=True)[0]
+    assert question.text == 'Budget assumptions: ten dollars\n@notron explain?'
+    assert c.local_context_before(html, question, ignore=('Budget',)) == (
+        'Budget assumptions: ten dollars\n@notron explain?')
