@@ -131,3 +131,12 @@ def test_assistant_claim_without_verified_id_cannot_complete():
     state=State(request='complete that reminder', intent='remind', conversation=conversation.ConversationContext('thread',[conversation.Turn('assistant','Reminder set: Milk')],[]))
     scheduler(state, brain=None)
     assert not state.actions and 'Which reminder' in state.answer
+
+def test_expired_sensitive_proposals_are_erased_but_cannot_authorize(store):
+    c=add(store, expires_at=datetime.now(timezone.utc)-timedelta(seconds=1))
+    store.prune()
+    pending=store.latest('a')
+    assert pending.proposal == {} and pending.candidate_ids == []
+    assert store.resolve(c.id,reply='Work',thread_id='a',live_revision='rev').status=='expired'
+    for path in store.operations.payload_store.root.glob('operation-*.enc'):
+        assert b'Buy milk' not in store.operations.payload_store.read(path.stem)

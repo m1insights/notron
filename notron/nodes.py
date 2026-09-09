@@ -566,7 +566,7 @@ def doer(state: State, *, brain=None, dry_run: bool = False) -> State:
         if r.needs_confirmation and r.clarification_candidates:
             from dataclasses import asdict
             from . import clarifications
-            clarifications.remember(state, asdict(a), r.reason, candidates=r.clarification_candidates, slot=r.clarification_slot)
+            clarifications.remember(state, asdict(a), r.reason, candidates=r.clarification_candidates, slot=r.clarification_slot, candidate_snapshots=r.clarification_snapshots)
         done.append(_confirmation(a, r))
     state.answer = "\n\n".join(done)
     state.note("doer", f"{len(state.actions)} actions")

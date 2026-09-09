@@ -21,6 +21,7 @@ class PendingClarification:
     proposal: dict = field(default_factory=dict)
     candidates: dict[str, str] = field(default_factory=dict)
     slot: str = 'target'
+    candidate_snapshots: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -44,8 +45,12 @@ def resolve_reply(pending: PendingClarification, reply: str, live_revision: str)
     proposal = dict(pending.proposal)
     if pending.slot == 'target' and len(candidates) == 1:
         proposal['target_id'] = candidates[0]
+        if candidates[0] in pending.candidate_snapshots:
+            proposal['_target_snapshot'] = pending.candidate_snapshots[candidates[0]]
         if proposal.get('op') == 'create' and candidates[0] in pending.candidates:
             proposal['where'] = pending.candidates[candidates[0]]
+    elif pending.slot == 'conflict' and len(candidates) == 1:
+        proposal['_confirmation_code'] = candidates[0]
     elif pending.slot == 'date':
         from . import when
         # Explicit calendar dates alone; relative replies would drift after delay.
@@ -68,12 +73,34 @@ class ClarificationStore:
         with operations.transaction() as db:
             db.execute('CREATE TABLE IF NOT EXISTS clarification_replies (reply_hash TEXT PRIMARY KEY, payload_ref TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS clarifications (id TEXT PRIMARY KEY, payload_ref TEXT NOT NULL, consumed INTEGER NOT NULL DEFAULT 0)')
+        self.prune()
+
+    def prune(self):
+        """Erase stale proposal content; keep only bounded expiry tombstones."""
+        with self.operations.transaction() as db:
+            db.execute('DELETE FROM clarifications WHERE consumed=1')
+            for row in db.execute('SELECT * FROM clarifications').fetchall():
+                c = self._read(row)
+                if c.expires_at <= datetime.now(timezone.utc) and (c.proposal or c.candidate_ids):
+                    value = asdict(c)
+                    value.update(proposal={}, candidates={}, candidate_ids=[], candidate_snapshots={},
+                                 question='That proposal has expired. Please restate the action.',
+                                 expires_at=c.expires_at.isoformat())
+                    ref = self.operations.put_payload(json.dumps(value).encode())
+                    db.execute('UPDATE clarifications SET payload_ref=? WHERE id=?', (ref, c.id))
+            for row in db.execute('SELECT * FROM clarification_replies').fetchall():
+                value = json.loads(self.operations.payload_store.read(row['payload_ref']))
+                if not value.get('expires_at') or datetime.fromisoformat(value['expires_at']) <= datetime.now(timezone.utc):
+                    db.execute('DELETE FROM clarification_replies WHERE reply_hash=?', (row['reply_hash'],))
+            for table in ('clarifications', 'clarification_replies'):
+                db.execute(f'DELETE FROM {table} WHERE rowid NOT IN (SELECT rowid FROM {table} ORDER BY rowid DESC LIMIT 200)')
+        self.operations.prune_payloads()
 
     def add(self, *, request_id, thread_id, question='', candidate_ids=(), source_revision='',
-            proposal=None, candidates=None, slot='target', expires_at=None):
+            proposal=None, candidates=None, slot='target', expires_at=None, candidate_snapshots=None):
         c = PendingClarification(uuid4().hex, request_id, thread_id, question, list(candidate_ids),
                                  expires_at or datetime.now(timezone.utc)+timedelta(hours=24),
-                                 source_revision, proposal or {}, candidates or {}, slot)
+                                 source_revision, proposal or {}, candidates or {}, slot, candidate_snapshots or {})
         value = asdict(c)
         value['expires_at'] = c.expires_at.isoformat()
         with self.operations.transaction() as db:
@@ -83,6 +110,7 @@ class ClarificationStore:
                     db.execute('UPDATE clarifications SET consumed=1 WHERE id=?', (row['id'],))
             ref = self.operations.put_payload(json.dumps(value, sort_keys=True).encode())
             db.execute('INSERT INTO clarifications(id,payload_ref) VALUES(?,?)', (c.id, ref))
+        self.prune()
         return c
 
     def _read(self, row):
@@ -131,16 +159,27 @@ def current():
     return ClarificationStore(operations.current())
 
 
-def remember(state, proposal, question, *, candidates=None, slot='target'):
+def remember(state, proposal, question, *, candidates=None, slot='target', candidate_snapshots=None):
     """Persist the exact action, never an action inferred from an old answer."""
     from . import requests
     if not state.envelope or not state.conversation:
         return
+    origin = requests.current().get(state.action_request_id) if state.action_request_id else None
+    original_text = origin.envelope.text if origin and origin.envelope else state.request
+    original_envelope = origin.envelope if origin and origin.envelope else state.envelope
+    proposal = dict(proposal)
+    if original_envelope.note_id and original_envelope.reply_to:
+        from . import notes, notedoc
+        body = notes.read_body(original_envelope.note_id)
+        if requests.revision(body) != state.source_revision:
+            return
+        count = original_envelope.reply_to[2] + 1
+        proposal['_source_prefix'] = {'count': count, 'hash': requests.revision('\n'.join(notedoc.texts(body)[:count]))}
     current().add(request_id=state.action_request_id or state.request_id,
                   thread_id=state.conversation.thread_id, question=question,
                   candidate_ids=list(candidates or {}), candidates=candidates,
-                  proposal=proposal, slot=slot,
-                  source_revision=requests.revision(state.action_request or state.request))
+                  proposal=proposal, slot=slot, candidate_snapshots=candidate_snapshots,
+                  source_revision=requests.revision(original_text))
 
 
 def resume(state):
@@ -159,17 +198,26 @@ def resume(state):
         import re
         text_reply = state.request.strip().rstrip('.').casefold()
         choices = {str(v).casefold() for v in (*pending.candidate_ids, *pending.candidates.values())}
-        if text_reply not in choices | {'yes', 'no', 'confirm', 'yes please'} and not re.fullmatch(r'\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?', text_reply):
+        expired_reply = pending.expires_at <= datetime.now(timezone.utc) and len(text_reply.split()) <= 4 and '?' not in text_reply
+        if not expired_reply and text_reply not in choices | {'yes', 'no', 'confirm', 'yes please'} and not re.fullmatch(r'\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?', text_reply):
+            with store.operations.transaction() as db:
+                db.execute('UPDATE clarifications SET consumed=1 WHERE id=?', (pending.id,))
+            store.prune()
             return False
     origin_id = result.request_id if result else pending.request_id
     origin = requests.current().get(origin_id)
     text = origin.envelope.text if origin and origin.envelope else ''
+    source_text = (origin.envelope.source_text or text) if origin and origin.envelope else ''
     # The original source must remain before this reply in the same bounded
     # thread. Missing/deleted/edited context cannot authorize the saved action.
     from .conversation import TAG
     normalize = lambda value: TAG.sub('', value).strip()
-    visible = any(t.role == 'user' and normalize(t.text) == normalize(text)
-                  for t in state.conversation.turns) if text else False
+    visible = sum(t.role == 'user' and normalize(t.text) == normalize(source_text)
+                  for t in state.conversation.turns) == 1 if text else False
+    bound_proposal = result.proposal if result else pending.proposal
+    if bound_proposal.get('_source_prefix') and origin and origin.envelope.note_id:
+        from . import notes
+        visible = visible and prefix_matches(bound_proposal, notes.read_body(origin.envelope.note_id))
     if not visible:
         state.response_mode = 'clarify'
         state.answer = 'The original action has changed or is no longer in this conversation. Please restate it.'
@@ -187,7 +235,19 @@ def resume(state):
     state.clarification_id = result.clarification_id
     state.action_request_id = result.request_id
     state.action_request = text
-    state.actions = [Action(**result.proposal)]
+    proposal = dict(result.proposal)
+    proposal.pop('_source_prefix', None)
+    proposal.pop('_target_snapshot', None)
+    confirmation = proposal.pop('_confirmation_code', '')
+    if confirmation:
+        state.action_request += '\nconfirm conflict ' + confirmation
+    state.actions = [Action(**proposal)]
     state.actions[0].origin_request_id = result.request_id
     state.intent = 'schedule' if state.actions[0].kind == 'event' else 'remind'
     return True
+
+
+def prefix_matches(proposal, body):
+    from . import notedoc, requests
+    prefix = proposal.get('_source_prefix')
+    return not prefix or requests.revision('\n'.join(notedoc.texts(body)[:prefix['count']])) == prefix['hash']
