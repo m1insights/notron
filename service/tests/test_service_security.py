@@ -137,7 +137,7 @@ def test_cli_migration_status_and_fixed_failure_output(db,env,monkeypatch,capsys
     monkeypatch.setattr(PostgresStore,'_connect',lambda self:original(s))
     assert main(['migrate'])==0
     assert json.loads(capsys.readouterr().out)=={'migrated':True}
-    assert main(['periodic'])==0
+    assert main(['periodic','--limit','1000'])==0
     assert json.loads(capsys.readouterr().out)['cache']==0
     assert main(['status'])==0
     capsys.readouterr()
@@ -267,3 +267,35 @@ def test_deployment_runtime_role_cannot_rotate_keys_or_alter_schema(db):
             for role in (runtime,operator):
                 c.execute(sql.SQL('DROP OWNED BY {}').format(sql.Identifier(role)))
                 c.execute(sql.SQL('DROP ROLE {}').format(sql.Identifier(role)))
+
+
+@pytest.mark.parametrize('limit',[1001,-1,0,True,1.5])
+def test_periodic_rejects_invalid_batch_before_billing_or_database(limit):
+    from notron_service.operations import Operations
+    class Billing:
+        called=False
+        def repair(self,limit):
+            self.called=True
+            return {'failed':0}
+    billing=Billing()
+    with pytest.raises(ValueError,match='invalid_limit'):
+        Operations(None).periodic(billing,30,limit)
+    assert billing.called is False
+
+
+@pytest.mark.parametrize('limit',['1001','-1'])
+def test_periodic_cli_rejects_invalid_batch_before_configuration(limit,monkeypatch):
+    from notron_service.config import Settings
+    from notron_service.operations import main
+    def unexpected_configuration(cls):
+        pytest.fail('invalid batch reached service configuration')
+    monkeypatch.setattr(Settings,'from_env',classmethod(unexpected_configuration))
+    with pytest.raises(SystemExit) as result:main(['periodic','--limit',limit])
+    assert result.value.code==2
+
+
+def test_periodic_largest_supported_batch_completes_billing_and_cleanup(billing):
+    from notron_service.operations import Operations
+    service,_,_,_=billing
+    result=Operations(service.store).periodic(service,30,1000)
+    assert result['failed']==0 and result['cache']==0 and result['abuse_windows']==0

@@ -107,7 +107,9 @@ python -m notron_service.operations status
 
 `periodic` processes durable Stripe inbox, stale billing snapshots and deletion
 cancellation outbox; it purges expired encrypted retry content, 30-day audit
-metadata, expired 60-second abuse windows and retention-eligible account financial records. Batches are bounded.
+metadata, expired 60-second abuse windows and retention-eligible account financial
+records. Batch limits must be integers from 1 through 1000 and are validated before
+any billing or cleanup work.
 Missing billing configuration does not invent a gateway or claim remote completion.
 Multiple jobs remain idempotent; scheduler timeout must accommodate provider
 pagination and measured backlog. Alert on missed scheduler execution for 2 minutes,

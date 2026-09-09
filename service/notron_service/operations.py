@@ -4,6 +4,9 @@ from .billing import Billing
 from .deletion import Deletion
 
 
+MAX_PERIODIC_BATCH = 1000  # Shared bound of billing deletion repair and retention purge.
+
+
 class RateLimited(RuntimeError):
     pass
 
@@ -75,6 +78,8 @@ class Operations:
             }
 
     def periodic(self, billing, retention_days, limit):
+        if type(limit) is not int or not 1<=limit<=MAX_PERIODIC_BATCH:
+            raise ValueError('invalid_limit')
         result={'failed':0}
         if billing:result.update(billing.repair(limit))
         result.update(Deletion(self.store,retention_days).purge_expired(limit))
@@ -97,7 +102,7 @@ def main(argv=None):
     parser.add_argument('--actual-micro-usd',type=int)
     parser.add_argument('--evidence-file',help='Private file containing provider-confirmed evidence reference; only its digest is stored')
     args=parser.parse_args(argv)
-    if not 1<=args.limit<=10000:parser.error('invalid limit')
+    if not 1<=args.limit<=MAX_PERIODIC_BATCH:parser.error('limit must be between 1 and 1000')
     try:
         settings=Settings.from_env();store=PostgresStore(settings.database_url);ops=Operations(store)
         if args.command=='migrate':store.migrate();result={'migrated':True}
