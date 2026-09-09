@@ -50,6 +50,9 @@ below. Desktop: 1,343 passed in 27.66s; service: 238 passed in 14.09s, zero skip
 Swift: 17 passed and build completed. One upstream Starlette/AnyIO deprecation
 warning remains; it did not fail the service suite.
 
+Merged-main verification also passed: desktop 1,343 in 31.91s; service 238 in
+18.33s; Swift 17 and app build. The disposable PostgreSQL processes were stopped.
+
 ## Commands and reproducibility
 
 See [operations](../../../service/OPERATIONS.md),

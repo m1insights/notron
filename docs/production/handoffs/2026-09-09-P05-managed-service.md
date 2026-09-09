@@ -4,7 +4,8 @@
 
 The owner asked to complete coding while away from their desk. P04 real-iPhone
 validation remains deferred. P05 Tasks 2–6 are locally implemented and independently reviewed. The final
-whole-branch review passed with no material findings; local integration is authorized. No remote deployment,
+whole-branch review passed with no material findings. Changes are merged locally
+to `main`; nothing was pushed or deployed. No remote deployment,
 provider payment/inference call, real Notes access, push or signed startup occurred.
 
 Stack: Python, FastAPI/Pydantic, PostgreSQL, Stripe SDK, PyJWT and Swift/SwiftUI.
@@ -64,6 +65,10 @@ iCloud race is still nontransactional; lease transfer cannot recall an issued wr
   an account cannot erase current-month spend. No automatic overage or refund.
 
 ## Integration
+
+Local fast-forward merge verified on `main`: 1,343 desktop, 238 service and
+17 Swift tests passed; Swift build passed. The temporary P05 worktree is removed
+after verification; the separate P01 worktree and unrelated user files are preserved.
 
 Base: `11216be` (P05 Task 1). Task 2: `ee87a51`, `b6ba022`, `1f41b9f`.
 Task 3: `32d1780`, `c8672d2`. Task 4: `30fca91`, `3175d20`.
