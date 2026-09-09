@@ -7,7 +7,7 @@ running on your own machine.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, replace, field
 from contextlib import contextmanager
 import fcntl
 import json
@@ -79,6 +79,7 @@ def capture_write(title: str, *, folder: str = workspace.FOLDER, note_id: str | 
 
 @dataclass(frozen=True)
 class WriteResult:
+    clarification_candidates: dict[str, str] = field(default_factory=dict, kw_only=True)
     ok: bool
     reason: str
     note_id: str | None = None
@@ -462,13 +463,13 @@ class Executor:
             proposal = action
             oid = action.operation_id
             prior = store.get(oid)
-            def clarify(reason):
+            def clarify(reason, candidates=None):
                 # A known refusal precedes every external effect. Cancel a saved
                 # PREPARED intent before delivering its question as a Notes reply.
                 if prior and prior.status == operations.S.PREPARED:
                     store.transition(oid, operations.S.PREPARED, operations.S.CANCELLED,
                                      failure_code='clarification_required')
-                return WriteResult(False, reason, operation_id=oid, needs_confirmation=True)
+                return WriteResult(False, reason, operation_id=oid, needs_confirmation=True, clarification_candidates=candidates or {})
 
             from . import when
             envelope = requests.active_request()
@@ -521,6 +522,34 @@ class Executor:
                 if not action.target_id:
                     store.transition(oid, operations.S.PREPARED, operations.S.NEEDS_REVIEW, failure_code='unbound_target')
                     return WriteResult(False, 'Legacy action target is unbound; review required.', operation_id=oid)
+            if action.origin_request_id:
+                from . import clarifications
+                resolution = clarifications.current().for_reply(envelope.request_id) if envelope else None
+                if not resolution or resolution.status != 'resolved' or resolution.request_id != action.origin_request_id:
+                    return clarify('That proposal has expired or changed. Please restate the action.')
+                origin = requests.current().get(action.origin_request_id)
+                if not envelope or not origin or not origin.envelope:
+                    return clarify('The original action is unavailable. Please restate it.')
+                if origin.envelope.note_id != envelope.note_id or origin.envelope.thread_id != envelope.thread_id:
+                    return clarify('That action belongs to another conversation. Please restate it.')
+                if origin.envelope.note_id:
+                    from . import conversation
+                    body = notes.read_body(origin.envelope.note_id)
+                    questions = conversation.unanswered(body, ignore=(workspace.ASK,))
+                    normalize = lambda value: conversation.TAG.sub('', value).strip()
+                    matching = [q for q in questions if normalize(q.text) == normalize(envelope.text)]
+                    if len(matching) != 1 or not any(t.role == 'user' and normalize(t.text) == normalize(origin.envelope.text)
+                        for t in conversation.history_before(body, matching[0])):
+                        return clarify('The original action has changed. Please restate it.')
+            if action.target_id:
+                if action.op == 'complete':
+                    hits = [h for h in reminders.find_open(action.title, list_name=action.where)
+                            if h.id == action.target_id and not h.recurring]
+                else:
+                    adapter = calendar if action.kind == 'event' else reminders
+                    hits = adapter.resolve_targets(action.where, target_id=action.target_id)
+                if len(hits) != 1:
+                    return clarify('That reminder or list has changed. Please restate the action.')
             if when.unsupported_request(request):
                 return clarify('Send one non-recurring action per request.')
             if envelope and action.op == 'create':
@@ -557,7 +586,7 @@ class Executor:
                     if len(hits) != 1:
                         options = '; '.join(f'{h.title} [{h.list_name}] reminder-id {h.id}' for h in hits[:10])
                         detail = "couldn't find an open reminder with that title" if not hits else 'Multiple reminders match. Restate the task with a reminder-id line: ' + options
-                        return clarify(detail)
+                        return clarify(detail, {h.id: h.title + " [" + h.list_name + "]" for h in hits[:10]})
                     if hits[0].recurring:
                         return clarify('I do not complete recurring reminders automatically. Please complete this one in Reminders.')
                     action = replace(action, target_id=hits[0].id)
@@ -571,7 +600,7 @@ class Executor:
                     hits = adapter.resolve_targets(action.where, **({'target_id': ids[0]} if ids else {}))
                     if len(hits) != 1:
                         options = '; '.join(f"{h['title']} ({label} {h['id']})" for h in hits[:10])
-                        return clarify('Which existing calendar or reminder list? The name is missing or ambiguous. Restate the task with one target-ID line. ' + options)
+                        return clarify('Which existing calendar or reminder list? ' + options, {h['id']: h['title'] for h in hits[:10]})
                     action = replace(action, target_id=hits[0]['id'])
                 if action.kind == 'event':
                     if not action.ends or not when.has_time(action.when) or not when.has_time(action.ends) or (request and not when.duration_explicit(request)):

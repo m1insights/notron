@@ -306,6 +306,9 @@ class OperationStore:
         with self.transaction() as db:
             refs = {row[0] for row in db.execute(
                 'SELECT payload_ref FROM requests UNION SELECT payload_ref FROM operations UNION SELECT payload_ref FROM observations')}
+            if db.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='clarifications'").fetchone():
+                refs.update(row[0] for row in db.execute('SELECT payload_ref FROM clarifications'))
+                refs.update(row[0] for row in db.execute('SELECT payload_ref FROM clarification_replies'))
             for path in self.payload_store.root.glob('operation-*.enc'):
                 if path.stem not in refs:
                     durable_unlink(path)
@@ -313,6 +316,19 @@ class OperationStore:
     def get(self, operation_id: str) -> Operation | None:
         with self.connection() as db:
             return self._record(db.execute('SELECT * FROM operations WHERE operation_id=?', (operation_id,)).fetchone())
+
+    def action_references(self, request_ids: list[str]) -> list[Operation]:
+        """Only verified external IDs are references; display text proves nothing."""
+        if not request_ids:
+            return []
+        with self.connection() as db:
+            placeholders = ','.join('?' for _ in request_ids)
+            records = [self._record(row) for row in db.execute(
+                f"SELECT * FROM operations WHERE request_id IN ({placeholders}) "
+                "AND status IN ('applied','receipted') AND external_id IS NOT NULL ORDER BY created_at",
+                request_ids)]
+        return [record for record in records if record.payload_ref and
+                isinstance(json.loads(self.payload(record.operation_id)).get('action'), dict)]
 
     def pending(self) -> list[Operation]:
         with self.connection() as db:
