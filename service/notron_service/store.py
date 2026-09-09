@@ -72,7 +72,9 @@ class PostgresStore:
     @staticmethod
     def _migrations():
         return [(2, MIGRATION, _TABLES),
-                (3, MIGRATION.parent / '003_identity_sessions.sql', _TABLES + ('identity_sessions',))]
+                (3, MIGRATION.parent / '003_identity_sessions.sql', _TABLES + ('identity_sessions',)),
+                (4, MIGRATION.parent / '004_billing.sql', _TABLES + ('identity_sessions',
+                    'billing_accounts','billing_subscriptions','billing_orders','billing_grants','billing_allocations'))]
 
     def _check(self, conn, *, allow_inactive=False, allow_prefix=False):
         rows = conn.execute('SELECT version,checksum,fingerprint,active FROM schema_migrations ORDER BY version').fetchall()

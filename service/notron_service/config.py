@@ -68,6 +68,8 @@ class Settings:
     signing_key: bytes = field(repr=False)
     stripe_secret_key: str = field(repr=False)
     stripe_webhook_secret: str = field(repr=False)
+    billing_prices: str = field(default='', repr=False)
+    billing_return_urls: str = ''
     oidc_client_id: str = ''
     stripe_mode: str = 'test'
     nebius_url: str = NEBIUS_URL
@@ -109,7 +111,23 @@ class Settings:
             _invalid('PROVIDER_DESTINATION')
         if self.stripe_mode != 'test' or not self.stripe_secret_key.startswith('sk_test_') or not self.stripe_webhook_secret.startswith('whsec_'):
             _invalid('STRIPE_CONFIGURATION')
+        self.billing_policy  # Validate optional billing configuration atomically.
         self._validate_database(local)
+
+    @property
+    def billing_policy(self):
+        if not self.billing_prices and not self.billing_return_urls:
+            return None
+        try:
+            import json
+            from .billing import BillingPolicy, Price
+            prices=json.loads(self.billing_prices)
+            urls=json.loads(self.billing_return_urls)
+            if not isinstance(prices,dict) or not isinstance(urls,list):
+                raise ValueError()
+            return BillingPolicy({key:Price(**value) for key,value in prices.items()},tuple(urls),self.stripe_webhook_secret)
+        except (ValueError,TypeError,AttributeError):
+            _invalid('BILLING_POLICY')
 
     def _validate_database(self, local):
         try:
@@ -153,6 +171,8 @@ class Settings:
             environment=get('ENVIRONMENT', 'production'), database_url=get('DATABASE_URL'),
             public_url=get('PUBLIC_URL'), oidc_issuer=get('OIDC_ISSUER'), oidc_audience=get('OIDC_AUDIENCE'),
             oidc_client_id=env.get('NOTRON_SERVICE_OIDC_CLIENT_ID',''),
+            billing_prices=env.get('NOTRON_SERVICE_BILLING_PRICES',''),
+            billing_return_urls=env.get('NOTRON_SERVICE_BILLING_RETURN_URLS',''),
             callback_url=get('CALLBACK_URL'), region=get('REGION'), monthly_spend_ceiling=ceiling,
             encryption_key=_key(get('ENCRYPTION_KEY'), 'ENCRYPTION_KEY'),
             signing_key=_key(get('SIGNING_KEY'), 'SIGNING_KEY'),

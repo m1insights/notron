@@ -1,5 +1,5 @@
 """Small service foundation. Paid routes are added only with their auth controls."""
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from typing import Protocol
 
 from fastapi import FastAPI, Depends, Request, HTTPException
@@ -22,6 +22,7 @@ class ReadyStore(Protocol):
 class Services:
     store: ReadyStore
     auth: object | None = None
+    billing: object | None = None
 
 
 class BoundedBody:
@@ -96,6 +97,18 @@ class LoginVerification(BaseModel):
     id_token: str = Field(min_length=1,max_length=16384,repr=False)
 
 
+class BillingCheckout(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    price_id: str = Field(min_length=1,max_length=255)
+    return_url: str = Field(min_length=1,max_length=2048)
+    request_id: UUID
+
+
+class BillingPortal(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    return_url: str = Field(min_length=1,max_length=2048)
+
+
 def create_app(settings: Settings, services: Services) -> FastAPI:
     app = FastAPI(debug=False, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.services = services
@@ -122,11 +135,40 @@ def create_app(settings: Settings, services: Services) -> FastAPI:
     async def access_denied(request, exc):
         return JSONResponse({'code':'access_denied'}, status_code=403)
 
+    from .billing import BillingError
+
+    @app.exception_handler(BillingError)
+    async def billing_error(request, exc):
+        return JSONResponse({'code':str(exc)},status_code=400)
+
+    def billing_service():
+        if services.billing is None:
+            raise HTTPException(503,detail='billing_unavailable')
+        return services.billing
+
+    @app.post('/v1/billing/checkout')
+    def checkout(body: BillingCheckout,principal=Depends(require_principal)):
+        return billing_service().checkout(principal,body.price_id,body.return_url,body.request_id)
+
+    @app.post('/v1/billing/portal')
+    def portal(body: BillingPortal,principal=Depends(require_principal)):
+        return {'url':billing_service().portal(principal,body.return_url)}
+
+    @app.post('/v1/webhooks/stripe',status_code=202)
+    async def stripe_webhook(request: Request):
+        from starlette.concurrency import run_in_threadpool
+        service=billing_service()
+        await run_in_threadpool(service.ingest,await request.body(),request.headers.get('stripe-signature',''))
+        return {'status':'accepted'}
+
     @app.get('/v1/me')
     def me(principal=Depends(require_principal)):
         account=services.store.get_account(principal)
+        from .entitlements import Entitlement
+        entitlement=services.billing.entitlement(principal) if services.billing else Entitlement('paused',None,0,'billing_unavailable')
+        statuses=services.billing.subscription_status(principal) if services.billing else []
         return {'account_id':str(principal.account_id),'device_id':str(principal.device_id),
-                'status':account['status']}
+                'status':account['status'],'entitlement':asdict(entitlement),'subscription_status':statuses}
 
     @app.get('/v1/devices')
     def devices(principal=Depends(require_principal)):
@@ -159,4 +201,7 @@ def create_default_app():
     from .auth import Authenticator
     store = PostgresStore(settings.database_url)
     auth = Authenticator(settings.oidc_issuer,settings.oidc_audience,settings.oidc_client_id,store) if settings.oidc_client_id else None
-    return create_app(settings, Services(store=store,auth=auth))
+    from .billing import Billing, StripeGateway
+    policy=settings.billing_policy
+    billing=Billing(store,StripeGateway(settings.stripe_secret_key),policy) if policy else None
+    return create_app(settings, Services(store=store,auth=auth,billing=billing))
