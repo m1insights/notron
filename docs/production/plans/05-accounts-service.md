@@ -25,9 +25,9 @@ September 9 scope reconciliation: include the now-implemented `Brain.see` vision
 **Consumes:** Common `Principal(account_id, device_id, scopes, kind)`, P01 prepared input schema.
 **Produces:** `Settings.from_env()` rejecting missing/invalid production configuration; `create_app(settings, services)` with injected dependencies for tests; PostgreSQL migrations and readiness endpoint without secret/config dumps.
 
-- [ ] Record deployment inputs by role, not fake values: owner provides approved host/region/spend ceiling, OIDC issuer/audience, callback/domain control and Stripe test account. Validate each at deployment; local tests use a loopback fake issuer and generated test keys. This task does not select/purchase an account on the owner's behalf.
-- [ ] Implement a production configuration check that rejects HTTP issuers/provider URLs, debug mode, missing encryption/signing keys and prototype-auth enablement on commercial routes. Limit request body sizes at proxy and app; disable body logging in validation middleware.
-- [ ] Create account, external-identity, device, entitlement, webhook-event, usage-reservation, worker-lease and audit-metadata tables. Minimum identity constraint:
+- [x] Record deployment inputs by role, not fake values: owner provides approved host/region/spend ceiling, OIDC issuer/audience, callback/domain control and Stripe test account. Validate each at deployment; local tests use a loopback fake issuer and generated test keys. This task does not select/purchase an account on the owner's behalf.
+- [x] Implement a production configuration check that rejects HTTP issuers/provider URLs, debug mode, missing encryption/signing keys and prototype-auth enablement on commercial routes. Limit request body sizes at proxy and app; disable body logging in validation middleware.
+- [x] Create account, external-identity, device, entitlement, webhook-event, usage-reservation, worker-lease and audit-metadata tables. Minimum identity constraint:
 
 ```sql
 CREATE TABLE accounts (
@@ -43,8 +43,10 @@ CREATE TABLE identities (
 );
 ```
 
-- [ ] Keep email as contact information, not identity/ownership key. All user-owned queries require authenticated account ID and composite ownership constraints. No account ID from a request body overrides Principal.
-- [ ] Lock dependencies, run `uv run --project service pytest service/tests/test_config.py -q`, apply migrations to disposable PostgreSQL, test rollback/forward restoration, commit.
+- [x] Keep email as contact information, not identity/ownership key. All user-owned queries require authenticated account ID and composite ownership constraints. No account ID from a request body overrides Principal.
+- [x] Lock dependencies, run `uv run --project service pytest service/tests/test_config.py -q`, apply migrations to disposable PostgreSQL, test rollback/forward restoration, commit.
+
+Task 1 local implementation and review complete: [evidence](../evidence/P05-service-foundation.md). Docker/TLS runtime and owner provisioning remain deployment gates.
 
 ## Task 2 — Native sign-in and account verification
 

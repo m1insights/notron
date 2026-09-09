@@ -1,15 +1,10 @@
 """Real PostgreSQL tests; NOTRON_TEST_DATABASE_URL must point at a disposable socket DB."""
-import importlib.util
 import os
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-
-
-def test_postgres_store_is_implemented():
-    assert importlib.util.find_spec('notron_service.store') is not None
 
 
 @pytest.fixture

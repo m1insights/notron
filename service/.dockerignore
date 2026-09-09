@@ -1,0 +1,9 @@
+*
+!pyproject.toml
+!uv.lock
+!notron_service/
+!notron_service/**
+!migrations/
+!migrations/**
+**/__pycache__
+**/*.pyc

@@ -1,6 +1,6 @@
 # Notron production roadmap
 
-Status: **P01 Tasks 1–5, P02 Tasks 1–6 and P03 Tasks 1–4 implemented; P04 next**. Updated 2026-09-09. Native secure-startup and release qualification remain pending P06/P07. See the [branch reconciliation](handoffs/2026-09-09-branch-integration.md).
+Status: **P01 Tasks 1–5, P02 Tasks 1–6 and P03 Tasks 1–4 implemented; P05 Task 1 implemented, Task 2 next; P04 device testing deferred**. Updated 2026-09-09. Native secure-startup and release qualification remain pending P06/P07. See the [branch reconciliation](handoffs/2026-09-09-branch-integration.md).
 Evidence: [P02 Task 6 handoff](handoffs/2026-09-05-P02-task-6.md), [P02 Task 5 handoff](handoffs/2026-09-05-P02-task-5.md), [P02 Tasks 3–4 batch handoff](handoffs/2026-09-05-P02-tasks-3-4.md), [P02 Tasks 1–2 batch handoff](handoffs/2026-09-05-P02-tasks-1-2.md), [P01 Task 5 session handoff](handoffs/2026-09-05-P01-task-5.md), [security report](evidence/P01-security-boundaries.md), [secure storage evidence](evidence/P01-secure-storage.md) and [outbound caller map](evidence/P01-outbound-map.md).
 Audience: the owner and an engineer starting a fresh coding session.
 
@@ -19,8 +19,8 @@ Read the [shared design and contracts](design.md) before any plan. Findings are 
 | P01 | [Privacy and permissions](plans/01-privacy-permissions.md) | Shared design | Private inputs, credentials, permissions and network destinations have enforced boundaries | Local implementation complete — Tasks 1–5; private reporting decision and native P06/P07 gates open |
 | P02 | [Reliable execution and recovery](plans/02-reliable-execution.md) | P01 policy APIs | Durable operations, guarded writes, safe retries and stale-request handling | Local implementation complete — Tasks 1–6; native P06/M1 gates open |
 | P03 | [Ask conversation](plans/03-ask-conversation.md) | P01; P02 request contracts | Bounded contextual follow-ups and clarification | Implemented and reviewed; 1,264 tests pass |
-| P04 | [Mobile Shortcut feasibility](plans/04-shortcut-prototype.md) | Local experiment can start immediately; hosted test requires P01 and P02 contracts | Real-iPhone evidence and explicit continue/stop decision | Planned |
-| P05 | [Accounts and paid service](plans/05-accounts-service.md) | P01; P02 contracts; P04 backend contract if experiment proceeds | Authenticated, metered service with server-enforced access | Planned |
+| P04 | [Mobile Shortcut feasibility](plans/04-shortcut-prototype.md) | Local experiment can start immediately; hosted test requires P01 and P02 contracts | Real-iPhone evidence and explicit continue/stop decision | Deferred until owner can test on iPhone |
+| P05 | [Accounts and paid service](plans/05-accounts-service.md) | P01; P02 contracts; P04 backend contract if experiment proceeds | Authenticated, metered service with server-enforced access | In progress — Task 1 foundation implemented; Task 2 next |
 | P06 | [Mac installer and onboarding](plans/06-mac-distribution.md) | Runtime work can start after P01; completion uses P02/P03; paid path uses P05 | Portable signed app, truthful onboarding/status, updates and uninstall | Companion/onboarding/pin UI exists and builds; portable signed distribution pending |
 | P07 | [Pilot and public release](plans/07-pilot-release.md) | Gate requirements below | Measured pilot, security review and release decision | Planned |
 
@@ -126,17 +126,14 @@ This approved roadmap supersedes older product assumptions where they conflict: 
 
 ## Next implementation session
 
-Continue with **P04 Task 1: Shortcut feasibility**.
-P03 Tasks 1–4 are implemented and reviewed: bounded history, contextual routing,
-durable action clarifications and user guidance. **1,264 tests pass**, compared
-with the 1,190-test baseline. See the [P03 handoff](handoffs/2026-09-09-P03-conversation.md)
-and [conversation case matrix](evidence/P03-conversation-cases.md).
-The local implementation is merged; nothing was pushed or enabled on live data.
-Use the main checkout and inspect status before starting the next task.
+Continue with **P05 Task 2: native sign-in and account verification**.
+The owner deferred P04 device testing while away from their desk. P05 does not
+require that experiment to complete first. Task 1 now provides the service
+configuration, account schema, readiness checks and deployment templates.
+See the [P05 Task 1 handoff](handoffs/2026-09-09-P05-task-1.md) and
+[foundation evidence](evidence/P05-service-foundation.md).
 
-The M1 conversation fixture item is complete; native qualification remains open.
-Native Apple adapter behavior and the final iCloud race remain
-unverified/nontransactional respectively. P01's private reporting-route decision,
-provider retention and P06/P07 signed/native/security review gates remain open;
-real processing stays paused. P04 Task 1 remains a separately schedulable device
-experiment.
+P03 is complete with 1,264 passing desktop tests. Native Apple adapter behavior,
+P01 private reporting and P06/P07 signed/native/security review gates remain open.
+Real processing stays paused. No hosted service was provisioned or deployed;
+P05 sign-in, billing, metering and operations remain Tasks 2–6.
