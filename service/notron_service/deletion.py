@@ -64,8 +64,20 @@ class Deletion:
         with self.store._connect() as c:
             counts['cache']=c.execute('DELETE FROM usage_cache WHERE ctid IN (SELECT ctid FROM usage_cache WHERE expires_at<=clock_timestamp() ORDER BY expires_at LIMIT %s)',(limit,)).rowcount
             counts['security']=c.execute('DELETE FROM audit_metadata WHERE ctid IN (SELECT ctid FROM audit_metadata WHERE expires_at<=clock_timestamp() ORDER BY expires_at LIMIT %s)',(limit,)).rowcount
-            rows=c.execute('''SELECT account_id FROM account_deletions WHERE financial_delete_after<=clock_timestamp()
-                AND security_delete_after<=clock_timestamp() AND NOT billing_cleanup_pending AND NOT identity_cleanup_pending ORDER BY financial_delete_after LIMIT %s''',(limit,)).fetchall()
+            # Apply every hold before LIMIT: an old unknown cost must not occupy
+            # the same bounded batch forever and starve unrelated eligible erasure.
+            # The account-locked checks below still guard changes after selection.
+            rows=c.execute('''SELECT d.account_id FROM account_deletions d
+                JOIN accounts a ON a.id=d.account_id AND a.status='deleted'
+                WHERE d.financial_delete_after<=clock_timestamp()
+                AND d.security_delete_after<=clock_timestamp()
+                AND NOT d.billing_cleanup_pending AND NOT d.identity_cleanup_pending
+                AND NOT EXISTS (
+                    SELECT 1 FROM usage_reservations r LEFT JOIN usage_meter m
+                    ON m.account_id=r.account_id AND m.reservation_id=r.id
+                    WHERE r.account_id=d.account_id AND (r.status IN ('reserved','uncertain')
+                        OR m.month>=date_trunc('month',clock_timestamp() AT TIME ZONE 'UTC')::date))
+                ORDER BY d.financial_delete_after,d.account_id LIMIT %s''',(limit,)).fetchall()
         for row in rows:
             account=row['account_id']
             with self.store._connect() as c:

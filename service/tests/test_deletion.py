@@ -159,3 +159,29 @@ def test_unresolved_checkout_intent_keeps_cleanup_pending_but_cancels_known_subs
     assert d.repair_remote(g)['failed']==1
     assert len(g.cancelled)==1
     with u.store._connect() as c:assert c.execute('SELECT billing_cleanup_pending FROM account_deletions').fetchone()['billing_cleanup_pending']
+
+@pytest.mark.parametrize('hold',['reserved','uncertain','current_month'])
+def test_held_old_account_cannot_starve_later_eligible_erasure(usage,db,hold):
+    from test_store import seed
+    from notron_service.deletion import Deletion
+    u,a,b=usage
+    reservation=u.reserve(a,str(uuid4()),'a'*64,40,lease_fence=1,rate_version='fixture')
+    if hold=='uncertain':u.uncertain(a,reservation.id)
+    elif hold=='current_month':u.settle(a,reservation.id,10,{'content':'synthetic'})
+    if hold!='current_month':
+        with u.store._connect() as c:c.execute("UPDATE usage_meter SET month='2000-01-01' WHERE account_id=%s",(a.account_id,))
+    deletion=Deletion(u.store,financial_retention_days=1)
+    deletion.delete(a)
+    # The oldest account remains held across multiple independently bounded runs.
+    with u.store._connect() as c:
+        c.execute("UPDATE account_deletions SET financial_delete_after=now()-interval '2 days',security_delete_after=now()-interval '2 days',billing_cleanup_pending=false,identity_cleanup_pending=false WHERE account_id=%s",(a.account_id,))
+    for eligible in (b,seed(db)[0]):
+        deletion.delete(eligible)
+        with u.store._connect() as c:
+            c.execute("UPDATE account_deletions SET financial_delete_after=now()-interval '1 day',security_delete_after=now()-interval '1 day',billing_cleanup_pending=false,identity_cleanup_pending=false WHERE account_id=%s",(eligible.account_id,))
+        assert deletion.purge_expired(limit=1)['accounts']==1
+        with u.store._connect() as c:
+            assert c.execute('SELECT 1 FROM accounts WHERE id=%s',(eligible.account_id,)).fetchone() is None
+            assert c.execute('SELECT 1 FROM accounts WHERE id=%s',(a.account_id,)).fetchone() is not None
+            assert c.execute('SELECT 1 FROM usage_meter WHERE account_id=%s',(a.account_id,)).fetchone() is not None
+    assert deletion.purge_expired(limit=1)['accounts']==0
