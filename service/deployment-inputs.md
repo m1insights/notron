@@ -144,3 +144,16 @@ connection approval. No live provisioning/provider calls were performed locally.
   before upgrade, then records the new entire schema fingerprint. Each newer
   migration must extend `_migrations()` and its table set; rollback is the paired
   non-destructive `003_identity_sessions.rollback.sql`, not the old v2 script.
+
+### Persistent local sign-out state
+
+The native session now requires `FileSessionBarrier.application`, private metadata
+at `~/Library/Application Support/com.m1labs.notron/account/session-state`.
+Directory mode is 0700 and file mode 0600; contents are only `active`, `signedOut`
+or `cleanupPending`, never credentials or identity data. Atomic replacement and
+file/directory synchronization persist `cleanupPending` before Keychain cleanup.
+A recreated session refuses refresh while stopped or cleanup is pending; missing,
+unreadable, malformed or insecure metadata also fails closed. Cleanup retry stays
+visible after restart. Successful cleanup retains `signedOut`; only explicit,
+nonce-verified browser login can replace the refresh credential and write `active`.
+Legacy Keychain credentials without this metadata therefore require fresh login.

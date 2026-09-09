@@ -25,7 +25,7 @@ extension KeychainStore: SessionVault {}
            let config=try? IdentityConfiguration(issuer:issuer,service:service,clientID:client,audience:audience) {
             self.config=config
             let transport=OIDCTransport(config:config);self.transport=transport
-            self.session=AccountSession(vault:KeychainStore(),transport:transport,stopManaged:{
+            self.session=AccountSession(vault:KeychainStore(),transport:transport,barrier:FileSessionBarrier.application,stopManaged:{
                 // Task 4's managed transport observes this and cancels pending
                 // network work. P06 startup remains disabled independently.
                 NotificationCenter.default.post(name: .notronManagedSessionStopped,object:nil)

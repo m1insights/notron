@@ -2,6 +2,7 @@ import Foundation
 import CryptoKit
 import Security
 import Combine
+import Darwin
 
 public enum SessionError: Error { case invalidCallback, cancelled, unavailable, invalidIdentity, signedOut }
 
@@ -10,6 +11,72 @@ public protocol SessionVault {
     func get(_ name: String) throws -> Data?
     func put(_ name: String, value: Data) throws
     func delete(_ name: String) throws
+}
+
+/// Non-secret state, deliberately separate from potentially unavailable Keychain.
+public enum SessionBarrierState: String { case active, signedOut, cleanupPending }
+public protocol SessionBarrier {
+    func read() throws -> SessionBarrierState
+    func write(_ state: SessionBarrierState) throws
+}
+
+/// Private metadata only: never writes a credential, account ID, or token hash.
+/// Missing, malformed, inaccessible, or insecurely-permissioned state cannot
+/// authorize automatic refresh. Explicit validated browser sign-in enrolls it.
+public struct FileSessionBarrier: SessionBarrier {
+    public let directory: URL
+    public static let application = FileSessionBarrier(directory:
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(
+            "Library/Application Support/com.m1labs.notron/account"))
+    public init(directory: URL) { self.directory = directory }
+    private var file: URL { directory.appendingPathComponent("session-state") }
+
+    private func checkDirectory() throws {
+        var info = stat()
+        guard lstat(directory.path, &info) == 0,
+              info.st_mode & S_IFMT == S_IFDIR, info.st_uid == getuid(),
+              info.st_mode & 0o077 == 0 else { throw SessionError.unavailable }
+    }
+    public func read() throws -> SessionBarrierState {
+        var info = stat()
+        if lstat(directory.path, &info) != 0 {
+            if errno == ENOENT { return .signedOut }
+            throw SessionError.unavailable
+        }
+        try checkDirectory()
+        let fd = open(file.path, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else {
+            if errno == ENOENT { return .signedOut }
+            throw SessionError.unavailable
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close() }
+        guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_uid == getuid(), info.st_mode & 0o077 == 0,
+              info.st_size <= 64,
+              let data = try handle.read(upToCount: 65),
+              let text = String(data: data, encoding: .utf8),
+              let state = SessionBarrierState(rawValue: text) else { throw SessionError.unavailable }
+        return state
+    }
+    public func write(_ state: SessionBarrierState) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        try checkDirectory()
+        let temporary = directory.appendingPathComponent(UUID().uuidString)
+        let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard fd >= 0 else { throw SessionError.unavailable }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        defer { try? handle.close(); try? FileManager.default.removeItem(at: temporary) }
+        try handle.write(contentsOf: Data(state.rawValue.utf8))
+        try handle.synchronize()
+        try handle.close()
+        guard rename(temporary.path, file.path) == 0 else { throw SessionError.unavailable }
+        let parent = open(directory.path, O_RDONLY | O_NOFOLLOW)
+        guard parent >= 0 else { throw SessionError.unavailable }
+        defer { close(parent) }
+        guard fsync(parent) == 0 else { throw SessionError.unavailable }
+    }
 }
 
 public final class AuthorizationAttempt {
@@ -90,14 +157,22 @@ public struct DeviceIdentity: Codable {
     private var locallySignedOut=false
     @Published public private(set) var identity:DeviceIdentity?
     private let vault:SessionVault
+    private let barrier:SessionBarrier
     private let transport:SessionTransport
     private let stopManaged:()->Void
     private var access:String?
     private var expiry=Date.distantPast
     private var generation=0
     private var refreshing=false
-    public init(vault:SessionVault,transport:SessionTransport,stopManaged:@escaping ()->Void) {
-        self.vault=vault;self.transport=transport;self.stopManaged=stopManaged
+    public init(vault:SessionVault,transport:SessionTransport,barrier:SessionBarrier,stopManaged:@escaping ()->Void) {
+        self.vault=vault;self.transport=transport;self.barrier=barrier;self.stopManaged=stopManaged
+        do {
+            let state=try barrier.read()
+            locallySignedOut=state != .active
+            credentialCleanupFailed=state == .cleanupPending
+        } catch {
+            locallySignedOut=true;credentialCleanupFailed=true
+        }
     }
     public func complete(code:String,verifier:String,nonce:String) async throws {
         try Task.checkCancellation()
@@ -106,12 +181,17 @@ public struct DeviceIdentity: Codable {
         guard let id=tokens.idToken,try await transport.verify(access:tokens.accessToken,idToken:id)==nonce else {throw SessionError.invalidIdentity}
         let who=try await transport.identify(access:tokens.accessToken)
         guard epoch==generation,!Task.isCancelled else {throw SessionError.cancelled}
-        try install(tokens,identity:who)
+        try install(tokens,identity:who,explicitLogin:true)
     }
     /// Sole supplier for managed transport. Refresh material never crosses IPC.
     /// Caller may force exactly one refresh after a 401; do not retry paid work.
     public func accessToken(forceRefresh:Bool=false) async throws -> String {
-        guard !locallySignedOut else {throw SessionError.signedOut}
+        // Consult persistent state even for a cached access token, so another
+        // session instance's sign-out also stops this supplier.
+        guard !locallySignedOut,(try? barrier.read()) == .active else {
+            locallySignedOut=true;access=nil;isSignedIn=false;stopManaged()
+            throw SessionError.signedOut
+        }
         if !forceRefresh,let access,expiry.timeIntervalSinceNow>30 {return access}
         guard !refreshing else {throw SessionError.unavailable}
         guard let bytes=try vault.get("managed-refresh"),let token=String(data:bytes,encoding:.utf8),!token.isEmpty else {throw SessionError.signedOut}
@@ -130,10 +210,15 @@ public struct DeviceIdentity: Codable {
             throw SessionError.unavailable
         }
     }
-    private func install(_ tokens:TokenSet,identity:DeviceIdentity) throws {
+    private func install(_ tokens:TokenSet,identity:DeviceIdentity,explicitLogin:Bool=false) throws {
         guard !tokens.accessToken.isEmpty,tokens.expiresIn>0,tokens.expiresIn<=900,
               let refresh=tokens.refreshToken,!refresh.isEmpty else {throw SessionError.invalidIdentity}
+        if explicitLogin {try barrier.write(.cleanupPending)}
+        else {guard try barrier.read() == .active else {throw SessionError.signedOut}}
         try vault.put("managed-refresh",value:Data(refresh.utf8))
+        // Only a completed, nonce-verified new browser login can reset a stop.
+        // A failure storing the replacement credential leaves the stop intact.
+        if explicitLogin {try barrier.write(.active)}
         self.access=tokens.accessToken;expiry=Date().addingTimeInterval(tokens.expiresIn)
         self.identity=identity;isSignedIn=true;locallySignedOut=false;credentialCleanupFailed=false
     }
@@ -142,7 +227,14 @@ public struct DeviceIdentity: Codable {
         locallySignedOut=true
         generation+=1;access=nil;expiry = .distantPast;identity=nil;isSignedIn=false
         stopManaged()
-        do {try vault.delete("managed-refresh");credentialCleanupFailed=false}
+        do {
+            // Persist before touching Keychain: interruption or cleanup failure
+            // leaves a durable stop with a visible retry action after relaunch.
+            try barrier.write(.cleanupPending)
+            try vault.delete("managed-refresh")
+            try barrier.write(.signedOut)
+            credentialCleanupFailed=false
+        }
         catch {credentialCleanupFailed=true;throw SessionError.unavailable}
     }
     /// Clear first, then best-effort remote revocation. No Notes deletion calls.
