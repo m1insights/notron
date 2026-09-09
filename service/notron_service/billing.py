@@ -292,18 +292,26 @@ class Billing:
             for inv in self.gateway.paid_invoices(customer,sid):
                 if identifier(inv.get('customer'))!=customer or inv.get('subscription')!=sid:
                     raise BillingError('billing_ownership_mismatch')
+                # Financial reversals outlive price retirement and every new-grant
+                # eligibility rule. Inspect authoritative payments before filtering
+                # invoice lines, and revoke any already-issued source monotonically.
+                source='invoice:'+inv['id']
+                refunded=False; invoice_disputed=False
+                for intent in inv.get('payment_intents',[]):
+                    r,d=self.gateway.payment_reversed(intent)
+                    refunded=refunded or r; invoice_disputed=invoice_disputed or d
+                disputed=disputed or invoice_disputed
+                if refunded or invoice_disputed:
+                    self._revoke_locked(conn,account,source)
                 if inv.get('status')!='paid' or inv.get('amount_paid',0)<=0 or not inv.get('payment_intents'): continue
                 lines=[line for line in inv.get('lines',{}).get('data',[]) if not line.get('proration',True)
                        and line.get('quantity')==1 and identifier(line.get('price')) in self.policy.prices
                        and self.policy.prices[identifier(line.get('price'))].kind=='subscription']
                 if len(lines)!=1: continue
-                line=lines[0]; source='invoice:'+inv['id']; until=timestamp(line['period']['end'])
+                line=lines[0]; until=timestamp(line['period']['end'])
                 units=self.policy.prices[identifier(line['price'])].units
-                refunded=False
-                for intent in inv.get('payment_intents',[]):
-                    r,d=self.gateway.payment_reversed(intent); refunded=refunded or r; disputed=disputed or d
                 self._grant_locked(conn,account,source,'subscription',units,until,sid,timestamp(line['period']['start']))
-                if refunded or disputed:
+                if refunded or invoice_disputed:
                     self._revoke_locked(conn,account,source)
             paid=conn.execute('''SELECT max(e.access_until) AS until FROM entitlements e JOIN billing_grants g
                 ON (e.account_id,e.id)=(g.account_id,g.entitlement_id)

@@ -402,3 +402,52 @@ def test_failed_account_does_not_starve_scheduled_repair(billing):
     gateway.subscriptions=subscriptions
     service.repair(limit=1); service.repair(limit=1)
     assert set(calls)=={'cus_'+str(a.account_id),'cus_'+str(b.account_id)}
+
+
+@pytest.mark.parametrize('reversal',['refund','dispute'])
+def test_retired_invoice_price_still_reconciles_historical_payment_reversal(billing,reversal):
+    from dataclasses import replace
+    from notron_service.billing import BillingError, Price
+    from notron_service.store import AccessDenied
+    service,gateway,a,b=billing
+    pay(billing)
+    service.policy=replace(service.policy,prices={'price_new':Price('subscription',100)})
+    gateway.subs[0]['items']['data'][0]['price']['id']='price_new'
+    (gateway.refunds if reversal=='refund' else gateway.disputes).add('pi_a')
+    service.reconcile(a.account_id)
+    with service.store._connect() as conn:
+        grant=conn.execute("SELECT revoked_at FROM billing_grants WHERE source_id='invoice:in_a'").fetchone()
+        assert grant['revoked_at'] is not None
+    if reversal=='dispute':
+        with pytest.raises(AccessDenied): service.entitlement(a)
+        with pytest.raises(AccessDenied): reservation(service,a,1)
+    else:
+        assert service.entitlement(a).allowance==0
+        with pytest.raises(BillingError,match='subscription_required'): reservation(service,a,1)
+        # Reintroducing the old price cannot revive its refunded grant.
+        service.policy=replace(service.policy,prices={'price_plan':Price('subscription',100)})
+        gateway.subs[0]['items']['data'][0]['price']['id']='price_plan'
+        service.reconcile(a.account_id)
+        assert service.entitlement(a).allowance==0
+
+
+@pytest.mark.parametrize('reversal',['refund','dispute'])
+def test_retired_topup_price_still_reconciles_using_durable_order(billing,reversal):
+    from dataclasses import replace
+    from notron_service.billing import Price
+    from notron_service.store import AccessDenied
+    service,gateway,a,b=billing
+    pay(billing)
+    rid=uuid4(); service.checkout(a,'price_topup','https://app.example.test/billing',rid)
+    session=gateway.sessions['cs_'+str(rid)]; session.update(payment_status='paid',status='complete')
+    service.reconcile(a.account_id)
+    assert service.entitlement(a).allowance==140
+    service.policy=replace(service.policy,prices={'price_plan':Price('subscription',100)})
+    (gateway.refunds if reversal=='refund' else gateway.disputes).add(session['payment_intent'])
+    service.reconcile(a.account_id)
+    with service.store._connect() as conn:
+        assert conn.execute("SELECT revoked_at FROM billing_grants WHERE source_id=%s",('topup:'+session['payment_intent'],)).fetchone()['revoked_at'] is not None
+    if reversal=='dispute':
+        with pytest.raises(AccessDenied): service.entitlement(a)
+    else:
+        assert service.entitlement(a).allowance==100
