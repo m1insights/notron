@@ -218,6 +218,38 @@ def history_before(body_html: str, question: Question, *, max_exchanges: int = 3
     return turns
 
 
+def local_context_before(body_html: str, question: Question, *,
+                         ignore: tuple[str, ...] = ()) -> str:
+    """Local tagged-note material through the current thought, without history.
+
+    Completed exchanges belong exclusively to bounded conversation history.
+    Source positions select the captured question, so later text and duplicate
+    questions cannot leak into its local context. The caller applies its local
+    context size cap and normal outbound policy/redaction.
+    """
+    texts = notedoc.texts(body_html)
+    title = next((text.strip() for text in texts if text.strip()), '')
+    furniture = (*ignore, title, 'Type anything below this line') if title else ignore
+    pieces = list(_pieces(body_html, furniture))
+    matches = [i for i, piece in enumerate(pieces)
+               if piece.role == 'user' and piece.after == question.after
+               and piece.text == question.text
+               and (question.before is None or piece.before == question.before)]
+    if len(matches) != 1:
+        return ''
+    current = matches[0]
+    local = []
+    for index, piece in enumerate(pieces[:current + 1]):
+        if piece.role == 'topic':
+            local.clear()
+        elif piece.role == 'user':
+            # Looking beyond the current piece is unnecessary: its full thought
+            # is always included, even when called after a reply was inserted.
+            if index == current or pieces[index + 1].role != 'assistant':
+                local.append(piece.text)
+    return "\n\n".join(local)
+
+
 def context_before(body_html: str, question: Question, *, note_id: str,
                    ignore: tuple[str, ...] = (), require_tag: bool = False,
                    max_exchanges: int = 3, max_chars: int = 8000) -> ConversationContext:

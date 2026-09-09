@@ -108,3 +108,29 @@ def test_top_insertion_cannot_read_later_exchanges():
 def test_standing_help_does_not_enter_history():
     html = body('Type anything below this line and Notron will answer underneath it.\n\nFirst?\n' + c.turn('Answer') + '\nMore?')
     assert [t.text for t in c.history_before(html, last(html))] == ['First?', 'Answer']
+
+
+def test_tagged_local_context_excludes_completed_exchanges_and_future_text():
+    html = body('Story premise: a lighthouse.\n\n\n\n@notron first?\n' + c.turn('First answer') +
+                '\nCharacter notes: afraid of water.\n@notron expand this?\n\n\n\nFuture private question?\n' + c.turn('Future answer'))
+    question = c.unanswered(html, ignore=IGNORE, require_tag=True)[0]
+    assert c.local_context_before(html, question, ignore=IGNORE) == (
+        'Story premise: a lighthouse.\n\nCharacter notes: afraid of water.\n@notron expand this?')
+
+
+def test_tagged_local_context_respects_latest_topic_and_filing_receipts():
+    html = body('Old local text\n\nNew topic\n✓ @notron filed → Projects\n\n———\nNew idea\n@notron explain?')
+    question = c.unanswered(html, ignore=IGNORE, require_tag=True)[-1]
+    assert c.local_context_before(html, question, ignore=IGNORE) == 'New idea\n@notron explain?'
+
+
+def test_tagged_local_context_supports_legacy_question_source_position():
+    html = body('Local idea\n@notron explain?\n\n\n\nFuture material')
+    captured = c.unanswered(html, ignore=IGNORE, require_tag=True)[0]
+    question = c.Question(captured.text, captured.after)
+    assert c.local_context_before(html, question, ignore=IGNORE) == 'Local idea\n@notron explain?'
+
+
+def test_tagged_local_context_fails_closed_for_missing_question():
+    html = body('Local idea\n@notron explain?')
+    assert c.local_context_before(html, c.Question('missing', 999), ignore=IGNORE) == ''
