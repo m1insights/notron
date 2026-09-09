@@ -32,11 +32,9 @@ store.fetchRemindersMatchingPredicateCompletion(pred, function (arr) {
     var r = arr.objectAtIndex(i);
     var due = '';
     if (!r.dueDateComponents.isNil()) {
-      var d = $.NSCalendar.currentCalendar.dateFromComponents(r.dueDateComponents);
+      var d = gregorian().dateFromComponents(r.dueDateComponents);
       if (!d.isNil()) {
-        var f = $.NSDateFormatter.alloc.init;
-        f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mmXXX';
-        due = ObjC.unwrap(f.stringFromDate(d));
+        due = ObjC.unwrap(pinned("yyyy-MM-dd'T'HH:mmXXX").stringFromDate(d));
       }
     }
     rows.push({
@@ -78,7 +76,7 @@ if (iso) {
   var units = iso.length > 10
     ? ($.NSCalendarUnitYear | $.NSCalendarUnitMonth | $.NSCalendarUnitDay | $.NSCalendarUnitHour | $.NSCalendarUnitMinute)
     : ($.NSCalendarUnitYear | $.NSCalendarUnitMonth | $.NSCalendarUnitDay);
-  var cal = $.NSCalendar.alloc.initWithCalendarIdentifier($.NSCalendarIdentifierGregorian);
+  var cal = gregorian();
   cal.timeZone = $.NSTimeZone.timeZoneForSecondsFromGMT(input.offset);
   r.dueDateComponents = cal.componentsFromDate(units, d);
   r.dueDateComponents.timeZone = cal.timeZone;
@@ -86,7 +84,8 @@ if (iso) {
 }
 var err = Ref();
 var ok = store.saveReminderCommitError(r, true, err);
-return JSON.stringify(ok ? {id: ObjC.unwrap(r.calendarItemIdentifier)} : {error: 'save failed'});
+return JSON.stringify(ok ? {id: ObjC.unwrap(r.calendarItemIdentifier)}
+                  : {error: 'save failed', why: reason(err)});
 """
 
 _COMPLETE = """
@@ -99,7 +98,8 @@ else {
   item.completed = true;
   var err = Ref();
   var ok = store.saveReminderCommitError(item, true, err);
-  return JSON.stringify(ok ? {title: ObjC.unwrap(item.title)} : {error: 'save failed'});
+  return JSON.stringify(ok ? {title: ObjC.unwrap(item.title)}
+                    : {error: 'save failed', why: reason(err)});
 }
 """
 
@@ -158,7 +158,7 @@ def create(title: str, *, notes: str = "", list_name: str = "",
         "when": when_iso or "", "timestamp": dt.timestamp() if dt else None,
         "offset": dt.utcoffset().total_seconds() if dt else None})
     if "error" in out:
-        raise eventkit.EventKitError(f"could not create the reminder: {out['error']}")
+        raise eventkit.EventKitError(eventkit.failure(out, "could not create the reminder"))
     return out["id"]
 
 
@@ -167,7 +167,7 @@ def complete(reminder_id: str, *, caller=None) -> str:
     the user's list is theirs, and 'done' must never quietly mean 'gone'."""
     out = (caller or eventkit.run)(_COMPLETE, data={"id": reminder_id})
     if "error" in out:
-        raise LookupError(f"could not tick that off: {out['error']}")
+        raise LookupError(eventkit.failure(out, "could not tick that off"))
     return out["title"]
 
 

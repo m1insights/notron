@@ -29,15 +29,58 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from . import conversation, filer, graph, mentions, notes, workspace, policy, requests
+from . import attachments, conversation, filer, graph, mentions, notes, workspace, policy, requests
 from .applescript import AppleScriptError, NotesBusy
+from .markup import to_text
 
 ASK_POLL = 5           # seconds between checks of the Ask note
 SWEEP_EVERY = 20       # seconds between sweeps for #notron mentions (a survey is ~1s)
-SETTLE = 6             # how long your typing must be still before she answers
+SETTLE = 12            # how long your typing must be still before she answers
 MIN_CHARS = 2
 
 DUMP_POLL = 60         # seconds between looks at the Brain Dump (one cheap read)
+
+HERE_CHARS = 40_000    # how much of the note she was tagged in the model sees
+ELIDED = "\n\n[… a part of this note is not shown …]\n\n"
+
+
+def here_text(body_html: str, anchor: str = "", *, budget: int = HERE_CHARS) -> str:
+    """The note she was tagged in, as the model should see it.
+
+    Whole, whenever it fits — and it almost always does. Some cap is
+    unavoidable (a note may run to 200,000 characters), but a cap that simply
+    keeps the opening is worse than it looks: a question like "would my first
+    scene idea, written at the end of this note, work?" then points at text she
+    was never given, and she answers, reasonably and wrongly, that she cannot
+    find it. That happened on a 25,000-character story bible against the old
+    4,000-character cut.
+
+    So an oversized note is sent as three parts — how it opens, the passage
+    around the line she was tagged in, and how it ends — with the gaps marked
+    so she can say what she has not read rather than assume it is not there.
+    Parts that turn out to touch are joined back into one, so the marker only
+    ever appears where something really was left out.
+    """
+    text = to_text(body_html)
+    if len(text) <= budget:
+        return text
+
+    third = budget // 3
+    spans = [(0, third), (len(text) - third, len(text))]
+    at = text.find(anchor.strip()) if anchor.strip() else -1
+    if at >= 0:
+        window = budget - 2 * third
+        start = max(0, min(at - window // 2, len(text) - window))
+        spans.append((start, start + window))
+
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    return ELIDED.join(text[start:end] for start, end in merged)
+
 # How long the dump must be untouched before she files it. A dump session is a
 # burst of half-thoughts; filing on a timer would file the half. Fifteen quiet
 # minutes means the session is over.
@@ -70,6 +113,13 @@ class Watcher:
     # A question that produced no write stays "unanswered" in the note, so the
     # next poll would send it to the model again, and again, forever — a quiet
     # API bill for one stuck message. Two honest tries, then a long pause.
+    #
+    # A pause is the right answer for a note that was busy or too big, because
+    # either may be different in half an hour. It is the wrong answer for a
+    # note holding a picture: that refusal is identical every time, and the
+    # pause turns it into a model call every thirty minutes for the life of
+    # the note. Those are set aside for good instead — she has already said
+    # her piece in 📥 Ask Notron.
     MAX_TRIES = 2
     COOLDOWN = 1800
 
@@ -90,7 +140,8 @@ class Watcher:
         with policy.explicit_reply(note_id):
             if envelope is None:
                 raise ValueError('A persisted source occurrence is required.')
-            state = graph.run_request(envelope, brain=self.brain)
+            state = graph.run_request(envelope, brain=self.brain,
+                                      carried=self._carried(note_id, envelope.source_modified))
         for line in state.trace:
             self._say(f"  {line}")
         for result in state.results:
@@ -100,6 +151,21 @@ class Watcher:
             self._say("  nothing was written — she will read this again")
         self._say(f"\n{state.answer}\n")
         return wrote
+
+    def _carried(self, note_id: str, modified: str = "") -> list:
+        """The files hanging off this note, for the prompt to be honest about.
+
+        Asked here rather than in the poll: a note's attachments cost a 0.4s
+        request to Notes, and the Ask note is read every five seconds. Only a
+        note actually about to be answered pays for it.
+        """
+        try:
+            return attachments.on_note(note_id, modified)
+        except Exception as e:
+            # Not knowing what a note carries is worth less than not answering
+            # at all. She simply says nothing about files, as she did before.
+            self._say(f"  (couldn't check for attached files: {type(e).__name__})")
+            return []
 
     def _worth_trying(self, key: str) -> bool:
         from .health import HealthStore
@@ -236,11 +302,8 @@ class Watcher:
                 continue
             if not policy.current().readable(notes.Note(m.note_id, m.title, m.folder, m.modified)):
                 continue
-            body = notes.read_body(m.note_id)
-            from .markup import to_text
-            from . import privacy
             wrote = self._answer(m.question, title=m.title, folder=m.folder, after=m.after,
-                                 here=privacy.redact(to_text(body))[:4000], source=m.raw, note_id=m.note_id, modified=m.modified, envelope=m.envelope)
+                                 source=m.raw, note_id=m.note_id, modified=m.modified, envelope=m.envelope)
             self._attempted(key, wrote)
             self._pending.pop(key, None)
             return
@@ -343,6 +406,18 @@ class Watcher:
 
     # ------------------------------------------------------------------- loop
 
+    def _report_blind_spots(self, checker=None) -> None:
+        """Report the listener process's own grants, which differ from a terminal."""
+        from . import permissions
+        try:
+            missing = permissions.blind(checker=checker)
+        except Exception as exc:
+            self._say(f"  (couldn't check permissions: {type(exc).__name__})")
+            return
+        for check in missing:
+            self._say(f"  ⚠️  {check.app} {check.detail} — she will say so rather than "
+                      "plan around it." + (f" Fix: {check.fix}" if check.fix else ""))
+
     def prepare_runtime(self) -> bool:
         from . import worker
         from .health import HealthStore
@@ -355,6 +430,7 @@ class Watcher:
             brain = worker.probe()
             if self.brain is None:
                 self.brain = brain
+            self._report_blind_spots()
             if not self.scanner.primed:
                 self.scanner.prime()
                 self.scanner.primed = True

@@ -10,6 +10,8 @@
 
 ## Global constraints
 
+September 9 scope reconciliation: include the now-implemented `Brain.see` vision path in managed transport, model allowlists, privacy/payload validation, reservations and cost evidence. September 6 billing direction requires an included allowance, hard pause at exhaustion, explicit top-up checkout and no automatic overage charges. T3 must test verified/idempotent top-up grants, failures/refunds and account binding; T4 must preserve local receipts/undo when paid calls pause. Work-based display units, allowance/top-up amounts, expiry and refund terms remain release inputs backed by P07 evidence.
+
 - Never ship a company provider key, client secret, signing secret or webhook secret in the app/Shortcut.
 - Server authenticates identity and enforces entitlement/quota on every paid call. The MIT client is not trusted to report payment status.
 - Provider destinations/model IDs are server-controlled. User text never configures transports or tools.

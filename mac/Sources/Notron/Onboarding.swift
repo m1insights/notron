@@ -1,9 +1,26 @@
+import AppKit
 import SwiftUI
 
-/// The four screens a fresh install walks through, in order, before handing
+/// The five screens a fresh install walks through, in order, before handing
 /// off to the already-built "Your notes" window.
 enum OnboardingStep: Int, CaseIterable {
-    case welcome, permissions, talk, listening
+    case welcome, permissions, talk, listening, pins
+}
+
+/// One row of `notron pins --json`. Field names already match, like
+/// `PermissionCheck` — no key strategy needed. `id` is the Notes id, which
+/// `Identifiable` and `library open` both want, so it carries both jobs
+/// exactly as `LibraryNote` does.
+struct PinNote: Codable, Equatable, Identifiable {
+    let id: String
+    let title: String
+    let why: String
+    let suggested: Bool
+
+    /// The core's titles lead with an emoji — "📌 About Me" — and the row
+    /// shows the two apart, like the examples on the previous screen.
+    var glyph: String { String(title.prefix(1)) }
+    var name: String { String(title.dropFirst()).trimmingCharacters(in: .whitespaces) }
 }
 
 /// One row of `notron permissions --json` — field names already match, so
@@ -27,10 +44,46 @@ final class OnboardingModel: ObservableObject {
     @Published var checksLoading = false
     @Published var listening = false
     @Published var startingListener = false
+    @Published var pins: [PinNote] = []
+    /// Notes the user has already been shown, and the one being opened now —
+    /// the row dims once it has been visited, so a long list stays trackable.
+    @Published var opened: Set<String> = []
+    @Published var opening: String?
 
     static let file = Core.home.appendingPathComponent(".notron/onboarding.json")
 
     static var done: Bool { FileManager.default.fileExists(atPath: file.path) }
+
+    /// macOS autocorrects "Notron" to "Norton" the first time you type it, and
+    /// she is addressed by name in every note she is ever tagged in — so the
+    /// user spends the rest of their life fighting a spelling, or she never
+    /// answers. Teaching the system speller once, on the screen that teaches
+    /// how to address her, is cheaper than either.
+    ///
+    /// Done automatically and without a toggle on purpose: learning a proper
+    /// noun is not a preference, and a switch nobody understands is worse than
+    /// a spelling that just works. It is reversible anywhere in macOS
+    /// (right-click → Unlearn Spelling), it needs no entitlement, and there is
+    /// nothing extra to ship in the DMG — the word lands in the user's own
+    /// account, not in the bundle.
+    ///
+    /// Measured on macOS 26.2, 2026-09-07: `~/Library/Spelling/LocalDictionary`
+    /// is *not* where it goes — that file stays 0 bytes. Do not verify this by
+    /// reading it. What is true is that the word persists: a fresh process
+    /// reports `hasLearnedWord("Notron") == true` and `checkSpelling(of:)`
+    /// returns NSNotFound, meaning the speller now considers it correct. Those
+    /// two are the check.
+    ///
+    /// This only fixes the Mac. The iPhone keeps its own dictionary and there
+    /// is no reaching it, which is why the core also answers to "Norton"
+    /// (`conversation.TAG`).
+    func teachTheSpellerHerName() {
+        let speller = NSSpellChecker.shared
+        guard !speller.hasLearnedWord(Self.herName) else { return }
+        speller.learnWord(Self.herName)
+    }
+
+    static let herName = "Notron"
 
     func markDone() {
         let payload = ["completed_at": ISO8601DateFormatter().string(from: Date())]
@@ -121,5 +174,32 @@ final class OnboardingModel: ObservableObject {
               let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Bool]
         else { return false }
         return obj["running"] ?? false
+    }
+
+    // ------------------------------------------------------------------ pins
+
+    func loadPins() {
+        Task.detached { [weak self] in
+            guard let json = try? Core.run(["pins", "--json"]),
+                  let rows = try? JSONDecoder().decode([PinNote].self, from: Data(json.utf8))
+            else { return }
+            await MainActor.run { self?.pins = rows }
+        }
+    }
+
+    /// Brings the note up in Notes and selects it in the list — which is where
+    /// the Control-click has to happen, because nothing in Notes' scripting
+    /// surface can pin it for us. Off the main thread like every other core
+    /// call: this one goes through the AppleScript lock and can queue behind
+    /// the listener that the previous step just installed.
+    func show(_ note: PinNote) {
+        opening = note.id
+        Task.detached { [weak self] in
+            _ = try? Core.run(["library", "open", note.id])
+            await MainActor.run {
+                self?.opened.insert(note.id)
+                self?.opening = nil
+            }
+        }
     }
 }

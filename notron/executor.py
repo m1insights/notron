@@ -23,6 +23,12 @@ from .securestore import StorageError
 
 _LOCAL_LOCK = threading.RLock()
 _LOCK_DEPTH = threading.local()
+MAX_REASON_CHARS = 400
+
+
+def _failure_reason(exc: Exception) -> str:
+    from . import privacy
+    return privacy.redact(' '.join(str(exc).split()))[:250]
 
 
 @contextmanager
@@ -581,8 +587,8 @@ class Executor:
                             return clarify(f'Conflict for {action.title}: {action.when} to {action.ends}, calendar {action.where or action.target_id}. Restate this exact event and add a line with confirmation code: confirm conflict {token}')
             except (StorageError, policy.PolicyError, operations.OperationConflict):
                 raise
-            except Exception:
-                return clarify('Calendar or Reminders unavailable; context is incomplete. No action saved.')
+            except Exception as exc:
+                return clarify('Calendar or Reminders unavailable; no action saved. ' + _failure_reason(exc))
             proposal.target_id, proposal.timezone = action.target_id, action.timezone
             proposal.when, proposal.ends = action.when, action.ends
             if not prior:
@@ -601,9 +607,9 @@ class Executor:
                 recovery.boundary('after_external_save', oid)
                 recovery.boundary('before_external_id', oid)
                 store.transition(oid, operations.S.APPLYING, operations.S.APPLIED, external_id=ref)
-            except Exception:
+            except Exception as exc:
                 # Leave APPLYING: a later exact adapter read may establish the ID.
-                return WriteResult(False, 'action outcome uncertain; recovery pending', operation_id=oid)
+                return WriteResult(False, 'action outcome uncertain; recovery pending. ' + _failure_reason(exc), operation_id=oid)
             self._log('Action verified', operation_id=oid)
             return WriteResult(True, detail.strip(' —') or 'done', ref=ref, operation_id=oid)
 

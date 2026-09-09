@@ -23,7 +23,19 @@ RULE = "———"
 # The light break between your question and her reply. En dashes, not RULE's
 # em dashes — it must never be confused with the rule that closes an exchange.
 QA_RULE = "– – – – – – – – – –"
-TAG = re.compile(r"(?:^|\s)[#@]notron\b", re.I)
+# What she answers to. Not just her name: macOS autocorrects "Notron" to
+# "Norton" the first time you type it, and she is addressed by name in every
+# note she is ever tagged in. A tag she does not recognise is not a small
+# annoyance — it is silence, and from the user's side silence is
+# indistinguishable from her being asleep or broken.
+#
+# The Mac half of this is fixed properly (onboarding teaches the system speller
+# the word), but the phone keeps its own dictionary and there is no reaching it,
+# so the misspellings are accepted everywhere instead. `\b` still applies: she
+# does not answer to "@nortonantivirus", and **her own writing never changes** —
+# she signs `**Notron:**`, and SIGNATURE is untouched.
+NAMES = ("notron", "nortron", "norton", "notrn")
+TAG = re.compile(r"(?:^|\s)[#@](?:" + "|".join(NAMES) + r")\b", re.I)
 
 # Blank blocks allowed inside one turn. Lines typed together stay together;
 # leave more space than this and it reads as a separate thought.

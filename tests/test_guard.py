@@ -111,3 +111,36 @@ def test_rewrite_allowed_does_not_unlock_the_instruction_note_or_a_shared_note()
     ask = guard.check(folder=workspace.FOLDER, title=workspace.ASK, mode="replace",
                       rewrite_allowed=True, **OK)
     assert not ask.allowed
+
+
+# Two real failures from 2026-09-05, both on one note: a 25k-char story bible
+# called "ASCENSION — Scene Blueprint". Notron answered the question tagged in
+# it eleven times and the Guard refused every one of them, so the user just saw
+# silence.
+def test_a_word_like_secret_at_the_end_of_a_line_is_not_a_password():
+    """The note has a scene tag called MACRO-SECRET. In HTML that word is
+    followed by `</div>`, and the credential pattern read the closing tag as
+    the value after the label. The scan must see what the reader sees."""
+    old = "<div>Tag</div><div>MACRO-SECRET</div><div>The ghost finds the truth</div>"
+    assert guard.check(folder="Notes", title="ASCENSION", mode="insert", old_body=old,
+                       new_body="<div>Tag</div><div>MACRO-SECRET</div>"
+                                "<div>Notron: try a cold open</div>"
+                                "<div>The ghost finds the truth</div>")
+
+
+def test_an_insert_is_judged_on_what_she_added_not_on_your_whole_note():
+    """`added` was the entire new body for an insert, so one key-shaped string
+    anywhere in a note the user wrote made every answer in it unwritable —
+    forever, since her reply never removes their text."""
+    old = "<div>my book idea</div><div>password: hunter2xyz</div>"
+    assert guard.check(folder="Notes", title="Book idea", mode="insert", old_body=old,
+                       new_body="<div>my book idea</div><div>Notron: try a cold open</div>"
+                                "<div>password: hunter2xyz</div>")
+
+
+def test_an_insert_that_carries_a_key_of_its_own_is_still_blocked():
+    v = guard.check(folder="Notes", title="Book idea", mode="insert",
+                    old_body="<div>my book idea</div>",
+                    new_body="<div>my book idea</div>"
+                             "<div>Notron: the api key is sk-abcdefghijklmnopqrst</div>")
+    assert not v and "password or key" in v.reason

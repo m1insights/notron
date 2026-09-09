@@ -8,6 +8,11 @@ to call `notes.write_body` directly. Three guarantees, in plain terms:
      rewrite a note you wrote.
   3. No write may carry a password, PIN or key, whatever the model intended.
   4. Every allowed write is logged before it happens.
+  5. No write ever lands on a note holding a picture. Apple Notes hands an
+     embedded image back as inline base64 and then discards it when the body
+     is written again — so a write there deletes the photo, silently, and
+     `notedoc.preserves` cannot see it happen because the loss occurs after
+     the proof. See `markup.holds_media`.
 
 A fourth mode, `mark`, exists for the Filer: it may put a `✓ ` in front of a
 line and a receipt after it, and `notedoc.marks_between` proves that is all it
@@ -34,7 +39,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import notedoc, privacy, when, workspace
+from . import markup, notedoc, privacy, when, workspace
 
 MAX_BODY_CHARS = 200_000
 MAX_TITLE_CHARS = 300
@@ -52,6 +57,11 @@ LATEST = re.compile(rf"(?i)\b(?:never|no|nothing|don'?t|not)\b[^.\n]{{0,40}}?\ba
 class Verdict:
     allowed: bool
     reason: str
+    #: True when trying again can never help — the note holds a picture, and it
+    #: will still hold one next time. The listener rests a note that failed for
+    #: an ordinary reason and stops asking about one that failed for this,
+    #: rather than paying a model every half hour to be refused identically.
+    permanent: bool = False
 
     def __bool__(self) -> bool:
         return self.allowed
@@ -74,6 +84,21 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str,
     if not new_body.strip():
         return Verdict(False, "refusing to write an empty body")
 
+    # Before the size check, because a note holding a photo is usually also an
+    # enormous one, and "over the 200000 limit" sends the reader looking for a
+    # bigger number instead of a deleted picture. Every mode, including
+    # `restore` — it is exempt from the preserve checks and the secret scan
+    # because it puts back the note's own words, but it is still a full-body
+    # write and would still throw the picture away.
+    if markup.holds_media(old_body):
+        return Verdict(
+            False,
+            f"{title!r} holds a picture. Apple Notes drops a picture from any "
+            "note a script writes to, so writing here would delete it — she "
+            "will answer somewhere else instead.",
+            permanent=True,
+        )
+
     if len(new_body) > MAX_BODY_CHARS:
         return Verdict(False, f"body is {len(new_body)} chars, over the {MAX_BODY_CHARS} limit")
 
@@ -87,8 +112,11 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str,
     if mode == "append" and old_body and not new_body.startswith(old_body):
         return Verdict(False, "append would not preserve the existing note content")
 
-    if mode == "insert" and old_body and not notedoc.preserves(old_body, new_body):
-        return Verdict(False, "insert would have changed or removed existing text")
+    added_by_insert: str | None = None
+    if mode == "insert" and old_body:
+        added_by_insert = notedoc.inserted(old_body, new_body)
+        if added_by_insert is None:
+            return Verdict(False, "insert would have changed or removed existing text")
 
     marks: list[str] = []
     if mode == "mark":
@@ -104,12 +132,18 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str,
         added = new_body[len(old_body):]
     elif mode == "mark":
         added = "".join(marks)
+    elif added_by_insert is not None:
+        added = added_by_insert
     else:
         added = new_body
     # A restore is exempt: the body going back in was live in this exact note a
     # moment ago, so anything key-shaped in it is the user's own text, already
     # theirs. Refusing it would leave them stuck with the version she wrote.
-    if mode != "restore" and privacy.contains_secret(added):
+    # Scanned as text, not as HTML: the pattern for a labelled secret takes the
+    # next non-space run as the value, and in a body straight from Notes that
+    # run is often a tag. A story bible with a scene tag called MACRO-SECRET
+    # became unanswerable because `SECRET</div>` read as "secret: </div>".
+    if mode != "restore" and privacy.contains_secret(markup.to_text(added)):
         return Verdict(False, "the text contains something that looks like a password or key")
 
     if mode == "replace" and title in workspace.SHARED:

@@ -303,14 +303,14 @@ class RequestStore:
                     if record.status == 'prepared':
                         envelope = replace(envelope, source_revision=rev,
                                            reply_to=(title, folder, item['after']), source_modified=modified,
-                                           here=self._context(body) if source == 'mention' else '')
+                                           here=self._context(body, item['raw']) if source == 'mention' else '')
                         self._save(db, envelope)
                 else:
                     text = conversation.strip_tag(conversation.tagged_lines(item['raw'])) if source == 'mention' else item['raw']
                     envelope = create(text, source=source, note_id=note_id, source_revision=rev,
                                       source_text=item['raw'], reply_to=(title, folder, item['after']),
                                       source_modified=modified,
-                                      here=self._context(body) if source == 'mention' else '')
+                                      here=self._context(body, item['raw']) if source == 'mention' else '')
                     self._save(db, envelope, status='needs_review' if needs_review or legacy_review else 'prepared')
                     if legacy_review:
                         db.execute("UPDATE requests SET failure_code='legacy_unknown' WHERE request_id=?", (envelope.request_id,))
@@ -359,9 +359,10 @@ class RequestStore:
         return bool(cls._answered_anchor_spans(body, raw))
 
     @staticmethod
-    def _context(body):
-        from . import markup, privacy
-        return privacy.redact(markup.to_text(body))[:4000]
+    def _context(body, anchor=''):
+        from . import privacy
+        from .watch import here_text
+        return privacy.redact(here_text(body, anchor))
 
     def validate_source(self, envelope: RequestEnvelope) -> bool:
         """Exact admission check after settling, before any model/external call.

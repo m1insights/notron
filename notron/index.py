@@ -36,6 +36,10 @@ class Chunk:
     modified: str
     text: str
     vector: list[float] | None = None
+    attachment: str = ""     # the file this chunk came out of, if it is not
+                             # the note's own words. What she saw and heard is
+                             # searchable from anywhere, not only in the note
+                             # it hangs off.
 
 
 def split(text: str) -> list[str]:
@@ -85,6 +89,7 @@ def _validate(data: dict) -> None:
             for row in rows:
                 if not isinstance(row, dict) or row.get("note_id") != nid: raise ValueError()
                 if not all(isinstance(row.get(k), str) for k in ("text", "title", "folder", "modified")): raise ValueError()
+                if not isinstance(row.get('attachment', ''), str): raise ValueError()
                 vector = row.get("vector")
                 if vector is not None:
                     if not isinstance(vector, list) or not vector: raise ValueError()
@@ -115,7 +120,56 @@ def _save(data: dict[str, list[dict]]) -> None:
 _MMAP = None
 
 
-def build(brain, *, on_progress=None, force: bool = False) -> dict:
+def _carried(live: list, on_progress=None) -> dict[str, list]:
+    """Files belonging to policy-approved notes, grouped by source ID."""
+    from . import attachments
+    from .securestore import StorageError
+    from .credentials import CredentialUnavailable
+    from .policy import PolicyError
+
+    out: dict[str, list] = {}
+    for folder in sorted({n.folder for n in live}):
+        try:
+            out.update(attachments.in_folder(folder))
+        except (StorageError, CredentialUnavailable, PolicyError):
+            raise
+        except Exception as e:
+            if on_progress:
+                on_progress(f"couldn't check {folder} for files ({type(e).__name__})")
+    return out
+
+
+def _attachment_rows(note, atts: list, brain, extract: bool, on_progress=None) -> list[Chunk]:
+    """One chunk per file she can put into words, titled after the file.
+
+    Without `extract` nothing is described or transcribed — only what is
+    already on disk is read. A first index run over a library of screenshots
+    must not quietly spend a vision call on each of them.
+    """
+    from . import attachments
+    from .securestore import StorageError
+    from .credentials import CredentialUnavailable
+    from .policy import PolicyError
+
+    rows = []
+    for att in atts:
+        try:
+            text = attachments.as_text(att, brain) if extract else attachments.known_text(att)
+        except (StorageError, CredentialUnavailable, PolicyError):
+            raise
+        except Exception as e:
+            if on_progress:
+                on_progress(f"couldn't read {att.name} ({type(e).__name__})")
+            continue
+        if not text.strip():
+            continue
+        for piece in split(text):
+            rows.append(Chunk(note.id, f"{att.name} (attached to {note.title})",
+                              note.folder, note.modified, piece, attachment=att.id))
+    return rows
+
+
+def build(brain, *, on_progress=None, force: bool = False, extract: bool = False) -> dict:
     """Embed every note that is new or has changed since the last run."""
     from . import markup, notes, workspace
 
@@ -126,6 +180,7 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
 
     policy.require_ready()
     live = library.user_notes()
+    carried = _carried(live, on_progress)
 
     fresh: dict[str, list[dict]] = {}
     pending: list[tuple[str, Chunk]] = []
@@ -133,7 +188,16 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
 
     for n in live:
         old = cached.get(n.id)
-        if old and old[0].get("modified") == n.modified and old[0].get("vector") is not None:
+        atts = carried.get(n.id, [])
+        att_rows = _attachment_rows(n, atts, brain, extract, on_progress)
+        # A note can be untouched while what she knows about the file hanging
+        # off it has changed — she looked at the picture yesterday answering
+        # something else. Reusing the cached chunks would lose that for good.
+        same_files = old is not None and (
+            {(c['attachment'], c['text']) for c in old if c.get('attachment')}
+            == {(c.attachment, c.text) for c in att_rows})
+        if (old and same_files and old[0].get("modified") == n.modified
+                and old[0].get("vector") is not None):
             fresh[n.id] = old
             reused += 1
             continue
@@ -142,6 +206,9 @@ def build(brain, *, on_progress=None, force: bool = False) -> dict:
         rows = []
         for piece in split(text):
             c = Chunk(n.id, privacy.redact(n.title), privacy.redact(n.folder), n.modified, piece)
+            rows.append(asdict(c))
+            pending.append((n.id, c))
+        for c in att_rows:
             rows.append(asdict(c))
             pending.append((n.id, c))
         fresh[n.id] = rows
@@ -190,9 +257,10 @@ def search(query: list[Passage], brain, *, limit: int = 8, read_budget: int = QU
     for i in best:
         row = rows[int(i)]
         nid = row['note_id']
-        if nid in seen:
+        key = (nid, row.get('attachment', ''))
+        if key in seen:
             continue
-        seen.add(nid)
+        seen.add(key)
         if reads >= read_budget:
             out.incomplete = out.truncated = True
             break
@@ -202,7 +270,16 @@ def search(query: list[Passage], brain, *, limit: int = 8, read_budget: int = QU
             if live is None or not policy.current().readable(live):
                 out.incomplete = True
                 continue
-            if live.modified != row['modified'] or live.title != row['title'] or live.folder != row['folder']:
+            if row.get('attachment'):
+                from . import attachments
+                current = attachments.on_note(nid, live.modified)
+                att = next((a for a in current if a.id == row['attachment']), None)
+                if att is None or live.modified != row['modified']:
+                    out.incomplete = True
+                    continue
+                chunk = Chunk(**{k: row[k] for k in ('note_id', 'title', 'folder', 'modified', 'text')},
+                              attachment=row['attachment'])
+            elif live.modified != row['modified'] or live.title != row['title'] or live.folder != row['folder']:
                 text = markup.to_text(notes.read_body(nid))
                 check = notes.get_note(nid)
                 if check != live or not policy.current().readable(live):

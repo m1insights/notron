@@ -10,15 +10,15 @@ from .securestore import read_json, write_json, EncryptedStore, StorageError, re
 
 
 def content_paths():
-    from . import index, undo, filer, reflect
-    return (index.CACHE, undo.STATE, filer.STATE, reflect.STATE)
+    from . import index, undo, filer, reflect, attachments
+    return (index.CACHE, undo.STATE, filer.STATE, reflect.STATE, attachments.CACHE)
 
 
 def require_ready() -> None:
     key = credentials.storage_key()  # before inspecting protected state
     from . import index
     from .migration import FILES
-    if any((LEGACY_ROOT / name).exists() for name in FILES):
+    if any((LEGACY_ROOT / name).exists() for name in FILES) or (LEGACY_ROOT / 'attachments').exists():
         raise StorageError("Legacy repository caches require explicit offline migration and acceptance.")
     for path in content_paths():
         reject_legacy(path)
@@ -65,6 +65,8 @@ def apply_policy() -> None:
         index._load()  # persists removal using full title/date-aware policy
     if undo.STATE.with_suffix('.enc').exists():
         undo._load()
+    from . import attachments
+    attachments.purge()
     from . import operations, requests
     if operations.PATH.exists():
         requests.current().purge_sources(all_content=previous.get('policy') != signature)
@@ -83,6 +85,8 @@ def reconcile() -> set[str]:
     policy.require_ready()
     snapshot = policy.current()
     live = {n.id for n in notes.list_all_notes() if snapshot.readable(n)}
+    from . import attachments
+    attachments.purge(live)
     removed = False
     for path, nested in ((index.CACHE, True), (undo.STATE, False)):
         payload = read_json(path)

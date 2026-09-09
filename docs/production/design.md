@@ -1,5 +1,7 @@
 # Shared production design and interface contract
 
+September 9 integration addendum: attachments use Nebius `openbmb/MiniCPM-V-4_5` for vision and on-device macOS Speech for audio. `Brain.see` requires a note-origin `Passage`; each attempt checks policy and credentials through the constrained provider transport and deadlines. Originals and descriptions/transcripts are encrypted; platform tools receive temporary private paths. Ignored/deleted sources are purged and legacy media is migrated only into encrypted recovery backups until explicit acceptance. Raw images can contain secrets that text redaction cannot detect before upload; this remains a disclosure/release-review requirement. P05 must meter vision and support explicitly purchased top-ups with an allowance hard stop.
+
 Spec version: 1. Date: 2026-09-04. Status: approved product direction; concrete implementation contracts for the seven plans.
 
 ## 1. Product boundary

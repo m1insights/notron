@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// Welcome → Permissions → How to talk to her → Start listening → handoff to
-/// the existing "Your notes" window. Chrome only — `OnboardingModel` does
-/// every Core.run bridge, exactly like `YourNotesView`/`LibraryModel`'s split.
+/// Welcome → Permissions → How to talk to her → Start listening → Pin her
+/// notes → handoff to the existing "Your notes" window. Chrome only —
+/// `OnboardingModel` does every Core.run bridge, exactly like
+/// `YourNotesView`/`LibraryModel`'s split.
 struct OnboardingView: View {
     @StateObject private var model = OnboardingModel()
     @Environment(\.openWindow) private var openWindow
@@ -19,8 +20,14 @@ struct OnboardingView: View {
                     PermissionsStep(model: model) { model.step = .talk }
                 case .talk:
                     TalkStep { model.step = .listening }
+                        // Learned here, on the screen that teaches how to
+                        // address her, so it is done before the user ever
+                        // types her name.
+                        .onAppear { model.teachTheSpellerHerName() }
                 case .listening:
-                    ListeningStep(model: model, finish: finish)
+                    ListeningStep(model: model) { model.step = .pins }
+                case .pins:
+                    PinStep(model: model, finish: finish)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -215,8 +222,11 @@ private struct TalkStep: View {
                     ExampleRow(glyph: row.glyph, name: row.name, example: row.example)
                 }
             }
-            Text("All three live in 🤖 NOTRON — already in your Notes.")
-                .font(DS.Font.caption).foregroundStyle(DS.Color.textFaint)
+            VStack(alignment: .leading, spacing: DS.Space.s1) {
+                Text("All three live in 🤖 NOTRON — already in your Notes.")
+                Text("We've taught your Mac her name, so it stops changing Notron to Norton.")
+            }
+            .font(DS.Font.caption).foregroundStyle(DS.Color.textFaint)
             Spacer()
             HStack {
                 Button("Skip", action: advance)
@@ -228,25 +238,39 @@ private struct TalkStep: View {
     }
 }
 
-private struct ExampleRow: View {
+private struct ExampleRow<Trailing: View>: View {
     let glyph: String
     let name: String
     let example: String
+    var dimmed: Bool = false
+    @ViewBuilder var trailing: () -> Trailing
+
+    /// A row the user has already dealt with steps back to the caption colour.
+    private var ink: Color { dimmed ? DS.Color.textDim : DS.Color.text }
 
     var body: some View {
-        HStack(alignment: .top, spacing: DS.Space.s3) {
-            Text(glyph).font(DS.Font.headline).foregroundStyle(DS.Color.text)
+        HStack(spacing: DS.Space.s3) {
+            Text(glyph).font(DS.Font.headline).foregroundStyle(ink)
                 .frame(width: 32, alignment: .leading)
             VStack(alignment: .leading, spacing: DS.Space.s1) {
-                Text(name).font(DS.Font.body).foregroundStyle(DS.Color.text)
+                Text(name).font(DS.Font.body).foregroundStyle(ink)
                 Text(example).font(DS.Font.caption).foregroundStyle(DS.Color.textDim)
             }
+            Spacer(minLength: DS.Space.s3)
+            trailing()
         }
         .padding(DS.Space.s4)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(DS.Color.surface)
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(DS.Color.hairline))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg))
+        .animation(DS.Motion.standard, value: dimmed)
+    }
+}
+
+extension ExampleRow where Trailing == EmptyView {
+    init(glyph: String, name: String, example: String) {
+        self.init(glyph: glyph, name: name, example: example) { EmptyView() }
     }
 }
 
@@ -256,7 +280,7 @@ private struct ExampleRow: View {
 /// until this button is pressed.
 private struct ListeningStep: View {
     @ObservedObject var model: OnboardingModel
-    let finish: () -> Void
+    let advance: () -> Void
 
     var body: some View {
         VStack(spacing: DS.Space.s5) {
@@ -265,12 +289,12 @@ private struct ListeningStep: View {
             Spacer()
             HStack {
                 if !model.listening {
-                    Button("I'll do this later", action: finish)
+                    Button("I'll do this later", action: advance)
                         .buttonStyle(.plain).font(DS.Font.caption).foregroundStyle(DS.Color.textDim)
                 }
                 Spacer()
-                PrimaryButton(model.listening ? "Set up your notes" : "Start listening") {
-                    model.listening ? finish() : model.startListening()
+                PrimaryButton(model.listening ? "Next" : "Start listening") {
+                    model.listening ? advance() : model.startListening()
                 }
                 .disabled(model.startingListener)
             }
@@ -310,6 +334,79 @@ private struct ListeningCard: View {
         .overlay(RoundedRectangle(cornerRadius: DS.Radius.lg).stroke(DS.Color.hairline))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.lg))
         .animation(DS.Motion.standard, value: model.listening)
+    }
+}
+
+// ------------------------------------------------------------- pin her notes
+
+/// Apple Notes pins a note to the top of every list that holds it — her folder
+/// *and* All iCloud — which is the whole answer to "these will get buried."
+/// But nothing in Notes' scripting surface can set that flag or read it, so
+/// this screen names the notes, opens them, and stops. It never says "pinned."
+struct PinStep: View {
+    @ObservedObject var model: OnboardingModel
+    let finish: () -> Void
+    @State private var showingOthers = false
+
+    private var suggested: [PinNote] { model.pins.filter(\.suggested) }
+    private var others: [PinNote] { model.pins.filter { !$0.suggested } }
+    /// `pin_guide()` hands them back suggested-first, so showing the rest is
+    /// showing the whole list — no second `ForEach`, no reordering.
+    private var shown: [PinNote] { showingOthers ? model.pins : suggested }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DS.Space.s4) {
+            VStack(alignment: .leading, spacing: DS.Space.s1) {
+                Text("Keep her notes at the top").font(DS.Font.headline)
+                    .foregroundStyle(DS.Color.text)
+                Text("Pinned notes sit above everything else in Notes — in her folder and in All iCloud. Apple doesn't let her pin them for you.")
+                    .font(DS.Font.caption).foregroundStyle(DS.Color.textDim)
+            }
+
+            ScrollView {
+                VStack(spacing: DS.Space.s3) {
+                    ForEach(shown) { PinRow(note: $0, model: model) }
+                    if !others.isEmpty {
+                        Button(showingOthers ? "Fewer" : "Her other notes (\(others.count))") {
+                            withAnimation(DS.Motion.standard) { showingOthers.toggle() }
+                        }
+                        .buttonStyle(.plain).font(DS.Font.caption)
+                        .foregroundStyle(DS.Color.accent)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+
+            Text("Notes comes to the front — Control-click the note in the list, then Pin Note.")
+                .font(DS.Font.label).foregroundStyle(DS.Color.textFaint)
+
+            HStack {
+                Button("I'll do this later", action: finish)
+                    .buttonStyle(.plain).font(DS.Font.caption).foregroundStyle(DS.Color.textDim)
+                Spacer()
+                PrimaryButton("Done", action: finish)
+            }
+        }
+        .onAppear { model.loadPins() }
+    }
+}
+
+private struct PinRow: View {
+    let note: PinNote
+    @ObservedObject var model: OnboardingModel
+
+    private var used: Bool { model.opened.contains(note.id) }
+
+    var body: some View {
+        ExampleRow(glyph: note.glyph, name: note.name, example: note.why, dimmed: used) {
+            if model.opening == note.id {
+                ProgressView().controlSize(.small)
+            } else {
+                Button(used ? "Show again" : "Show in Notes") { model.show(note) }
+                    .buttonStyle(.plain).font(DS.Font.caption)
+                    .foregroundStyle(DS.Color.accent)
+            }
+        }
     }
 }
 

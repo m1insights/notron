@@ -55,6 +55,12 @@ def human(dt: datetime, *, with_time: bool = True) -> str:
 def weekday_named(request: str) -> int | None:
     """The weekday the user actually said, as Monday=0, or None."""
     text = request.lower()
+    # A clear timing clause before the task takes precedence over dates *in*
+    # the task: "remind me tonight to book a table for Saturday" fires tonight.
+    # This is independent of the scheduler's model-supplied fields.
+    prefix = re.match(r'\s*remind\s+me\s+(.+?)\s+to\s+\S', text)
+    if prefix and re.search(r'\b(today|tonight|tomorrow|yesterday)\b', prefix[1]):
+        text = prefix[1]
     for i, name in enumerate(WEEKDAYS):
         if re.search(rf"\b{name}\b", text):
             return i

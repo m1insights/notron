@@ -53,8 +53,8 @@ Sits between first launch and the existing, already-built "Your notes" window
 step, not the first thing a fresh user sees.
 
 ```
-Welcome  →  Permissions (3 cards)  →  How to talk to her  →  Start listening  →  [existing] Your notes
- (new)         (designed, unbuilt)         (new)                  (new)              (built, reused)
+Welcome  →  Permissions (3 cards)  →  How to talk to her  →  Start listening  →  Pin her notes  →  [existing] Your notes
+ (new)         (designed, unbuilt)         (new)                  (new)             (new)              (built, reused)
 ```
 
 ### 1. Welcome — who she is (new)
@@ -127,7 +127,34 @@ one-shot OS dialog), but it is **not** the default-focused control; "Start
 listening" is.
 **Component (new):** **Listening status card** — see `DESIGN.md` addition below.
 
-### 5. Handoff → the existing "Your notes" window
+### 5. Pin her notes (new, 2026-09-03)
+**Purpose:** 📌 About Me, 📥 Ask Notron and 🧠 Brain Dump are the notes the user
+lives in, and they sit in a folder that will be one of dozens within a year.
+Apple Notes pins a note to the top of **every** list that contains it — the
+🤖 NOTRON folder *and* All iCloud — which is exactly the problem this solves.
+**The constraint that shapes the whole screen:** Notes exposes no `pinned`
+property to AppleScript or Shortcuts (checked 2026-09-03 against the sdef), and
+the only writable pin state is `ZISPINNED` in the TCC-protected iCloud SQLite
+store. Notron can never pin a note, and can never read whether one is pinned.
+So the screen instructs and opens; it never confirms.
+**Eye lands on:** three **Example rows — action variant**, one per suggested note.
+**Content:** "Keep her notes at the top" (`headline`) · "Pinned notes sit above
+everything else in Notes — in her folder and in All iCloud. Apple doesn't let
+her pin them for you." (`caption`) · three rows, each glyph + name + one line of
+why + a "Show in Notes" button · below them a disclosure, "Her other notes (6)",
+revealing ☀️ Today, 🗓️ This Week, 🌱 Take Care of Notron, 🧠 Memory, 📖 Lessons,
+📊 Log in the same row style · one `text-faint` line: "Notes will come to the
+front — Control-click the note in the list, then Pin Note."
+**Action:** "Show in Notes" per row runs `notron library open <id>`, which
+selects that note in the Notes list — where the Control-click has to happen.
+A used row dims and its button becomes "Show again." Primary "Done" → Your
+notes; de-emphasized "I'll do this later" is allowed (pure instruction, nothing
+left un-granted — same rule as §3 and §4).
+**Reachable later:** the same view is a standalone window, opened from the menu
+bar ("Pin her notes…"), because a skip on day one should be recoverable on day
+200. `notron pins` prints the same list in the terminal.
+
+### 6. Handoff → the existing "Your notes" window
 **Purpose:** don't rebuild what's already shipped
 (`docs/plans/2026-09-01-your-notes-setup.md`, built 2026-09-02). This flow ends
 by opening it, not by duplicating it.
@@ -137,9 +164,9 @@ onboarding sequence is marked complete (see the plan for the storage detail).
 
 ## Progress indicator
 A row of small dots above the card, one per step (Welcome · Permissions · Talk
-· Listen) — never a numbered "Step 2 of 4" wizard label, matching the research
-board's dot/bar convention over verbose stepper chrome. See `DESIGN.md`
-addition below for the exact spec.
+· Listen · Pin) — never a numbered "Step 2 of 5" wizard label, matching the
+research board's dot/bar convention over verbose stepper chrome. See
+`DESIGN.md` addition below for the exact spec.
 
 ## New components — append to `DESIGN.md`
 

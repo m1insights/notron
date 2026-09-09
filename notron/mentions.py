@@ -107,7 +107,13 @@ class Scanner:
 
         lib = library.load()
         out = []
-        for n in notes.list_all_notes():
+        live = notes.list_all_notes()
+        # An id that is no longer in the library is a deleted note, and it was
+        # only ever discarded by being seen again — so it sat in
+        # .notron/seen.json for ever, owing an answer nobody could give.
+        alive = {n.id for n in live}
+        self.pending &= alive
+        for n in live:
             if n.folder == workspace.FOLDER or lib.is_ignored(n):
                 # Hers, or the user's business: remembered as seen, never read.
                 # Un-ignoring later then means "read it from now", not "answer
@@ -137,16 +143,21 @@ class Scanner:
                 self._save()
                 continue
             asks = conversation.unanswered(body, ignore=(n.title,), require_tag=True)
-            if asks:
-                self.pending.add(n.id)
-            else:
-                self.pending.discard(n.id)
             store = requests.current()
             envelopes = store.observe(n.id, body, asks, source='mention',
                                       title=n.title, folder=n.folder, modified=n.modified,
                                       legacy_review=n.id in self.review)
             self.review.discard(n.id)
-            for q, envelope in zip(asks, envelopes):
+            # A media note cannot contain its own reply. The durable occurrence
+            # ledger proves delivery elsewhere without saving question text in
+            # scanner metadata or hiding a later identical question.
+            outstanding = [(q, envelope) for q, envelope in zip(asks, envelopes)
+                           if store.get(envelope.request_id).status != 'completed']
+            if outstanding:
+                self.pending.add(n.id)
+            else:
+                self.pending.discard(n.id)
+            for q, envelope in outstanding:
                 found.append(Mention(
                     note_id=n.id, title=n.title, folder=n.folder,
                     question=conversation.strip_tag(conversation.tagged_lines(q.text)),

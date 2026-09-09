@@ -40,6 +40,13 @@ this document must name it and the response process before public release.
 
 ## Limits and future work
 
+- **Media:** policy-approved images reach Nebius before their text can be redacted.
+  Do not promise secret detection inside images. Originals and cached words are
+  encrypted locally; platform tools use temporary private files, which are cleaned
+  on normal completion/failure but are not protected from privileged local software
+  or forensic recovery. On-device Speech and final signed permission behavior still
+  require P06 real-device qualification.
+
 - **Malicious content and model instructions:** prompts and model output are
   untrusted. They can be misleading and can influence answers and parameters of
   supported actions. Text signatures are not authenticated authorship. The
@@ -66,7 +73,8 @@ this document must name it and the response process before public release.
   mutation timeouts never automatically retry; uncertain outcomes require review.
   Remote iCloud/editor writers do not honor the local lock, so the final read/write
   race remains, including undetectable overwritten remote edits. Task 3 operation
-  reconciliation, Task 4 undo lifecycle and Task 6 worker ownership remain pending.
+  reconciliation, Task 4 undo lifecycle and Task 6 worker ownership are implemented
+  with synthetic verification; native qualification remains pending.
   Notron cannot promise rich-content fidelity or exactly-once external writes.
 - **Supply chain and updates:** locked Python versions and a dated advisory audit
   are partial evidence. Signed builds, notarization, secure update/rollback and

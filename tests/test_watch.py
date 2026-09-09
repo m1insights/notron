@@ -324,3 +324,240 @@ def test_dump_changed_after_settling_does_not_run(monkeypatch):
     monkeypatch.setattr(watch.notes, 'read_body', lambda nid: next(reads))
     watcher.check_dump()
     assert requests.current().pending()[0].status == 'prepared'
+# 2026-09-05: a question tagged in a 25k-character story bible asked about "my
+# first scene idea written at the end of this note". She was handed the first
+# 4,000 characters of it, so she answered that she could not find any such idea.
+def test_a_note_she_is_tagged_in_arrives_whole():
+    body = markup.render("Book idea", "chapter one\n\n@notron what do you think\n\nchapter two")
+    seen = watch.here_text(body)
+    assert "chapter one" in seen and "chapter two" in seen
+
+
+def test_scanner_persists_the_full_note_context_with_its_revision(monkeypatch):
+    from notron import mentions, notes, requests
+    note = notes.Note('n1', 'Story', 'Notes', 'today')
+    body = markup.render(note.title, 'opening ' * 2000 + '\n\n@notron review this\n\nMY ENDING')
+    monkeypatch.setattr(notes, 'list_all_notes', lambda: [note])
+    monkeypatch.setattr(notes, 'read_body', lambda nid: body)
+    envelope = mentions.Scanner().scan()[0].envelope
+    persisted = requests.current().get(envelope.request_id).envelope
+    assert 'MY ENDING' in persisted.here
+    assert len(persisted.here) > 4000
+    assert persisted.source_revision == requests.revision(body)
+
+
+def test_a_note_too_big_to_send_whole_still_shows_her_how_it_ends():
+    filler = "\n".join(f"middle line {i}" for i in range(9_000))
+    body = markup.render("ASCENSION", f"@notron is my ending any good\n\n{filler}\n\nMY FIRST SCENE IDEA")
+    seen = watch.here_text(body, "@notron is my ending any good", budget=4_000)
+    assert "MY FIRST SCENE IDEA" in seen
+    assert "@notron is my ending any good" in seen
+    assert len(seen) <= 4_000 + len(watch.ELIDED) * 2
+
+
+def test_the_lines_around_the_tag_survive_the_trim():
+    top = "\n".join(f"opening line {i}" for i in range(3_000))
+    bottom = "\n".join(f"closing line {i}" for i in range(3_000))
+    body = markup.render("Long note", f"{top}\n\nBURIED QUESTION @notron\n\n{bottom}")
+    seen = watch.here_text(body, "BURIED QUESTION @notron", budget=6_000)
+    assert "BURIED QUESTION @notron" in seen
+    assert "opening line 0" in seen and "closing line 2999" in seen
+    assert watch.ELIDED in seen
+
+
+def test_the_files_hanging_off_a_tagged_note_travel_with_the_question(monkeypatch):
+    """She was tagged in a note holding a voice memo. The body says nothing
+    about it — Notes keeps attachments out of the HTML — so unless the sweep
+    asks the second question, the model never learns the file exists."""
+    from notron import attachments, mentions, requests
+
+    w = watch.Watcher(brain=None, settle=0)
+    from notron.notes import Note
+    note = Note('n1', 'New Recording', 'Notes', 'Wednesday, 2 September 2026 at 21:30:00')
+    body = markup.render(note.title, "@notron what's in this recording?")
+    monkeypatch.setattr(watch.notes, 'list_all_notes', lambda: [note])
+    monkeypatch.setattr(watch.notes, "read_body", lambda note_id: body)
+    monkeypatch.setattr(attachments, "on_note", lambda note_id, modified="": [
+        attachments.Attachment(id="a1", name="recording.m4a", kind="audio")])
+
+    seen = {}
+
+    def fake_run(envelope, **kw):
+        seen.update(kw)
+        assert requests.current().get(envelope.request_id).status == 'prepared'
+        from notron.state import State
+        return State(request=envelope.text)
+
+    monkeypatch.setattr(watch.graph, "run_request", fake_run)
+    w.sweep_mentions()      # first sight — she waits for the typing to settle
+    w.sweep_mentions()
+    assert [(a.kind, a.name) for a in seen["carried"]] == [("audio", "recording.m4a")]
+
+
+# ------------------- a question answered somewhere else is still answered
+
+def _picture_note(monkeypatch, mentions, question="what is in this picture?",
+                  modified="monday"):
+    from notron import markup, library
+    lib = library.load()
+    lib.decided.add('p1')
+    library.save(lib)
+
+    class Note:
+        id, title, folder = "p1", "Holiday", "Notes"
+
+    Note.modified = modified        # typing in a note moves its timestamp
+    body = markup.render("Holiday", f"@notron {question}")
+    monkeypatch.setattr(mentions.notes, "list_all_notes", lambda: [Note()])
+    monkeypatch.setattr(mentions.notes, "read_body", lambda i: body)
+    return Note
+
+
+def _complete_occurrence(mention):
+    from notron import requests
+    store = requests.current()
+    assert store.claim(mention.envelope.request_id)
+    store.finish(mention.envelope.request_id)
+
+
+def test_a_note_she_answered_elsewhere_stops_being_re_read(tmp_path, monkeypatch):
+    """A note holding a picture can never carry her receipt, so it stayed
+    `pending` forever — and `scan` re-reads every pending note on every sweep.
+    Live on 2026-09-06 that was a 1.8MB AppleScript read every twenty seconds,
+    for the life of the note, against the one app that serves one request at a
+    time."""
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    _picture_note(monkeypatch, mentions)
+
+    s = mentions.Scanner()
+    found = s.scan()
+    assert len(found) == 1 and s.pending == {"p1"}
+
+    _complete_occurrence(found[0])
+    assert s.scan() == [], "she has already answered this one"
+    assert s.pending == set(), "so the note must stop being read every sweep"
+    assert found[0].question not in mentions.STATE.read_text()
+
+
+def test_a_new_question_in_that_same_note_is_still_answered(tmp_path, monkeypatch):
+    """The first version of this remembered the *note*, not the question, so
+    every later question in a note holding a picture was silently ignored for
+    good."""
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    _picture_note(monkeypatch, mentions, "what is in this picture?")
+
+    s = mentions.Scanner()
+    _complete_occurrence(s.scan()[0])
+    assert s.scan() == []
+
+    _picture_note(monkeypatch, mentions, "and when was it taken?", modified="tuesday")
+    assert [m.question for m in s.scan()] == ["and when was it taken?"]
+
+
+def test_identical_question_after_observed_removal_is_a_new_occurrence(monkeypatch):
+    from notron import mentions
+    _picture_note(monkeypatch, mentions)
+    scanner = mentions.Scanner()
+    first = scanner.scan()[0]
+    _complete_occurrence(first)
+    scanner.scan()
+    _picture_note(monkeypatch, mentions, modified='tuesday')
+    monkeypatch.setattr(mentions.notes, 'read_body', lambda nid: '<div>Holiday</div>')
+    assert scanner.scan() == []
+    _picture_note(monkeypatch, mentions, modified='wednesday')
+    second = scanner.scan()[0]
+    assert second.question == first.question
+    assert second.envelope.request_id != first.envelope.request_id
+
+
+@pytest.mark.parametrize('completed', [False, True])
+def test_answer_success_requires_a_complete_receipt(monkeypatch, completed):
+    from notron import requests
+    from notron.state import State
+    envelope = requests.create('question', source='mention', note_id='n1')
+    state = State(request='question', receipt_complete=completed)
+    seen = []
+    watcher = watch.Watcher(brain=None)
+    monkeypatch.setattr(watcher, '_carried', lambda nid, modified: seen.append(nid) or [])
+    monkeypatch.setattr(watch.graph, 'run_request', lambda *args, **kwargs: state)
+    assert watcher._answer('question', title='Ideas', folder='Notes', after=0,
+                           note_id='n1', envelope=envelope) is completed
+    assert seen == ['n1']
+
+
+def test_she_does_not_answer_it_again_after_a_restart(tmp_path, monkeypatch):
+    """In-memory only, every restart appended the same answer to 📥 Ask Notron
+    again — and paid for a graph run to do it."""
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    _picture_note(monkeypatch, mentions)
+
+    s = mentions.Scanner()
+    _complete_occurrence(s.scan()[0])
+
+    after_restart = mentions.Scanner()
+    after_restart.prime()
+    assert after_restart.scan() == []
+
+
+def test_a_note_that_no_longer_exists_is_dropped_from_the_to_do_list(tmp_path, monkeypatch):
+    """`pending` only ever discarded ids it saw again, so an id for a deleted
+    note — or one left by an old test — stayed in .notron/seen.json for ever."""
+    from notron import mentions
+    monkeypatch.setattr(mentions, "STATE", tmp_path / "seen.json")
+    _picture_note(monkeypatch, mentions)
+
+    s = mentions.Scanner()
+    s.pending = {"p1", "a-note-that-was-deleted"}
+    s.changed()
+    assert s.pending == {"p1"}
+
+
+# --- the log answers "why is she blind" ------------------------------------
+
+def test_the_listener_log_names_an_app_it_cannot_read(monkeypatch):
+    """`notron permissions` reports the terminal's grant. The listener is a
+    different process with a different one, and on 2026-09-06 it had none —
+    zero calendars, zero events, no error, four hundred log lines saying
+    "125 chars of real commitments"."""
+    from notron import watch as watch_mod
+    from notron.permissions import Check
+
+    said = []
+    w = watch_mod.Watcher.__new__(watch_mod.Watcher)
+    w.on_event = said.append
+    w._report_blind_spots(checker=lambda: [
+        Check("Calendar", False, "has not been asked yet", "System Settings → Calendars"),
+        Check("Reminders", True, "full access", ""),
+    ])
+    joined = "\n".join(said)
+    assert "Calendar" in joined and "has not been asked yet" in joined
+    assert "System Settings → Calendars" in joined
+    assert "Reminders" not in joined, "a working app is not worth a warning"
+
+
+def test_a_fully_permitted_listener_says_nothing_at_startup(monkeypatch):
+    from notron import watch as watch_mod
+    from notron.permissions import Check
+
+    said = []
+    w = watch_mod.Watcher.__new__(watch_mod.Watcher)
+    w.on_event = said.append
+    w._report_blind_spots(checker=lambda: [Check("Calendar", True, "full access", ""),
+                                           Check("Reminders", True, "full access", "")])
+    assert said == []
+
+
+def test_a_permission_check_that_explodes_does_not_stop_the_listener_starting():
+    from notron import watch as watch_mod
+
+    def boom():
+        raise RuntimeError("no osascript")
+
+    said = []
+    w = watch_mod.Watcher.__new__(watch_mod.Watcher)
+    w.on_event = said.append
+    w._report_blind_spots(checker=boom)
+    assert any("couldn't check permissions" in m for m in said)

@@ -72,6 +72,7 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
         reply_to: tuple | None = None, here: str = "", source: str = "",
         source_note_id: str | None = None, source_modified: str = "",
         request_id: str | None = None,
+        carried: list | None = None,
         on_node: Callable[[str, State], None] | None = None) -> State:
     """Walk the graph once.
 
@@ -79,7 +80,8 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
     underneath something specific rather than at the end of the Ask note.
     `here` is the note she was tagged in, which is context she gets for free.
     `source` is the exact turn she was tagged in, tags intact — what the Filer
-    copies and ticks.
+    copies and ticks. `carried` is every file hanging off that note, which the body
+    cannot tell her about.
     """
     from . import policy, requests
     policy.require_ready()
@@ -89,13 +91,13 @@ def run(request: str, *, brain, trigger: str = "manual", dry_run: bool = False,
                                reply_to=reply_to, here=here, source_text=source,
                                source_modified=source_modified)
     return run_request(envelope, brain=brain, dry_run=dry_run,
-                       on_node=on_node, trigger=trigger)
+                       on_node=on_node, trigger=trigger, carried=carried)
 
 
 @recovery.serialized
 def run_request(envelope, *, brain, dry_run: bool = False,
                 on_node: Callable[[str, State], None] | None = None,
-                trigger: str | None = None) -> State:
+                trigger: str | None = None, carried: list | None = None) -> State:
     """Commit identity and claim admission before the first graph node.
 
     Existing completed/uncertain requests are never silently replayed. The
@@ -110,7 +112,7 @@ def run_request(envelope, *, brain, dry_run: bool = False,
                   trigger=trigger or ('notes' if envelope.source in {'ask', 'mention'} else envelope.source),
                   reply_to=envelope.reply_to, here=envelope.here, source=envelope.source_text,
                   source_note_id=envelope.note_id, source_modified=envelope.source_modified,
-                  source_revision=envelope.source_revision)
+                  source_revision=envelope.source_revision, carried=list(carried or []))
     record = store.get(envelope.request_id)
     resumed = recovery.latest(envelope, ORDER) if recovery.available(record) else None
     if record.status != 'prepared' and resumed is None:

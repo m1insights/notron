@@ -18,7 +18,7 @@ from .securestore import EncryptedStore, StorageError, private_directory
 
 FILES = ('index.json', 'vectors.npy', 'index.json.unprepared', 'vectors.npy.unprepared',
          'undo.json', 'filer.json', 'reflect.json', 'usage.json', 'seen.json',
-         'mood.json', 'listen.log', 'morning.log')
+         'mood.json', 'listen.log', 'morning.log', 'actions.json')
 
 
 class MigrationError(StorageError):
@@ -27,6 +27,28 @@ class MigrationError(StorageError):
 
 def _digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _valid_name(name: str) -> bool:
+    return (name in FILES or name == 'attachments' or
+            (name.startswith('attachments/') and len(Path(name).parts) == 2
+             and Path(name).name not in ('.', '..')))
+
+
+def _backup_name(name: str) -> str:
+    return 'attachment-' + _digest(name.encode()) if name.startswith('attachments/') else name
+
+
+def _legacy_bytes(path: Path, name: str) -> bytes:
+    if path.is_symlink() or (name.startswith('attachments/') and path.parent.is_symlink()):
+        raise MigrationError('Unsafe legacy cache path.')
+    if name == 'attachments':
+        if not path.is_dir():
+            raise MigrationError('Unsafe legacy attachments directory.')
+        return b''
+    if not path.is_file():
+        raise MigrationError('Unsupported legacy cache entry.')
+    return path.read_bytes()
 
 
 def _roots(source: Path, target: Path):
@@ -44,7 +66,7 @@ def _validate(raw: dict[str, bytes]) -> dict:
     parsed = {}
     try:
         for name, content in raw.items():
-            if '.json' in name:
+            if '.json' in name and not name.startswith('attachments/'):
                 value = json.loads(content)
                 if not isinstance(value, dict): raise ValueError()
                 parsed[name] = value
@@ -88,6 +110,12 @@ def migrate(source: Path, target: Path, key: bytes) -> dict:
         path = source / name
         if path.is_symlink(): raise MigrationError('Unsafe legacy cache path.')
         if path.exists(): raw[name] = path.read_bytes()
+    media = source / 'attachments'
+    if media.exists() or media.is_symlink():
+        raw['attachments'] = _legacy_bytes(media, 'attachments')
+        for path in sorted(media.iterdir()):
+            name = 'attachments/' + path.name
+            raw[name] = _legacy_bytes(path, name)
     if not raw: raise MigrationError('No recognized legacy caches found.')
     undo = _validate(raw)  # validate everything before publishing any content
     from .worker_migration import legacy_summary
@@ -123,16 +151,17 @@ def migrate(source: Path, target: Path, key: bytes) -> dict:
     private_directory(backup)
     recovery = EncryptedStore(backup, key)
     for name, data in raw.items():
-        path = backup / (name + ".enc")
+        backup_name = _backup_name(name)
+        path = backup / (backup_name + ".enc")
         if path.exists():
-            if path.is_symlink() or recovery.read(name) != data:
+            if path.is_symlink() or recovery.read(backup_name) != data:
                 raise MigrationError('Recovery backup differs; originals preserved.')
         else:
-            recovery.write(name, data)
-        os.chmod(source / name, 0o600)
+            recovery.write(backup_name, data)
+        os.chmod(source / name, 0o700 if name == 'attachments' else 0o600)
     private_directory(source)
     payloads = {'index': {'outbound_version': 1, 'notes': {}}, 'undo': undo, 'filer': {}, 'reflect': {},
-                'worker-history': worker_history}
+                'worker-history': worker_history, 'attachments': {}}
     outputs = {}
     for name, value in payloads.items():
         data = json.dumps(value).encode()
@@ -167,13 +196,14 @@ def accept(source: Path, target: Path, key: bytes) -> None:
         return
     recovery = EncryptedStore(target / 'migration-backup', key)
     for name, digest in manifest['files'].items():
-        if name not in FILES: raise MigrationError('Invalid migration inventory.')
-        backup = target / 'migration-backup' / (name + '.enc')
+        if not _valid_name(name): raise MigrationError('Invalid migration inventory.')
+        backup_name = _backup_name(name)
+        backup = target / 'migration-backup' / (backup_name + '.enc')
         original = source / name
-        if backup.is_symlink() or _digest(recovery.read(name)) != digest:
+        if backup.is_symlink() or _digest(recovery.read(backup_name)) != digest:
             raise MigrationError('Recovery backup validation failed.')
         if original.exists():
-            if original.is_symlink() or _digest(original.read_bytes()) != digest:
+            if original.is_symlink() or _digest(_legacy_bytes(original, name)) != digest:
                 raise MigrationError('Legacy cache changed since migration; originals preserved.')
         elif manifest['status'] != 'accepting':
             raise MigrationError('Legacy cache disappeared before acceptance.')
@@ -182,8 +212,15 @@ def accept(source: Path, target: Path, key: bytes) -> None:
             raise MigrationError('Migrated content changed before acceptance.')
     manifest['status'] = 'accepting'
     store.write('migration-manifest', json.dumps(manifest).encode())
+    media = source / 'attachments'
+    if 'attachments' in manifest['files'] and media.exists():
+        if any('attachments/' + p.name not in manifest['files'] for p in media.iterdir()):
+            raise MigrationError('Legacy attachments changed since migration; originals preserved.')
     for name in manifest['files']:
-        durable_unlink(source / name)
+        if name != 'attachments':
+            durable_unlink(source / name)
+    if 'attachments' in manifest['files'] and media.exists():
+        media.rmdir()
     manifest['status'] = 'accepted'
     store.write('migration-manifest', json.dumps(manifest).encode())
     _finish_acceptance(target, manifest)
@@ -193,7 +230,7 @@ def _finish_acceptance(target: Path, manifest: dict) -> None:
     # Acceptance explicitly retires recovery content as well as plaintext originals.
     # The authenticated accepted marker makes interruption during cleanup resumable.
     for name in manifest['files']:
-        if name not in FILES: raise MigrationError('Invalid migration inventory.')
-        durable_unlink(target / 'migration-backup' / (name + '.enc'))
+        if not _valid_name(name): raise MigrationError('Invalid migration inventory.')
+        durable_unlink(target / 'migration-backup' / (_backup_name(name) + '.enc'))
     durable_unlink(target / 'migration-incomplete.enc')
     atomic_write_json(target / 'migration.json', {'version': 1, 'status': 'accepted'})

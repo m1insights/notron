@@ -74,6 +74,8 @@ def latest(envelope, order):
         data['writes'] = [Write(**w) for w in data['writes']]
         data['write_targets'] = {k: Write(**v) for k, v in data['write_targets'].items()}
         data['context'] = [Passage(**p) for p in data['context']]
+        from .attachments import Attachment
+        data['carried'] = [Attachment(**a) for a in data.get('carried', [])]
         data['system_sources'] = {k: Passage(**v) for k, v in data['system_sources'].items()}
         if data['reply_to']:
             data['reply_to'] = tuple(data['reply_to'])

@@ -63,3 +63,43 @@ def test_a_reminder_can_be_found_by_what_the_user_actually_called_it():
     ]
     assert reminders.find_open("call the pharmacy", caller=_fake(payload))[0].id == "x-1"
     assert reminders.find_open("book a flight", caller=_fake(payload)) == []
+
+
+def test_a_failed_reminder_save_says_what_macos_actually_said():
+    import pytest
+    from notron import eventkit
+    def caller(_body, **kw):
+        return {"error": "save failed", "why": "Reminders access denied"}
+    with pytest.raises(eventkit.EventKitError, match="Reminders access denied"):
+        reminders.create("x", target_id="inbox-id", caller=caller)
+
+
+def test_a_failed_tick_says_what_macos_actually_said():
+    import pytest
+    def caller(_body, **kw):
+        return {"error": "save failed", "why": "Reminders access denied"}
+    with pytest.raises(LookupError, match="Reminders access denied"):
+        reminders.complete("x-1", caller=caller)
+
+
+def test_both_write_scripts_carry_the_macos_reason_home():
+    from notron import eventkit
+    for script in (reminders._CREATE, reminders._COMPLETE):
+        assert "reason(err)" in script
+    assert "localizedDescription" in eventkit.PRELUDE
+
+
+def test_no_script_here_builds_its_own_date_formatter():
+    from notron import eventkit
+
+    for script in (reminders._OPEN, reminders._CREATE, reminders._COMPLETE):
+        assert "NSDateFormatter" not in script, "build it with pinned() instead"
+    assert "en_US_POSIX" in eventkit.PRELUDE
+
+
+def test_a_due_date_is_built_on_the_same_pinned_calendar():
+    """`NSCalendar.currentCalendar` is the region setting again, wearing a hat:
+    the components it hands back are years and months in whatever calendar the
+    Mac is set to, and the reminder lands on the wrong day."""
+    for script in (reminders._OPEN, reminders._CREATE):
+        assert "currentCalendar" not in script, "build it with gregorian() instead"

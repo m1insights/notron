@@ -328,3 +328,47 @@ def test_crashed_write_retains_actual_preimage_until_verified_reconciliation(mon
     assert ex.apply_write(write).ok
     assert ex_mod.undo.peek('n1').after_revision == ex_mod.revision(live['body'])
     assert len(live['writes']) == 1
+
+
+# --- a failed action says what macOS said ----------------------------------
+
+def test_a_failed_action_reports_what_macos_said_not_a_python_class_name(monkeypatch):
+    """It used to read "event app said no (EventKitError)" whether the calendar
+    was denied, read-only or gone. Only the first of those has a fix the user
+    can carry out, and only if she says which one it is."""
+    from datetime import datetime, timedelta
+
+    from notron import eventkit
+    from notron.state import Action
+
+    soon = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT14:00")
+    ex = ex_mod.Executor(audit=False)
+    monkeypatch.setattr(ex_mod.reminders, 'resolve_targets', lambda *a, **kw: [{'id': 'inbox', 'title': 'Inbox'}])
+    boom = eventkit.EventKitError(
+        "could not create the event: save failed — Calendar access denied")
+
+    def explode(_action):
+        raise boom
+
+    ex._perform = explode
+    result = ex.do(Action(kind="reminder", op="create", title="Dentist", when=soon))
+    assert result.ok is False
+    assert "Calendar access denied" in result.reason
+    assert "EventKitError" not in result.reason
+
+
+def test_a_failure_message_stays_short_enough_to_read_in_a_note(monkeypatch):
+    from datetime import datetime, timedelta
+
+    from notron.state import Action
+
+    soon = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%dT14:00")
+    ex = ex_mod.Executor(audit=False)
+    monkeypatch.setattr(ex_mod.reminders, 'resolve_targets', lambda *a, **kw: [{'id': 'inbox', 'title': 'Inbox'}])
+
+    def explode(_action):
+        raise RuntimeError("x" * 5000)
+
+    ex._perform = explode
+    result = ex.do(Action(kind="reminder", op="create", title="Call back", when=soon))
+    assert len(result.reason) <= ex_mod.MAX_REASON_CHARS

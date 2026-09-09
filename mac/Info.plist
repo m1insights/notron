@@ -22,6 +22,17 @@
 	<true/>
 	<key>NSSiriUsageDescription</key>
 	<string>Notron uses Siri so you can ask it questions out loud.</string>
+	<!-- Without these three strings macOS never shows a permission prompt, and
+	     EventKit answers a denied read with zero calendars and no error — a
+	     blocked calendar that looks exactly like a free week. A script cannot
+	     ask on its own behalf (docs/spikes/2026-09-06-eventkit-request-under-
+	     osascript.md), so the app is the only place the question can be put. -->
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Notron reads your calendar so it can plan around the day you actually have, and adds events you ask it to add. It never moves or deletes anything.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Notron reads your reminders so it knows what is still outstanding, and can add one or tick one off when you ask. It never deletes a reminder.</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Notron reads and writes your notes in the Apple Notes app. That is where you talk to it.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 m1labs</string>
 </dict>

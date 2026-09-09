@@ -91,3 +91,146 @@ def test_an_unusable_start_is_refused_before_anything_is_saved():
 
     with pytest.raises(ValueError):
         cal.create("X", start_iso="next Thursday", caller=lambda *a, **kw: {})
+
+
+def test_a_failed_save_says_what_macos_actually_said():
+    """`err` is filled in by EventKit and was being thrown away, so every failure
+    read as the same four words. The user needs to read "Calendar access denied"."""
+    def caller(_body, **kw):
+        return {"error": "save failed", "why": "Calendar access denied"}
+    import pytest
+    from notron import eventkit
+    with pytest.raises(eventkit.EventKitError, match="Calendar access denied"):
+        cal.create("x", start_iso="2026-09-07T11:00", end_iso="2026-09-07T12:00",
+                   target_id="home-id", caller=caller)
+
+
+def test_the_create_script_carries_macos_reason_home():
+    from notron import eventkit
+    assert "reason(err)" in cal._CREATE
+    assert "localizedDescription" in eventkit.PRELUDE
+
+
+def test_no_script_here_builds_its_own_date_formatter():
+    """`NSDateFormatter` with a fixed `dateFormat` and no locale uses the Mac's
+    region. Under a Buddhist or Japanese region setting `yyyy` is not the year we
+    mean, so `stringFromDate` writes a date nobody asked for and `dateFromString`
+    returns nil — a wrong date, or a save that fails for no visible reason. This
+    Mac happens to be en_US/gregorian; the next one is not our call.
+
+    So there is exactly one formatter constructor, in `eventkit.DATES`, and this
+    test is what stops a sixth script quietly growing its own."""
+    from notron import eventkit
+
+    for script in (cal._WINDOW, cal._CREATE, cal._NAMES):
+        assert "NSDateFormatter" not in script, "build it with pinned() instead"
+    assert "en_US_POSIX" in eventkit.PRELUDE
+    assert "gregorian" in eventkit.PRELUDE
+
+
+# --- all-day events --------------------------------------------------------
+#
+# `_WINDOW` never read `isAllDay`, so "Team offsite" — a whole day blocked out —
+# rendered as "- 00:00 Team offsite", which reads as a midnight meeting. And a
+# multi-day event appeared only on the day it started, so the middle of a
+# week-long trip looked free.
+
+ALL_DAY = [
+    {"calendar": "Home", "title": "Team offsite", "start": "2026-09-03T00:00",
+     "end": "2026-09-04T00:00", "location": "", "all_day": True},
+]
+
+THREE_DAYS = [
+    {"calendar": "Home", "title": "Lisbon", "start": "2026-09-03T00:00",
+     "end": "2026-09-06T00:00", "location": "", "all_day": True},
+]
+
+
+def test_an_all_day_event_is_not_an_event_at_midnight():
+    text = cal.brief(on=datetime(2026, 9, 3), caller=_fake(ALL_DAY))
+    assert "All day — Team offsite" in text
+    assert "00:00" not in text
+
+
+def test_an_all_day_event_shows_in_the_week_without_a_time():
+    text = cal.week(caller=_fake(ALL_DAY), on=datetime(2026, 9, 3))
+    assert "All day — Team offsite" in text
+    assert "00:00" not in text
+
+
+def test_a_three_day_event_is_on_all_three_days_of_the_week():
+    text = cal.week(caller=_fake(THREE_DAYS), on=datetime(2026, 9, 3))
+    assert text.count("Lisbon") == 3, text
+
+
+def test_a_multi_day_event_still_shows_on_a_day_it_did_not_start():
+    """The middle of a week-long trip must not look like a free day."""
+    text = cal.brief(on=datetime(2026, 9, 4), caller=_fake(THREE_DAYS))
+    assert "Lisbon" in text
+
+
+def test_a_timed_event_is_unchanged_by_any_of_this():
+    text = cal.brief(on=datetime(2026, 9, 3), caller=_fake(SAMPLE))
+    assert "- 09:30 Standup" in text
+    assert "All day" not in text
+
+
+def test_an_all_day_event_that_ends_the_next_midnight_is_one_day_not_two():
+    """EventKit's end for a single all-day event is the following midnight.
+    Counting that as a second day puts a phantom offsite on tomorrow."""
+    text = cal.week(caller=_fake(ALL_DAY), on=datetime(2026, 9, 3))
+    assert text.count("Team offsite") == 1, text
+
+
+# --- "today" means today, not "from now on" --------------------------------
+
+def test_todays_brief_still_shows_this_mornings_meetings():
+    """`brief()` asked for a window starting at *now*. Run at 10:00 the 09:00
+    meeting the user had just walked out of was simply not in the day, so
+    `notron agenda` and the morning routine under-reported it."""
+    asked = {}
+
+    def caller(body, **kw):
+        asked["body"] = body
+        asked["data"] = kw["data"]
+        return SAMPLE
+
+    text = cal.brief(on=datetime(2026, 9, 3, 16, 0), caller=caller)
+    assert "Standup" in text, "a 09:30 meeting is still part of today at 16:00"
+    from datetime import timezone
+    assert asked["data"]["start"] == datetime(2026, 9, 3, tzinfo=timezone.utc).timestamp()
+    assert "2026-09-03" not in asked["body"], "dates travel as data, never executable source"
+
+
+def test_the_far_end_of_the_window_is_still_measured_from_now():
+    """Only the near end moves. Reaching further back than today would make
+    every brief re-read history it does not use."""
+    asked = {}
+
+    def caller(body, **kw):
+        asked["data"] = kw["data"]
+        return []
+
+    cal.brief(on=datetime(2026, 9, 3, 16, 0), caller=caller)
+    from datetime import timezone
+    assert asked["data"]["end"] == datetime(2026, 9, 5, 16, tzinfo=timezone.utc).timestamp()
+
+
+def test_midnight_window_preserves_the_captured_timezone_across_dst():
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo("America/New_York")
+    seen = {}
+
+    def caller(body, **kw):
+        seen.update(kw["data"])
+        return []
+
+    cal.window(on=datetime(2026, 11, 1, 16, tzinfo=zone), days=2,
+               from_midnight=True, caller=caller)
+    assert seen["start"] == datetime(2026, 11, 1, tzinfo=zone).timestamp()
+    assert seen["end"] == datetime(2026, 11, 3, 16, tzinfo=zone).timestamp()
+
+
+def test_all_day_events_keep_the_identity_used_for_conflict_confirmation():
+    event = cal.window(caller=_fake([{**ALL_DAY[0], "id": "offsite-id"}]))[0]
+    assert event.all_day and event.id == "offsite-id"

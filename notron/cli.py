@@ -120,7 +120,8 @@ def cmd_index(args):
     print("\n  Reading your notes…")
     from .brain import batch_deadline
     with batch_deadline():
-        stats = index.build(_brain(), on_progress=lambda m: print(f"  {m}"), force=args.rebuild)
+        stats = index.build(_brain(), on_progress=lambda m: print(f"  {m}"), force=args.rebuild,
+                            read_attachments=args.attachments)
     print(f"\n  Indexed {stats['notes']} notes "
           f"({stats['embedded']} passages embedded, {stats['reused']} already current)\n")
 
@@ -369,6 +370,28 @@ def cmd_library(args):
     print()
 
 
+def cmd_pins(args):
+    """Which of her notes to pin in Apple Notes, and why.
+
+    She cannot pin them herself — Notes exposes no `pinned` property to any
+    script — so this command names them and the user Control-clicks. The
+    Mac app reads `--json`; a person reads the plain list.
+    """
+    import json
+
+    rows = workspace.pin_guide()
+    if args.json:
+        print(json.dumps(rows))
+        return
+
+    print("\n  Pin these in Notes and they'll sit above everything else —")
+    print("  in her folder and in All iCloud. Control-click a note → Pin Note.\n")
+    for row in rows:
+        mark = "★" if row["suggested"] else " "
+        print(f"  {mark} {row['title']} — {row['why']}")
+    print("\n  ★ = start with these three.\n")
+
+
 def cmd_rewrite(args):
     """Where a brand-new note starts: ask each time, always clean up in place, or never."""
     if args.recover:
@@ -442,6 +465,10 @@ def main(argv=None):
 
     ix = sub.add_parser("index", help="teach Notron your notes (run after adding a lot)")
     ix.add_argument("--rebuild", action="store_true", help="re-embed everything from scratch")
+    ix.add_argument("--attachments", action="store_true",
+                    help="also look at pictures and listen to recordings (costs a "
+                         "vision call per picture; without it only what she has "
+                         "already read is indexed)")
     ix.set_defaults(fn=cmd_index)
 
     lb = sub.add_parser("library", help="which notes she may file into, and which she never reads")
@@ -459,6 +486,10 @@ def main(argv=None):
                     help="with peek: show a note even if its body looks like credentials")
     lb.add_argument("--reset", action="store_true", help="explicitly clear permissions; zero readable notes and zero homes")
     lb.set_defaults(fn=cmd_library)
+
+    pn = sub.add_parser("pins", help="which of her notes to pin in Apple Notes")
+    pn.add_argument("--json", action="store_true", help="JSON for the Mac app")
+    pn.set_defaults(fn=cmd_pins)
 
     rw = sub.add_parser("rewrite", help="how new notes handle 'clean this up' by default")
     rw_choice = rw.add_mutually_exclusive_group(required=True)

@@ -21,14 +21,19 @@ bare one gets the standard library.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime, time, timedelta
 
 from . import eventkit
 from .when import human, parse
 
 MAX_IN_PROMPT = 30
 MAX_WINDOW_DAYS = 31
+MAX_DAYS = 14
 
+# The bounds are computed in Python and handed over as text, not as an offset
+# from `now`. `dateWithTimeIntervalSinceNow(0)` is what made `brief()` under-
+# report the day: run at 10:00 it started the window at 10:00, and the 09:00
+# meeting the user had just come out of was simply not there.
 _WINDOW = """
 if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
@@ -37,8 +42,7 @@ var start = input.start == null ? $.NSDate.dateWithTimeIntervalSinceNow(-86400 *
 var end = input.end == null ? $.NSDate.dateWithTimeIntervalSinceNow(86400 * input.days) : $.NSDate.dateWithTimeIntervalSince1970(input.end);
 var pred = store.predicateForEventsWithStartDateEndDateCalendars(start, end, cals);
 var events = store.eventsMatchingPredicate(pred);
-var f = $.NSDateFormatter.alloc.init;
-f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mmXXX';
+var f = pinned("yyyy-MM-dd'T'HH:mmXXX");
 var rows = [];
 for (var i = 0; i < events.count; i++) {
   var e = events.objectAtIndex(i);
@@ -48,7 +52,8 @@ for (var i = 0; i < events.count; i++) {
     title: ObjC.unwrap(e.title) || '',
     start: ObjC.unwrap(f.stringFromDate(e.startDate)),
     end: e.endDate.isNil() ? '' : ObjC.unwrap(f.stringFromDate(e.endDate)),
-    location: e.location.isNil() ? '' : ObjC.unwrap(e.location)
+    location: e.location.isNil() ? '' : ObjC.unwrap(e.location),
+    all_day: e.isAllDay ? true : false
   });
 }
 return JSON.stringify(rows);
@@ -77,7 +82,7 @@ e.calendar = target;
 var err = Ref();
 var ok = store.saveEventSpanCommitError(e, $.EKSpanThisEvent, true, err);
 return JSON.stringify(ok ? {id: ObjC.unwrap(e.eventIdentifier),
-                     calendar: ObjC.unwrap(target.title)} : {error: 'save failed'});
+                     calendar: ObjC.unwrap(target.title)} : {error: 'save failed', why: reason(err)});
 """
 
 
@@ -89,17 +94,71 @@ class Event:
     end: str          # ISO
     location: str = ""
     id: str = ""
+    all_day: bool = False
 
     @property
     def starts_at(self) -> datetime | None:
         return parse(self.start)
+
+    @property
+    def ends_at(self) -> datetime | None:
+        return parse(self.end)
+
+    @property
+    def last_day(self) -> date | None:
+        """The last day this event actually occupies.
+
+        EventKit ends a one-day all-day event at the *following* midnight, so
+        taking `end.date()` literally puts a phantom offsite on tomorrow. A
+        timed event finishing exactly at midnight belongs to the day before it
+        for the same reason.
+        """
+        start, end = self.starts_at, self.ends_at
+        if start is None:
+            return None
+        if end is None or end <= start:
+            return start.date()
+        if end.time() == time(0, 0):
+            end -= timedelta(days=1)
+        return max(start.date(), end.date())
+
+    def covers(self, day: date) -> bool:
+        """True if any part of this event falls on `day`. A three-day trip is
+        three days — the middle of it must not read as free."""
+        start = self.starts_at
+        last = self.last_day
+        return start is not None and last is not None and start.date() <= day <= last
+
+    def line(self) -> str:
+        """One event, as she says it.
+
+        An all-day event has no time worth printing: `isAllDay` was never read,
+        so a blocked-out day came through as "- 00:00 Team offsite" and read as
+        a midnight meeting.
+        """
+        when = "All day —" if self.all_day else f"{self.starts_at:%H:%M}"
+        return f"- {when} {self.title}"
 
 
 def names(*, caller=None) -> list[str]:
     return (caller or eventkit.run)(_NAMES)
 
 
-def window(*, back: int = 0, days: int = 7, caller=None, start: datetime | None = None, end: datetime | None = None) -> list[Event]:
+def window(*, back: int = 0, days: int = 7, caller=None, start: datetime | None = None,
+           end: datetime | None = None, on: datetime | None = None,
+           from_midnight: bool = False) -> list[Event]:
+    if start is None and end is None and not (0 <= back <= MAX_WINDOW_DAYS and 0 < days <= MAX_WINDOW_DAYS and back + days <= MAX_WINDOW_DAYS):
+        raise ValueError('Calendar reads must use a bounded window of at most 31 days')
+    if (on is not None or from_midnight) and start is None and end is None:
+        from .requests import local_timezone
+        from .when import resolve_local
+        now = on or datetime.now().astimezone()
+        if now.tzinfo is None:
+            now = resolve_local(now.isoformat(), local_timezone())
+        start = now - timedelta(days=back)
+        if from_midnight:
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        end = now + timedelta(days=days)
     if start is None and end is None:
         bounded = 0 <= back <= MAX_WINDOW_DAYS and 0 < days <= MAX_WINDOW_DAYS and back + days <= MAX_WINDOW_DAYS
     else:
@@ -111,39 +170,55 @@ def window(*, back: int = 0, days: int = 7, caller=None, start: datetime | None 
         raise eventkit.EventKitError("Calendar unavailable; context incomplete")
     events = [Event(calendar=r.get("calendar", ""), title=r.get("title", "") or "Untitled event",
                     start=r.get("start", ""), end=r.get("end", ""),
-                    location=r.get("location", ""), id=r.get("id", ""))
+                    location=r.get("location", ""), id=r.get("id", ""), all_day=bool(r.get("all_day")))
               for r in rows]
     return sorted(events, key=lambda e: e.start)
 
 
 def brief(*, on: datetime | None = None, caller=None) -> str:
-    """Today, as a few lines a planner can actually use."""
+    """Today, as a few lines a planner can actually use.
+
+    From midnight, not from now: the window used to start at the moment it was
+    asked, so a 10am `notron agenda` had already lost the 9am meeting and the
+    morning routine under-reported the day it was there to describe. And a day
+    is every event that *touches* it, not only the ones that begin on it —
+    otherwise the middle of a week-long trip is a free Wednesday.
+    """
     day = (on or datetime.now()).date()
-    todays = [e for e in window(days=2, caller=caller)
-              if e.starts_at and e.starts_at.date() == day]
+    todays = [e for e in window(days=2, on=on, from_midnight=True, caller=caller)
+              if e.covers(day)]
     if not todays:
         return "Nothing in the calendar today."
-    return "\n".join(
-        f"- {e.starts_at:%H:%M} {e.title}" + (f" — {e.location}" if e.location else "")
-        for e in todays
-    )
+    return "\n".join(e.line() + (f" — {e.location}" if e.location else "")
+                     for e in todays)
 
 
-def week(*, caller=None, limit: int = MAX_IN_PROMPT) -> str:
-    """The next seven days, grouped by day."""
-    all_events = window(days=7, caller=caller)
+def week(*, on: datetime | None = None, caller=None, limit: int = MAX_IN_PROMPT) -> str:
+    """The next seven days, grouped by day.
+
+    Grouped by the days each event *occupies*, so a three-day trip appears on
+    all three. It used to be listed once, on the day it began, which made the
+    two days in the middle look free.
+    """
+    all_events = window(days=7, on=on, from_midnight=True, caller=caller)
     events = all_events[:limit]
-    if not events:
+    dated = [e for e in events if e.starts_at and e.last_day]
+    if not dated:
         return "Nothing in the calendar this week."
-    lines, seen = [], None
-    for e in events:
-        at = e.starts_at
-        if at is None:
-            continue
-        if at.date() != seen:
-            seen = at.date()
-            lines.append(f"**{human(at, with_time=False)}**")
-        lines.append(f"- {at:%H:%M} {e.title}")
+
+    # Walk the days the events actually span rather than counting forward from
+    # today: what is grouped is whatever the read returned, so this cannot
+    # quietly drop an event by disagreeing with the clock. MAX_DAYS is only a
+    # stop against one absurd multi-year event turning into a thousand headings.
+    first = min(e.starts_at.date() for e in dated)
+    last = min(max(e.last_day for e in dated), first + timedelta(days=MAX_DAYS))
+    lines, day = [], first
+    while day <= last:
+        on_day = [e for e in dated if e.covers(day)]
+        if on_day:
+            lines.append(f"**{human(datetime.combine(day, time(0, 0)), with_time=False)}**")
+            lines.extend(e.line() for e in on_day)
+        day += timedelta(days=1)
     if len(all_events) > limit:
         lines.append(f"Context truncated: {len(all_events) - limit} more events in this window.")
     return "\n".join(lines)
@@ -177,15 +252,13 @@ def create(title: str, *, start_iso: str, end_iso: str | None = None,
         "start_timestamp": start.timestamp(), "end_timestamp": end.timestamp(),
     })
     if "error" in out:
-        raise eventkit.EventKitError(f"could not create the event: {out['error']}")
+        raise eventkit.EventKitError(eventkit.failure(out, "could not create the event"))
     return out["id"]
 
 
 _FIND_OPERATION = """
 if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
-var f = $.NSDateFormatter.alloc.init;
-f.dateFormat = 'yyyy-MM-dd\\'T\\'HH:mmXXX';
 var day = $.NSDate.dateWithTimeIntervalSince1970(input.start);
 var start = day.dateByAddingTimeInterval(-86400);
 var end = day.dateByAddingTimeInterval(86400);

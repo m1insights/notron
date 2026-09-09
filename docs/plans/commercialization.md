@@ -32,6 +32,49 @@ crippled.
 3. **Capture from the phone** without waiting on iCloud.
 4. **Longer memory** — larger index, deeper research runs.
 
+The $12 buys a monthly allowance, not unlimited use. How that is billed is the
+next section, and it is a decision, not a detail.
+
+## How the paid tier is billed — flat price, hard cap, top-up
+
+**Decided 2026-09-06.** $12/month includes an allowance. When it runs out she
+**pauses and says so**, and the user taps **Top up**. She never spends past the
+allowance silently, and there is no invoice nobody pressed a button for.
+`allowance_exhausted` is already one of the visible error codes in
+`../production/plans/05-accounts-service.md` — this decision is what that code
+is for.
+
+The alternative considered was a low base fee plus a markup on whatever
+inference the user burns past it. Rejected for three reasons:
+
+1. **She spends money on the user's behalf.** The listener polls every twenty
+   seconds, the Filer runs on a settle timer, the morning routine runs unasked.
+   A metered bill on an agent that acts without being asked is a bill the user
+   cannot predict — and people cancel an unpredictable subscription not because
+   it cost too much but because they cannot tell what next month costs.
+2. **The amounts do not justify the anxiety.** Routing, guarding and filing are
+   Nano; the expensive calls are vision (~3.5s each, already capped by
+   `nodes.MAX_LOOKS`) and the one-off `notron index`. Steady-state days are
+   cheap. Metering pennies buys a pricing page nobody reads.
+3. **Nano-first routing already is the cost control.** The tier split exists so
+   cost tracks what the user actually asked for. Billing by token hands the user
+   a job the graph already does for them.
+
+Three things follow from the decision:
+
+- **The allowance is counted in her work, not in tokens.** "Answers left this
+  month," never "input tokens." `.notron/usage.json` records per-tier `calls`,
+  `in` and `out`; the user-facing number is derived from it and the raw ledger is
+  never the thing shown. Nobody should have to know what a token is to know
+  whether they are near the edge.
+- **Running out is a pause, not a breakage.** Her hands and her head are already
+  separate (`BrainUnavailable`). Reading notes, receipts and undo keep working
+  with no model behind them; only new paid calls stop.
+- **Advanced tier is the pressure valve.** The heaviest users are the least
+  profitable and the most likely to resent a cap — free BYO-key mode is where
+  they belong, and the monthly budget slider in Skills & Plugins is the same
+  pause behaviour spending their own money.
+
 ## Distribution
 
 **Not the Mac App Store.** A sandboxed App Store app cannot script other apps
@@ -48,11 +91,20 @@ Ship the way Raycast, BoltAI and CleanShot do:
 
 ## Unit economics to prove before launch
 
-Worst-case cost per user per month must clear $12 with room. The number to measure
-is tokens per active user per day on Nemotron — the usage ledger in
-`.juno/usage.json` already records it, so the free version gives us real data before
-we price anything. Nano-first routing exists precisely so cost tracks what the user
-actually asked for.
+The ledger in `.notron/usage.json` records, per day and per tier, `calls`, `in`
+and `out`. Two numbers set both the price and the allowance, and a week of
+single-user data produces both before anyone else installs anything:
+
+1. **A median answer.** One Ask-note round trip end to end — the retrieval embed,
+   the model call, any vision look.
+2. **A quiet day.** The listener, the Filer's settle passes and the morning
+   routine, with the user asking nothing at all. This is the floor under every
+   subscriber and it is the number a flat price actually has to survive.
+
+Set the allowance so an ordinary month sits comfortably inside it and only
+genuinely heavy use ever reaches the cap. **A cap most users never see is a
+promise; a cap most users hit every month is a metered bill with extra steps** —
+which is the thing the section above rejected.
 
 ## Rename before we charge — a hard gate
 

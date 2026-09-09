@@ -13,11 +13,19 @@ that library. `_notes_is_never_the_real_one` puts a small fake Notes app under
 every test instead, so a forgotten patch produces a deterministic fake library
 rather than whatever the person running the suite happens to have written down
 — and no test can ever write into it.
+
+EventKit was the same hole, one door along, and open until 2026-09-07: the fake
+Notes app never covered `eventkit.run`, which does not go through
+`applescript.run` at all. Any test reaching it ran a real `osascript` against
+the developer's own 1,263 reminders and 1,757 events. Every EventKit test in
+this suite passes its own fake `caller`; `_eventkit_is_never_the_real_one`
+makes that a rule rather than a habit.
 """
 
 import pytest
 
-from notron import applescript, mentions, notes, rewrite, undo, library, workspace
+from notron import (applescript, attachments, mentions, notes,
+                    rewrite, undo, library, workspace)
 
 
 @pytest.fixture(autouse=True)
@@ -78,6 +86,11 @@ class FakeNotesApp:
             ("🤖 NOTRON", ["📌 About Me", "📥 Ask Notron", "🧠 Brain Dump", "📊 Log"]),
         ])]
         self.bodies: dict[str, str] = {}
+        #: note id -> [(attachment name, attachment id)]. Apple Notes keeps
+        #: these completely out of the body, so they live beside it here too.
+        self.attachments: dict[str, list[tuple[str, str]]] = {}
+        #: attachment id -> the bytes Notes would write out on `save`.
+        self.files: dict[str, bytes] = {}
         self.calls: list[str] = []
 
     def insert_folder(self, position: int, name: str) -> None:
@@ -128,6 +141,34 @@ class FakeNotesApp:
                 return "exists"
             self.folders.append((args[0], []))
             return "created"
+
+        if script is attachments._ON_NOTE:
+            self.calls.append("attachments")
+            rows = self.attachments.get(args[0], [])
+            names = notes.US.join(n for n, _ in rows)
+            ids = notes.US.join(i for _, i in rows)
+            return f"{names}{notes.RS}{ids}"
+
+        if script is attachments._IN_FOLDER:
+            index = int(args[0])
+            self.calls.append("in_folder")
+            name, titles = self.folders[index - 1]
+            rows = []
+            for t in titles:
+                found = self.attachments.get(f"{name}/{t}", [])
+                if not found:
+                    continue
+                rows.append(attachments.GS.join((
+                    f"{name}/{t}",
+                    notes.US.join(n for n, _ in found),
+                    notes.US.join(i for _, i in found))))
+            return notes.RS.join([name, *rows])
+
+        if script is attachments._EXTRACT:
+            self.calls.append("extract")
+            import pathlib as _pathlib
+            _pathlib.Path(args[1]).write_bytes(self.files.get(args[0], b""))
+            return "ok"
 
         # A write, a `show note`, an EventKit JXA script — anything that would
         # have reached the real machine. Loud, with the script in the message,
@@ -264,3 +305,29 @@ def _operation_storage_is_disposable(monkeypatch, tmp_path, _task3_storage):
     from notron import operations
     monkeypatch.setattr(operations, 'PATH', tmp_path / 'ledger' / 'operations.sqlite3')
     monkeypatch.setenv('TZ', 'UTC')
+
+
+@pytest.fixture(autouse=True)
+def _attachments_storage_is_disposable(tmp_path, monkeypatch):
+    monkeypatch.setattr(attachments, 'CACHE', tmp_path / 'attachments.json')
+
+
+@pytest.fixture(autouse=True)
+def _speech_is_never_probed_for_real(monkeypatch):
+    """`attachments.speech_available` runs its own `subprocess.run` — it goes
+    through neither the fake Notes app nor `eventkit`, so it was the third way a
+    test could reach the machine, and the slowest: `permissions.check()` calls
+    it, and a listener test that starts the watcher then paid a real osascript
+    launch inside a 0.3s window and looked like a hung loop."""
+    monkeypatch.setattr(attachments, "speech_available", lambda: False)
+
+
+@pytest.fixture(autouse=True)
+def _no_cached_permissions():
+    """`permissions.cached()` is module state that outlives a test. One test
+    finding Calendar denied must not be why the next test thinks so."""
+    from notron import permissions
+
+    permissions.forget()
+    yield
+    permissions.forget()

@@ -548,3 +548,173 @@ def test_wrong_copy_confirmation_does_not_create(note_in_notes):
     undo.save('n1', 'earlier')
     state = nodes.undoer(_state('undo recovery copy wrong-snapshot', intent='undo'))
     assert all(not w.recovery_note_id for w in state.writes)
+# ------------------------------------------ what she has not seen (Stage A)
+
+def test_she_is_told_about_a_file_she_cannot_read_yet():
+    """Apple Notes keeps an attachment out of the body entirely, so without
+    this she answers about a photo as if the photo were not there — which
+    sounds exactly like having looked."""
+    from notron.attachments import Attachment
+    s = State(request="what does this say?", here="see attached", source_note_id="n1",
+              carried=[Attachment(id="a1", name="whiteboard.png", kind="image")])
+    p = '\n'.join(part.text for part in nodes._prompt(s))
+    assert "whiteboard.png" in p
+    assert "cannot read" in p.lower()
+
+
+def test_a_note_with_no_files_says_nothing_about_files():
+    p = '\n'.join(part.text for part in nodes._prompt(State(request="what's on today?")))
+    assert "cannot read" not in p.lower()
+
+
+def test_a_text_file_in_the_note_is_read_and_stops_being_a_file_she_cannot_read(monkeypatch):
+    """Once she can actually read the thing, it must leave the "you have NOT
+    seen these" list — or she tells the user she is blind to a file she just
+    quoted."""
+    from notron import attachments
+    att = attachments.Attachment(id="a1", name="log.txt", kind="text")
+    monkeypatch.setattr(attachments, "read_text", lambda a: "line one\nline two")
+
+    s = State(request="what does the log say?", carried=[att],
+              reply_to=("Deploys", "Notes", 3), source_note_id="n1")
+    s = nodes.retriever(s, brain=None)
+
+    assert any("log.txt" in c.text and "line two" in c.text for c in s.context)
+    assert s.carried == []
+    assert "cannot read" not in '\n'.join(part.text for part in nodes._prompt(s)).lower()
+
+
+def test_a_file_she_still_cannot_read_stays_named(monkeypatch):
+    from notron import attachments
+    s = State(request="what is in the photo?",
+              carried=[attachments.Attachment(id="a1", name="board.png", kind="image")])
+    s = nodes.retriever(s, brain=None)
+    assert s.context == []
+    assert [a.name for a in s.carried] == ["board.png"]
+
+
+def test_a_file_that_will_not_open_is_named_rather_than_silently_dropped(monkeypatch):
+    """Notes busy, a deleted attachment, a bad decode — she keeps saying the
+    file is there. Losing it from the prompt is the one outcome that reads as
+    having looked."""
+    from notron import attachments
+    att = attachments.Attachment(id="a1", name="log.txt", kind="text")
+    monkeypatch.setattr(attachments, "read_text",
+                        lambda a: (_ for _ in ()).throw(RuntimeError("Notes is busy")))
+    s = nodes.retriever(State(request="what does it say?", carried=[att]), brain=None)
+    assert [a.name for a in s.carried] == ["log.txt"]
+
+
+def test_a_picture_in_the_note_is_looked_at_and_quoted(monkeypatch):
+    from notron import attachments
+    att = attachments.Attachment(id="a1", name="board.png", kind="image")
+    monkeypatch.setattr(attachments, "describe",
+                        lambda a, brain, **kw: "Text: BUY MILK. A whiteboard.")
+
+    s = State(request="what's on the board?", carried=[att],
+              reply_to=("Kitchen", "Notes", 1))
+    s = nodes.retriever(s, brain=FakeBrain())
+
+    assert any("board.png" in c.text and "BUY MILK" in c.text for c in s.context)
+    assert s.carried == []
+
+
+def test_with_no_brain_behind_her_a_picture_is_named_not_guessed_at():
+    from notron import attachments
+    s = nodes.retriever(
+        State(request="what's on the board?",
+              carried=[attachments.Attachment(id="a1", name="board.png", kind="image")]),
+        brain=None)
+    assert [a.name for a in s.carried] == ["board.png"]
+
+
+def test_only_so_many_pictures_are_looked_at_for_one_question(monkeypatch):
+    """A note with fifteen screenshots would otherwise be fifteen vision calls
+    at ~3.5s each inside a listener poll — a minute with Notes blocked and a
+    bill to match. The rest stay named as unseen, which is the honest answer."""
+    from notron import attachments
+    looked = []
+    monkeypatch.setattr(attachments, "describe",
+                        lambda a, brain, **kw: looked.append(a.name) or f"a picture of {a.name}")
+
+    shots = [attachments.Attachment(id=f"a{i}", name=f"shot{i}.png", kind="image")
+             for i in range(nodes.MAX_LOOKS + 3)]
+    s = nodes.retriever(State(request="what do these show?", carried=shots),
+                        brain=FakeBrain())
+
+    assert len(looked) == nodes.MAX_LOOKS
+    assert len(s.context) == nodes.MAX_LOOKS
+    assert len(s.carried) == 3
+    assert "cannot read" in '\n'.join(part.text for part in nodes._prompt(s)).lower()
+
+
+# --- a blind calendar is not a free day ------------------------------------
+#
+# Measured 2026-09-06: from the background listener EventKit reports zero
+# calendars and zero events, with no error, because that process has never
+# been granted access and cannot ask for it (docs/spikes/2026-09-06-eventkit-
+# request-under-osascript.md). Every `agenda:` line in .notron/listen.log read
+# "125 chars of real commitments" — the exact length of "Nothing in the
+# calendar today" plus "Nothing outstanding in Reminders". She planned around
+# a day she could not see, and said nothing.
+
+def _blind(app="Calendar"):
+    from notron.permissions import Check
+    return lambda: [
+        Check(app, False, "is denied", "System Settings → Privacy & Security"),
+        Check("Reminders" if app == "Calendar" else "Calendar", True, "full access", ""),
+    ]
+
+
+def _sighted():
+    from notron.permissions import Check
+    return lambda: [Check("Calendar", True, "full access", ""),
+                    Check("Reminders", True, "full access", "")]
+
+
+def test_an_unreadable_calendar_is_not_reported_as_a_free_day():
+    state = State(intent="schedule")
+    nodes.agenda(state, checker=_blind("Calendar"),
+                 reader=lambda: ("Nothing in the calendar today.",
+                                 "Nothing outstanding in Reminders."))
+    assert "Nothing in the calendar today." not in state.agenda
+    assert "cannot read" in state.agenda.lower()
+    assert "is denied" in state.agenda
+
+
+def test_an_unreadable_reminders_list_is_not_reported_as_nothing_to_do():
+    state = State(intent="plan")
+    nodes.agenda(state, checker=_blind("Reminders"),
+                 reader=lambda: ("Nothing in the calendar today.",
+                                 "Nothing outstanding in Reminders."))
+    assert "Nothing outstanding in Reminders." not in state.agenda
+    assert "cannot read" in state.agenda.lower()
+
+
+def test_a_readable_but_genuinely_empty_day_still_says_nothing():
+    """The honest empty day must survive. Only an unreadable one changes."""
+    state = State(intent="schedule")
+    nodes.agenda(state, checker=_sighted(),
+                 reader=lambda: ("Nothing in the calendar today.",
+                                 "Nothing outstanding in Reminders."))
+    assert "Nothing in the calendar today." in state.agenda
+    assert "cannot read" not in state.agenda.lower()
+
+
+def test_what_she_did_manage_to_see_is_still_shown_alongside_the_warning():
+    state = State(intent="schedule")
+    nodes.agenda(state, checker=_blind("Calendar"),
+                 reader=lambda: ("- 09:00 Standup", "Nothing outstanding in Reminders."))
+    assert "Standup" in state.agenda
+    assert "cannot read" in state.agenda.lower()
+
+
+def test_a_permission_check_that_itself_fails_does_not_lose_the_agenda():
+    def boom():
+        raise RuntimeError("no osascript here")
+    state = State(intent="schedule")
+    nodes.agenda(state, checker=boom,
+                 reader=lambda: ("- 09:00 Standup", "Nothing outstanding in Reminders."))
+    assert "Standup" in state.agenda
+    assert 'access could not be verified' in state.agenda
+    assert 'Nothing outstanding' not in state.agenda

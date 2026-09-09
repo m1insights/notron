@@ -49,7 +49,51 @@ function awaitDone(check, seconds) {
 }
 """
 
-PRELUDE = "ObjC.import('EventKit');\nObjC.import('Foundation');\n" + AWAIT
+#: Every write here ends `saveXCommitError(…, err)` with an `err` that macOS fills
+#: in and that this code used to throw away — so "could not create the event" was
+#: the whole story whether the calendar was denied, read-only, or gone. Ask the
+#: `Ref()` what happened. A Ref that was never written to raises rather than
+#: reading nil, hence the try.
+REASON = """
+function reason(err) {
+  try {
+    var e = err[0];
+    if (e && !e.isNil()) return ObjC.unwrap(e.localizedDescription) || '';
+  } catch (x) {}
+  return '';
+}
+"""
+
+#: Dates, pinned. An `NSDateFormatter` with a fixed `dateFormat` and no locale
+#: reads the Mac's region setting, and `yyyy` in a Buddhist or Japanese calendar
+#: is not the year we mean: `stringFromDate` writes a date nobody asked for and
+#: `dateFromString` returns nil, so an event silently lands in the wrong year or
+#: a save fails for no visible reason. `en_US_POSIX` plus an explicit Gregorian
+#: calendar is Apple's own prescription for a fixed-format date. The time zone
+#: is deliberately *not* pinned — `calendarWithIdentifier` keeps the system one
+#: (checked 2026-09-07: America/New_York, matching `currentCalendar`), and the
+#: user's 2pm means 2pm where they are standing.
+#:
+#: Nothing in this package builds an `NSDateFormatter` of its own. Going through
+#: `pinned()` is what makes that a rule a test can enforce rather than a habit.
+DATES = """
+function gregorian() {
+  return $.NSCalendar.calendarWithIdentifier('gregorian');
+}
+function pinned(fmt) {
+  var f = $.NSDateFormatter.alloc.init;
+  f.dateFormat = fmt;
+  f.locale = $.NSLocale.localeWithLocaleIdentifier('en_US_POSIX');
+  f.calendar = gregorian();
+  return f;
+}
+"""
+
+ISO_MINUTES = "yyyy-MM-dd'T'HH:mm"
+ISO_DAY = "yyyy-MM-dd"
+
+PRELUDE = ("ObjC.import('EventKit');\nObjC.import('Foundation');\n"
+           + AWAIT + REASON + DATES)
 
 
 class EventKitError(RuntimeError):
@@ -91,3 +135,15 @@ def run(body: str, *, data: dict | None = None, timeout: int = DEFAULT_TIMEOUT, 
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise EventKitError(f"EventKit returned unparseable output: {raw[:200]!r}") from e
+
+
+def failure(out: dict, prefix: str) -> str:
+    """The message a failed EventKit write should carry.
+
+    `out["error"]` is our own four words; `out["why"]` is macOS's. The second one
+    is the one that tells the user what to do — "Calendar access denied" names a
+    switch in System Settings, "save failed" names nothing.
+    """
+    why = str(out.get("why") or "").strip()
+    said = str(out.get("error") or "failed").strip()
+    return f"{prefix}: {said}" + (f" — {why}" if why else "")

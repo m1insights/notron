@@ -1,6 +1,6 @@
 # Notron production roadmap
 
-Status: **implementation in progress; P01 Tasks 1–5 and P02 Tasks 1–6 complete; native secure-startup gate pending P06**. Updated 2026-09-05.
+Status: **P01 Tasks 1–5 and P02 Tasks 1–6 implemented; newer main features reconciled; P03 next**. Updated 2026-09-09. Native secure-startup and release qualification remain pending P06/P07. See the [branch reconciliation](handoffs/2026-09-09-branch-integration.md).
 Evidence: [P02 Task 6 handoff](handoffs/2026-09-05-P02-task-6.md), [P02 Task 5 handoff](handoffs/2026-09-05-P02-task-5.md), [P02 Tasks 3–4 batch handoff](handoffs/2026-09-05-P02-tasks-3-4.md), [P02 Tasks 1–2 batch handoff](handoffs/2026-09-05-P02-tasks-1-2.md), [P01 Task 5 session handoff](handoffs/2026-09-05-P01-task-5.md), [security report](evidence/P01-security-boundaries.md), [secure storage evidence](evidence/P01-secure-storage.md) and [outbound caller map](evidence/P01-outbound-map.md).
 Audience: the owner and an engineer starting a fresh coding session.
 
@@ -21,7 +21,7 @@ Read the [shared design and contracts](design.md) before any plan. Findings are 
 | P03 | [Ask conversation](plans/03-ask-conversation.md) | P01; P02 request contracts | Bounded contextual follow-ups and clarification | Planned |
 | P04 | [Mobile Shortcut feasibility](plans/04-shortcut-prototype.md) | Local experiment can start immediately; hosted test requires P01 and P02 contracts | Real-iPhone evidence and explicit continue/stop decision | Planned |
 | P05 | [Accounts and paid service](plans/05-accounts-service.md) | P01; P02 contracts; P04 backend contract if experiment proceeds | Authenticated, metered service with server-enforced access | Planned |
-| P06 | [Mac installer and onboarding](plans/06-mac-distribution.md) | Runtime work can start after P01; completion uses P02/P03; paid path uses P05 | Portable signed app, truthful onboarding/status, updates and uninstall | Planned |
+| P06 | [Mac installer and onboarding](plans/06-mac-distribution.md) | Runtime work can start after P01; completion uses P02/P03; paid path uses P05 | Portable signed app, truthful onboarding/status, updates and uninstall | Companion/onboarding/pin UI exists and builds; portable signed distribution pending |
 | P07 | [Pilot and public release](plans/07-pilot-release.md) | Gate requirements below | Measured pilot, security review and release decision | Planned |
 
 ```mermaid
@@ -59,9 +59,9 @@ Do not execute whole plans concurrently if they edit the same modules. P01 owns 
 ### M1 — safe local core
 
 - [x] P01 passes its privacy, zero-home, corruption and outbound-network regressions (Task 5: 664 full-suite passes; synthetic evidence only).
-- [ ] P02 passes crash/retry, concurrency, stale-date, undo and single-worker checks.
+- [x] P02 passes synthetic crash/retry, concurrency, stale-date, undo and single-worker checks; native qualification remains P06/P07.
 - [ ] P03 passes follow-up and clarification fixtures, including the actual two-question example.
-- [x] All existing tests pass after deliberate behavior updates; no live Notes access in unit tests (967 passed after P02 Task 5 review corrections; rerun as subsequent tasks land).
+- [x] All existing tests pass after deliberate behavior updates; no live Notes access in unit tests (1,190 passed after September 9 reconciliation).
 
 ### M2 — assisted pilot
 
@@ -94,7 +94,7 @@ Passing tests is necessary, not a claim of being impossible to hack. No calendar
 - A clear user request may create a reminder or calendar event; ambiguous targets/dates ask. No calendar move/delete, recurring scheduling, or bulk inferred actions in this release.
 - Short conversation history is distinct from permanent Memory; retrieved text is not permission.
 - MIT community app stays useful with BYO credentials; security and signed installation are not paywalled.
-- Managed inference is paid after the pilot. $12/month is a pricing hypothesis, not a configured production price or entitlement.
+- Managed inference is paid after the pilot. The September 6 decision is an included allowance, hard pause and explicit top-ups, never automatic overage billing. $12/month remains an unconfigured target; allowance/top-up amounts and terms require P07 cost evidence.
 - Retain Python 3.11+ and Swift/SwiftUI; Nebius inference remains mandatory under the current project constraint. No model/provider swap in these plans.
 
 ## External inputs: stop only the dependent task
@@ -132,9 +132,10 @@ durable pause/resume, shared worker ownership, encrypted queue/restart handling,
 provider deadlines and conservative legacy migration. See the
 [Task 6 handoff](handoffs/2026-09-05-P02-task-6.md) for commits, verification,
 migration/rollback and remaining limits.
-Retain branch `production/p01-task1` and worktree `.worktrees/p01-task1`; reuse the
-root `.venv/bin/python`. The original checkout has unrelated work; inspect status
-before edits. Nothing was merged or pushed.
+The September 9 reconciliation combines `production/p01-task1` and `main`, including
+attachments, calendar fixes, pin guidance and adapted uncommitted scheduling fixes.
+Use the root checkout after integration; inspect status first. The production
+worktree and original-work snapshot remain available for recovery. Nothing was pushed.
 
 The M1 safe-local-core gate still requires P03 evidence and native qualification.
 Native Apple adapter behavior and the final iCloud race remain

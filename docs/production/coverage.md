@@ -1,5 +1,7 @@
 # Findings-to-task coverage
 
+September 9 integration: P01/P02 implementation is reconciled with main. Media uploads now use note provenance and policy checks; extracted files/words are encrypted and covered by retention and explicit offline migration. Photo replies preserve their original source checks and complete through the durable ledger. See [verification and limits](handoffs/2026-09-09-branch-integration.md).
+
 This table tracks scope, not implementation completion. All tasks are initially planned.
 
 | Finding / product requirement | Owning task | Required evidence |
