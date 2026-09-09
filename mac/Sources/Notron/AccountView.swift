@@ -30,6 +30,7 @@ extension KeychainStore: SessionVault {}
                 // network work. P06 startup remains disabled independently.
                 NotificationCenter.default.post(name: .notronManagedSessionStopped,object:nil)
             })
+            if let session=self.session {Core.managedIPC=ManagedIPCSession(session:session,serviceURL:service)}
             status="Sign in to your Notron account."
         }
     }
@@ -54,6 +55,7 @@ extension KeychainStore: SessionVault {}
                             do {
                                 let code=try attempt.consume(callback)
                                 try await session.complete(code:code,verifier:attempt.verifier,nonce:attempt.nonce)
+                                Core.managedIPC=ManagedIPCSession(session:session,serviceURL:config.service)
                                 self.status="Signed in. Managed processing remains paused until setup is complete."
                             } catch {self.status="Sign-in could not be completed. Please try again."}
                             self.busy=false;self.attempt=nil

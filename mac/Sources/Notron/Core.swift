@@ -1,10 +1,15 @@
 import Foundation
+import NotronCore
 
 /// The one way the app talks to the Python core: a subprocess, exactly like the
 /// CLI. Dev-machine paths for now — shipping a DMG means bundling a Python
 /// runtime inside the .app (see mac/README.md); these two environment variables
 /// are the seam that will point at it.
 enum Core {
+    // P06 owns signature/runtime validation. Never enable through an env flag.
+    static let protectedManagedStartupValidated = false
+    @MainActor static var managedIPC:ManagedIPCSession?
+
     static let home: URL = {
         let path = ProcessInfo.processInfo.environment["NOTRON_HOME"] ?? "/Users/m1labs/Dev/apps/juno"
         return URL(fileURLWithPath: path)
@@ -32,6 +37,22 @@ enum Core {
 
         let stdin = Pipe()
         if input != nil { process.standardInput = stdin }
+        var managedInput:FileHandle?
+        if protectedManagedStartupValidated,input == nil {
+            guard !Thread.isMainThread else {throw Failure(description:"Managed work must run off the UI thread.")}
+            managedInput=try DispatchQueue.main.sync {
+                try MainActor.assumeIsolated {
+                    try managedIPC?.makeChannel(onStop:{if process.isRunning {process.terminate()}})
+                }
+            }
+            if let managedInput {
+                process.standardInput=managedInput
+                var environment=ProcessInfo.processInfo.environment
+                environment["NOTRON_MANAGED_SESSION_FD"]="0"
+                process.environment=environment
+            }
+        }
+        defer {try? managedInput?.close()}
         try process.run()
         if let input {
             stdin.fileHandleForWriting.write(input)

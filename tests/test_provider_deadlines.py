@@ -123,12 +123,12 @@ def test_policy_and_deadline_failures_are_never_retried(monkeypatch):
 
 def test_embeddings_default_to_batch_budget(monkeypatch):
     instance, calls = fake_brain([])
-    instance._client.embeddings.create = lambda **kw: (calls.append(kw), NS(data=[], usage=None))[1]
+    instance._client.embeddings.create = lambda **kw: (calls.append(kw), NS(data=[NS(index=0,embedding=[0.25])], usage=None))[1]
     clock = iter([10.0, 11.0])
     monkeypatch.setattr(brain_module.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(brain_module, "_deadline_guard", lambda deadline: nullcontext())
 
-    assert instance.embed([Passage("one", "user_request")]) == []
+    assert instance.embed([Passage("one", "user_request")]) == [[0.25]]
     assert calls[0]["timeout"] == pytest.approx(59.0)
 
 

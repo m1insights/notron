@@ -17,7 +17,7 @@ SCHEMA_VERSION = 1
 HEARTBEAT_INTERVAL = 5
 STALE_AFTER = 30
 STATES = {'starting', 'ready', 'paused', 'offline', 'permission_needed', 'error', 'stopped'}
-REASONS = {None, 'user_paused', 'keychain_locked', 'storage_unavailable', 'permission_denied',
+REASONS = {'signin_required','subscription_required','allowance_exhausted','provider_unavailable','permission_required','outcome_uncertain','request_conflict',None, 'user_paused', 'keychain_locked', 'storage_unavailable', 'permission_denied',
            'network_unavailable', 'provider_cooldown', 'worker_failed', 'heartbeat_stale',
            'worker_missing', 'initializing', 'resuming', 'legacy_review', 'queue_review'}
 _OWNER = ContextVar('notron_worker_owner', default=None)

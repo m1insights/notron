@@ -153,3 +153,9 @@ def test_vision_rechecks_live_source_before_reasoning_retry(brain, monkeypatch, 
     with pytest.raises(policy.PolicyError):
         brain.see(image=b'private', mime='image/png', question='?', source=SOURCE)
     assert len(fake.sent) == 1
+
+def test_direct_response_validation_matches_managed_boundary(brain):
+    from notron.policy import PolicyError
+    brain.use([([],None)])
+    with pytest.raises(PolicyError):
+        brain.ask(system='static',user=[Passage('hello','user_request')],purpose='write')

@@ -23,6 +23,7 @@ class Services:
     store: ReadyStore
     auth: object | None = None
     billing: object | None = None
+    inference: object | None = None
 
 
 class BoundedBody:
@@ -119,6 +120,24 @@ def create_app(settings: Settings, services: Services) -> FastAPI:
     async def validation_error(request, exc):
         return JSONResponse({'code':'invalid_request'}, status_code=422)
 
+    from .inference import PaidRequest
+    from .usage import UsageError
+
+    @app.exception_handler(UsageError)
+    async def usage_error(request,exc):
+        code=str(exc)
+        status={'request_conflict':409,'outcome_uncertain':409,'allowance_exhausted':429,
+                'subscription_required':402,'permission_required':403,'invalid_request':422}.get(code,503)
+        return JSONResponse({'code':code},status_code=status)
+
+    def paid_route(operation):
+        def invoke(body:PaidRequest,principal=Depends(require_principal)):
+            if services.inference is None: raise UsageError('provider_unavailable')
+            return services.inference.execute(principal,operation,body)
+        return invoke
+    for operation in ('infer','embed','search','vision'):
+        app.post('/v1/'+operation)(paid_route(operation))
+
     @app.get('/health/live')
     def live():
         return {'status':'alive'}
@@ -204,4 +223,13 @@ def create_default_app():
     from .billing import Billing, StripeGateway
     policy=settings.billing_policy
     billing=Billing(store,StripeGateway(settings.stripe_secret_key),policy) if policy else None
-    return create_app(settings, Services(store=store,auth=auth,billing=billing))
+    inference=None
+    if billing and settings.inference_rates:
+        from .usage import Usage
+        from .inference import Inference
+        from .providers import ProviderAdapter
+        usage=Usage(store,billing,settings.encryption_key,
+                    monthly_micro_usd=int(settings.monthly_spend_ceiling*1000000),
+                    units_per_micro_usd=settings.units_per_micro_usd)
+        inference=Inference(usage,settings.inference_rates,ProviderAdapter(settings.nebius_key,settings.tavily_key))
+    return create_app(settings, Services(store=store,auth=auth,billing=billing,inference=inference))

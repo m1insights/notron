@@ -27,6 +27,7 @@ packages = ["notron_service"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "migrations" = "notron_service/migrations"
+"../notron/privacy.py" = "notron_service/privacy.py"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -221,11 +221,15 @@ class BrainUnavailable(RuntimeError):
 class Brain:
     api_key: str = field(repr=False)
     base_url: str = BASE_URL
+    transport: object | None = field(default=None,repr=False)
 
     @classmethod
     def from_credentials(cls) -> "Brain":
         from . import credentials, retention
         retention.require_ready()
+        from .transport import configured,bootstrap_inherited
+        bootstrap_inherited()
+        if configured() is not None: return cls(api_key="",transport=configured())
         endpoint = network.provider_endpoint(os.environ.get("NEBIUS_BASE_URL", BASE_URL), 'nebius')
         key = credentials.require(endpoint.credential_name).decode('utf-8')
         return cls(api_key=key, base_url=endpoint.url)
@@ -235,6 +239,8 @@ class Brain:
 
         from . import credentials, retention
         retention.require_ready()
+        if self.transport is not None:
+            return
         self._endpoint = network.provider_endpoint(self.base_url, 'nebius')
         # Constructor-supplied keys never bypass the injected credential contract.
         self.api_key = credentials.require(self._endpoint.credential_name).decode('utf-8')
@@ -267,6 +273,7 @@ class Brain:
     def _check_credentials(self) -> None:
         from . import credentials, retention
         retention.require_ready()
+        if getattr(self,'transport',None) is not None: return
         endpoint = getattr(self, '_endpoint', None) or network.provider_endpoint(self.base_url, 'nebius')
         key = credentials.require(endpoint.credential_name).decode('utf-8')
         # Check on each transport, including retries and embedding batches.
@@ -274,9 +281,10 @@ class Brain:
 
     def available_models(self) -> list[str]:
         """Ask the account what it can actually run — model ids drift."""
+        if getattr(self,"transport",None) is not None: return sorted(DEFAULT_MODELS.values())
         deadline = time.monotonic() + INTERACTIVE_DEADLINE
         with _deadline_guard(deadline):
-            _check_cooldown()
+            if getattr(self,"transport",None) is None: _check_cooldown()
             self._check_credentials()
             try:
                 response = self._client.models.list(timeout=_remaining(deadline))
@@ -298,23 +306,13 @@ class Brain:
         prepared = prepare_outbound(purpose, user)
         deadline = deadline or (time.monotonic() + _deadline_seconds.get())
         self._check_credentials()
-        kwargs = {"response_format": {"type": "json_object"}} if json_mode else {}
-        resp = self._client.chat.completions.create(
-            model=self.model_for(tier),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": "\n".join(prepared)},
-            ],
-            max_tokens=budget,
-            temperature=temperature,
-            timeout=_remaining(deadline),
-            **kwargs,
-        )
-        self._record(tier, getattr(resp, "usage", None))
-        return resp.choices[0].message
+        from .transport import DirectTransport
+        transport=getattr(self,'transport',None) or DirectTransport(self)
+        return transport.infer(tier,system,user,budget,json_mode,temperature,purpose,deadline)
 
     def _retry_call(self, operation, deadline: float):
         """Retry only sanitized transport failures; SDK retries stay disabled."""
+        if getattr(self,'transport',None) is not None: return operation()
         return provider_call(operation, deadline, service='nebius')
 
     def ask(
@@ -337,7 +335,7 @@ class Brain:
         """
         deadline = time.monotonic() + _deadline_seconds.get()
         with _deadline_guard(deadline):
-            _check_cooldown()
+            if getattr(self,"transport",None) is None: _check_cooldown()
             budget = max_tokens + REASONING_HEADROOM
             msg = self._retry_call(
                 lambda: self._call(tier, system, user, budget, json_mode,
@@ -379,18 +377,10 @@ class Brain:
         if (live is None or live.id != source.note_id or not policy.require_ready().readable(live)
                 or live.modified != source.modified):
             raise PolicyError('Vision source changed or is unavailable.')
-        resp = self._client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": question},
-                {"type": "image_url", "image_url": {"url": data_uri}},
-            ]}],
-            max_tokens=budget,
-            temperature=temperature,
-            timeout=_remaining(deadline),
-        )
-        self._record("vision", getattr(resp, "usage", None))
-        return resp.choices[0].message
+        from .transport import DirectTransport
+        transport=getattr(self,'transport',None)
+        if transport is not None: return transport.vision(question,data_uri,budget,temperature,source,deadline)
+        return DirectTransport(self).vision(question,data_uri,budget,temperature,source,deadline,model=model)
 
     def see(self, *, image: bytes, mime: str, question: str, source: Passage,
             max_tokens: int = 1200, temperature: float = 0.2) -> str:
@@ -414,7 +404,7 @@ class Brain:
 
         deadline = time.monotonic() + _deadline_seconds.get()
         with _deadline_guard(deadline):
-            _check_cooldown()
+            if getattr(self,"transport",None) is None: _check_cooldown()
             msg = self._retry_call(lambda: self._look(model, question, data_uri, budget,
                                     temperature, source, deadline), deadline)
             raw = msg.content or ""
@@ -435,18 +425,15 @@ class Brain:
         model = _os.environ.get("NOTRON_MODEL_EMBED", EMBED_MODEL)
         deadline = time.monotonic() + BATCH_DEADLINE
         with _deadline_guard(deadline):
-            _check_cooldown()
+            if getattr(self,"transport",None) is None: _check_cooldown()
             out: list[list[float]] = []
             for i in range(0, len(texts), 64):
                 def request():
                     self._check_credentials()
-                    return self._client.embeddings.create(
-                        model=model,
-                        input=prepare_outbound("embed", passages[i : i + 64]),
-                        timeout=_remaining(deadline))
-                resp = self._retry_call(request, deadline)
-                self._record("embed", getattr(resp, "usage", None))
-                out.extend(d.embedding for d in sorted(resp.data, key=lambda d: d.index))
+                    from .transport import DirectTransport
+                    transport=getattr(self,'transport',None) or DirectTransport(self)
+                    return transport.embed(passages[i:i+64],deadline)
+                out.extend(self._retry_call(request,deadline))
             return out
 
     def ask_json(self, *, system: str, user: Sequence[Passage], purpose: Purpose, tier: str = "fast", **kw) -> dict:

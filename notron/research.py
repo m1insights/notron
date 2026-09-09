@@ -40,7 +40,8 @@ class Finding:
 def available() -> bool:
     from . import credentials, retention
     retention.require_ready()
-    return credentials.get(credentials.SEARCH_KEY) is not None
+    from .transport import configured
+    return configured() is not None or credentials.get(credentials.SEARCH_KEY) is not None
 
 
 def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
@@ -49,8 +50,14 @@ def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic")
     from . import brain
     deadline = time.monotonic() + TIMEOUT
     with brain._deadline_guard(deadline):
-        brain._check_cooldown('tavily')
-        data = _search(query, limit, depth, deadline)
+        from .transport import configured
+        managed=configured()
+        if managed is not None:
+            data=managed.search(passages,limit,depth,deadline)
+        else:
+            brain._check_cooldown('tavily')
+            from .transport import DirectTransport
+            data = DirectTransport(None).search(passages,limit,depth,deadline)
 
     findings = [
         Finding(

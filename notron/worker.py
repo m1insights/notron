@@ -47,7 +47,10 @@ def probe():
 
 def failure(exc):
     from .network import ProviderConnectivityError, ProviderCooldownError, ProviderStateError
-    if isinstance(exc, credentials.CredentialUnavailable):
+    from .transport import ManagedError
+    if isinstance(exc,ManagedError):
+        state,reason=('permission_needed' if exc.code=='permission_required' else 'paused'),exc.code
+    elif isinstance(exc, credentials.CredentialUnavailable):
         state, reason = 'paused', 'keychain_locked'
     elif isinstance(exc, (StorageError, ProviderStateError)):
         state, reason = 'paused', 'storage_unavailable'

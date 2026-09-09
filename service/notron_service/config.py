@@ -68,6 +68,10 @@ class Settings:
     signing_key: bytes = field(repr=False)
     stripe_secret_key: str = field(repr=False)
     stripe_webhook_secret: str = field(repr=False)
+    provider_rates: str = field(default='',repr=False)
+    units_per_micro_usd: int = 0
+    nebius_key: str = field(default='',repr=False)
+    tavily_key: str = field(default='',repr=False)
     billing_prices: str = field(default='', repr=False)
     billing_return_urls: str = ''
     oidc_client_id: str = ''
@@ -111,8 +115,22 @@ class Settings:
             _invalid('PROVIDER_DESTINATION')
         if self.stripe_mode != 'test' or not self.stripe_secret_key.startswith('sk_test_') or not self.stripe_webhook_secret.startswith('whsec_'):
             _invalid('STRIPE_CONFIGURATION')
+        self.inference_rates
         self.billing_policy  # Validate optional billing configuration atomically.
         self._validate_database(local)
+
+    @property
+    def inference_rates(self):
+        if not any((self.provider_rates,self.units_per_micro_usd,self.nebius_key,self.tavily_key)):
+            return None
+        try:
+            import json
+            from .inference import RateTable
+            if type(self.units_per_micro_usd) is not int or not 1<=self.units_per_micro_usd<=10**9 or not self.nebius_key or not self.tavily_key:
+                raise ValueError()
+            return RateTable(**json.loads(self.provider_rates))
+        except (ValueError,TypeError,AttributeError):
+            _invalid('PROVIDER_RATES')
 
     @property
     def billing_policy(self):
@@ -167,7 +185,13 @@ class Settings:
             limit = int(get('MAX_BODY_BYTES', str(MAX_BODY_BYTES)))
         except ValueError:
             _invalid('MAX_BODY_BYTES')
+        try:
+            conversion=int(env.get('NOTRON_SERVICE_UNITS_PER_MICRO_USD','0'))
+        except ValueError:
+            _invalid('UNITS_PER_MICRO_USD')
         return cls(
+            provider_rates=env.get('NOTRON_SERVICE_PROVIDER_RATES',''),units_per_micro_usd=conversion,
+            nebius_key=env.get('NOTRON_SERVICE_NEBIUS_KEY',''),tavily_key=env.get('NOTRON_SERVICE_TAVILY_KEY',''),
             environment=get('ENVIRONMENT', 'production'), database_url=get('DATABASE_URL'),
             public_url=get('PUBLIC_URL'), oidc_issuer=get('OIDC_ISSUER'), oidc_audience=get('OIDC_AUDIENCE'),
             oidc_client_id=env.get('NOTRON_SERVICE_OIDC_CLIENT_ID',''),

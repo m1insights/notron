@@ -93,7 +93,7 @@ def test_readiness_is_injected_and_never_reveals_config(env, ready, status):
     assert response.status_code == status
     assert response.json() == {'status': 'ready' if status == 200 else 'not_ready'}
     assert client.get('/health/live').json() == {'status': 'alive'}
-    for path in ('/docs','/redoc','/openapi.json','/v1/infer'):
+    for path in ('/docs','/redoc','/openapi.json'):
         assert client.get(path).status_code == 404
     assert client.get('/v1/me').status_code == 503
 

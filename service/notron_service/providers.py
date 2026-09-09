@@ -45,3 +45,78 @@ class PreparedPassage(BaseModel):
         if self.origin in {'note','standing','memory','lesson','history'} and not self.note_id:
             raise ValueError('Note-derived passage requires a source identity.')
         return self
+
+
+def _http(url,payload,headers,timeout):
+    """No proxy, redirects, logging or automatic retry; bounded decoded response."""
+    import json
+    import time
+    from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
+    class NoRedirect(HTTPRedirectHandler):
+        def redirect_request(self,*args,**kwargs): return None
+    deadline=time.monotonic()+timeout
+    request=Request(url,json.dumps(payload,allow_nan=False).encode(),headers|{'Content-Type':'application/json'},method='POST')
+    with build_opener(ProxyHandler({}),NoRedirect()).open(request,timeout=timeout) as response:
+        data=bytearray()
+        while True:
+            if time.monotonic()>=deadline: raise TimeoutError()
+            chunk=response.read(65536)
+            if not chunk: break
+            data.extend(chunk)
+            if len(data)>4*1024*1024: raise ValueError('response_too_large')
+        return json.loads(data)
+
+
+class ProviderAdapter:
+    """Deployable fixed Nebius/Tavily adapters, injectable at the HTTP boundary."""
+    def __init__(self,nebius_key,tavily_key,*,http=_http,timeout=25):
+        from concurrent.futures import ThreadPoolExecutor
+        from threading import BoundedSemaphore
+        self.nebius_key,self.tavily_key=nebius_key,tavily_key
+        self.http,self.timeout=http,timeout
+        self.pool=ThreadPoolExecutor(max_workers=8,thread_name_prefix='provider')
+        self.slots=BoundedSemaphore(8)
+
+    def execute(self,op,body,texts,system):
+        import math
+        target=provider_target(op,body.tier)
+        headers={'Authorization':'Bearer '+self.nebius_key}
+        if op=='search':
+            url=target.base_url+'/search'; headers={}
+            payload={'api_key':self.tavily_key,'query':'\n'.join(texts),'max_results':body.limit,'search_depth':body.depth,'include_answer':True}
+        elif op=='embed':
+            url=target.base_url+'embeddings'; payload={'model':target.model,'input':texts}
+        else:
+            url=target.base_url+'chat/completions'
+            content='\n'.join(texts)
+            if op=='vision': content=[{'type':'text','text':content},{'type':'image_url','image_url':{'url':f'data:{body.mime};base64,{body.image}'}}]
+            payload={'model':target.model,'messages':[{'role':'system','content':system},{'role':'user','content':content}],
+                     'max_tokens':body.max_tokens,'temperature':body.temperature}
+            if body.json_mode: payload['response_format']={'type':'json_object'}
+        if not self.slots.acquire(blocking=False): raise RuntimeError('provider_unavailable')
+        def perform():
+            try: return self.http(url,payload,headers,self.timeout)
+            finally: self.slots.release()
+        future=self.pool.submit(perform)
+        data=future.result(timeout=self.timeout)
+        if op=='search':
+            from .search import validate_search
+            return validate_search(data,body.limit),0,0
+        usage=data['usage']
+        used_in=usage.get('prompt_tokens',usage.get('total_tokens'))
+        used_out=usage.get('completion_tokens',0) if op=='embed' else usage['completion_tokens']
+        if any(type(x) is not int or x<0 for x in (used_in,used_out)): raise ValueError('invalid_usage')
+        # completion_tokens includes reasoning; a separate count must not exceed it.
+        details=usage.get('completion_tokens_details') or {}
+        reasoning=details.get('reasoning_tokens',0)
+        if type(reasoning) is not int or not 0<=reasoning<=used_out: raise ValueError('invalid_usage')
+        if op=='embed':
+            rows=sorted(data['data'],key=lambda r:r['index'])
+            if [r['index'] for r in rows]!=list(range(len(texts))): raise ValueError('invalid_embeddings')
+            vectors=[r['embedding'] for r in rows]
+            if any(not isinstance(v,list) or not 1<=len(v)<=8192 or any(type(x) not in (int,float) or not math.isfinite(x) for x in v) for v in vectors): raise ValueError('invalid_embeddings')
+            if len({len(v) for v in vectors})!=1: raise ValueError('invalid_embeddings')
+            return {'embeddings':vectors},used_in,used_out
+        msg=data['choices'][0]['message']; content=msg.get('content') or ''; reasoning=msg.get('reasoning') or msg.get('reasoning_content') or ''
+        if not isinstance(content,str) or not isinstance(reasoning,str) or len(content)>262144 or len(reasoning)>262144: raise ValueError('invalid_response')
+        return {'content':content,'reasoning':bool(reasoning)},used_in,used_out
