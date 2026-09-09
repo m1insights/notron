@@ -101,7 +101,12 @@ def _filed(text: str) -> bool:
     return bool(spoke) and all(p.removeprefix("• ").startswith(notedoc.FILED) for p in spoke)
 
 
-def _pieces(body_html: str, ignore: tuple[str, ...]):
+def _without_receipts(text: str) -> str:
+    return "\n".join(line for line in text.splitlines()
+                     if not line.removeprefix("• ").startswith(notedoc.FILED))
+
+
+def _pieces(body_html: str, ignore: tuple[str, ...], *, exact_ignore: tuple[str, ...] = ()):
     """One source-indexed scan shared by detection and history selection.
 
     Signatures describe display structure only; they establish no authorship or
@@ -109,7 +114,11 @@ def _pieces(body_html: str, ignore: tuple[str, ...]):
     never a complete historical exchange.
     """
     texts = notedoc.texts(body_html)
-    ignore = (*ignore, QA_RULE)
+    ignore = (*(line for line in ignore if line not in exact_ignore), QA_RULE)
+
+    def furniture(text: str) -> bool:
+        return text.strip() in exact_ignore or _is_furniture(text, ignore)
+
     i = 0
     while i < len(texts):
         start = i
@@ -131,12 +140,12 @@ def _pieces(body_html: str, ignore: tuple[str, ...]):
             yield _Piece('break', '', i, i)
             i += 1
             continue
-        if _is_furniture(texts[i], ignore):
+        if furniture(texts[i]):
             i += 1
             continue
         parts, end, gap = [], i, 0
         while i < len(texts) and not _is_notron(texts[i]) and texts[i].strip() not in (RULE, 'New topic'):
-            if _is_furniture(texts[i], ignore):
+            if furniture(texts[i]):
                 gap += 1
                 if gap > MAX_GAP:
                     break
@@ -171,8 +180,8 @@ def _history_and_topic(body_html: str, question: Question, *, ignore: tuple[str,
     # Notes' first body line is always its title, and its standing help is not a
     # conversation turn. Callers can supply additional registered furniture.
     title = next((text.strip() for text in texts if text.strip()), '')
-    furniture = (*ignore, title, 'Type anything below this line') if title else ignore
-    pieces = list(_pieces(body_html, furniture))
+    furniture = (*ignore, 'Type anything below this line')
+    pieces = list(_pieces(body_html, furniture, exact_ignore=(title,) if title else ()))
     start = question.before
     if start is None:
         matches = [p for p in pieces if p.role == 'user' and p.after == question.after
@@ -191,13 +200,21 @@ def _history_and_topic(body_html: str, question: Question, *, ignore: tuple[str,
             pending = None
             topic += 1
         elif piece.role == 'user':
+            if pending:
+                exchanges.clear()
             pending = piece if not require_tag or TAG.search(piece.text) else None
         elif piece.role == 'assistant':
             if pending and piece.complete and piece.text and piece.after < start:
-                exchanges.append((Turn('user', pending.text), Turn('assistant', piece.text)))
+                exchanges.append((Turn('user', _without_receipts(pending.text)), Turn('assistant', piece.text)))
+            else:
+                exchanges.clear()
             pending = None
         else:
+            if pending:
+                exchanges.clear()
             pending = None
+    if pending:
+        exchanges.clear()
     selected, size = [], 0
     # Keep the most recent contiguous whole exchanges. Skipping an oversized
     # recent answer would make "that" silently refer to an older answer.
@@ -229,8 +246,8 @@ def local_context_before(body_html: str, question: Question, *,
     """
     texts = notedoc.texts(body_html)
     title = next((text.strip() for text in texts if text.strip()), '')
-    furniture = (*ignore, title, 'Type anything below this line') if title else ignore
-    pieces = list(_pieces(body_html, furniture))
+    furniture = (*ignore, 'Type anything below this line')
+    pieces = list(_pieces(body_html, furniture, exact_ignore=(title,) if title else ()))
     matches = [i for i, piece in enumerate(pieces)
                if piece.role == 'user' and piece.after == question.after
                and piece.text == question.text
@@ -246,7 +263,7 @@ def local_context_before(body_html: str, question: Question, *,
             # Looking beyond the current piece is unnecessary: its full thought
             # is always included, even when called after a reply was inserted.
             if index == current or pieces[index + 1].role != 'assistant':
-                local.append(piece.text)
+                local.append(_without_receipts(piece.text))
     return "\n\n".join(local)
 
 

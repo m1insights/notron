@@ -134,3 +134,20 @@ def test_tagged_local_context_supports_legacy_question_source_position():
 def test_tagged_local_context_fails_closed_for_missing_question():
     html = body('Local idea\n@notron explain?')
     assert c.local_context_before(html, c.Question('missing', 999), ignore=IGNORE) == ''
+
+
+def test_title_is_exact_furniture_not_a_prefix_for_real_questions():
+    html = markup.render('Budget', 'Budget for launch?\n' + c.turn('Twenty thousand') + '\nMore detail?')
+    question = c.unanswered(html, ignore=('Budget',))[-1]
+    assert [t.text for t in c.history_before(html, question)] == ['Budget for launch?', 'Twenty thousand']
+
+
+def test_mixed_filing_receipts_are_excluded_from_historical_user_turn():
+    html = body('✓ @notron file this → Projects\nLocal idea\n@notron expand?\n' + c.turn('Expanded') + '\n@notron simpler?')
+    assert [t.text for t in c.history_before(html, last(html))] == ['Local idea\n@notron expand?', 'Expanded']
+
+
+def test_missing_latest_answer_does_not_resurrect_older_antecedent():
+    for missing in (c.turn(''), '\n———\n', '\n\n\n\n'):
+        html = body('First?\n' + c.turn('Old answer') + '\nLatest?\n' + missing + '\nMake that simpler')
+        assert c.history_before(html, last(html)) == []
