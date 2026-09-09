@@ -65,7 +65,7 @@ Where I live:
 ## What matters right now
 -
 """,
-    ASK: """Type anything below this line and Notron will answer underneath it.
+    ASK: """Type anything below this line and Notron will answer underneath it. Follow up with “make that simpler” or “expand on that.” Put New topic on a line of its own to start fresh. She uses up to three earlier exchanges; deleting an exchange removes it from future conversation context.
 
 ———
 """,

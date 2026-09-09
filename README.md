@@ -38,6 +38,19 @@ Two ways, both of them just typing in Notes.
 bottom. She waits until you've stopped typing, answers directly underneath what
 you wrote, and draws a line so the next thing you type is the next question.
 
+Follow up below an answer with “make that simpler,” “expand on that,” or a new
+question about the same subject. Notron uses up to three complete earlier
+exchanges (8,000 characters), only above your current question. Put `New topic`
+on a line of its own to start fresh. Delete earlier exchanges to remove them
+from future conversation context; this does not erase the encrypted recovery
+ledger or anything you explicitly saved to Memory.
+
+When Notron asks which reminder list, reply with its displayed name or ID in the
+same conversation. If a delayed request has an uncertain date, reply with an
+explicit date such as `2026-12-01`. Saved action questions expire after 24 hours;
+changed or ambiguous proposals require clarification. Calendar events can be
+created, but moving or deleting an event still needs the Calendar app.
+
 **Or tag her where you're already thinking.** Write `#notron` in any note you own —
 the book idea, the meeting note, the half-finished plan — and ask about *that*
 thing, in *that* place:

@@ -202,6 +202,39 @@ P03 adds `Turn(role, text, request_id=None)` and `ConversationContext(thread_id,
 
 Router and writer receive the same bounded history. A transformation of a previous answer does not trigger a new world search. A new factual question can search using a resolved query. Missing/ambiguous antecedents ask a short question. Model-generated reply markers do not count as cryptographic authorship; operation records establish action provenance. No implicit promotion of history to permanent Memory. Action follow-ups inherit no new powers.
 
+### P03 implementation contract (2026-09-09)
+
+The parser shares source-indexed pieces between unanswered-question detection and
+history selection. `Question.before` is optional for older callers; new questions
+carry both source boundaries. Empty/deleted latest answers invalidate older
+antecedents. Exact title matching preserves real text beginning with a note title.
+Tagged local context excludes completed conversations and all material after the
+current question; its separate cap does not bypass the history cap.
+
+`run_request(..., conversation_context=None)` reconstructs real Notes history from
+the exact source revision before claiming work. A changed or unmatched source stops
+before inference. Router and writer receive identical P01 history passages; the
+writer also sees response mode. Resolved factual queries never replace the immutable
+user request or become scheduling authority. Encrypted checkpoints restore typed
+conversation state after restart.
+
+Pending clarifications and reply resolutions use additive SQLite tables whose
+sensitive payloads are encrypted. They expire after 24 hours; revocation/reset
+invalidates saved consent. A reply remains its own leased request, while
+`Action.origin_request_id` and an original-request/clarification operation ID link
+the external action to the exact original proposal. Permission, unique original visible
+source span and its prefix fingerprint, exact reminder target snapshot (title,
+list, due date, recurrence), date and conflict fingerprint are rechecked before a save.
+An unrelated new request cancels pending consent. Proposal/reply content is bounded
+to 200 entries and expires after 24 hours; durable operation identities are preserved. This
+preserves P02 request completion/receipt semantics. Legacy actions default to no
+origin field; verified prior effects are never re-created.
+
+No backward downgrade of new encrypted payloads is supported: retain compatible
+code or restore a matched offline backup of ledger, payloads and configuration.
+Do not delete operation history to force retries. Native integration and live
+model quality remain separate qualification gates.
+
 ## 5. Hosted service and mobile protocol
 
 Proposed service lives in `service/`, Python 3.11+, FastAPI/Pydantic 2, PostgreSQL for durable account/operation/usage metadata. Pin exact dependencies at implementation and keep service dependencies separate from the desktop package. Use a managed OIDC issuer with system-browser Authorization Code + PKCE for native sign-in, and Stripe for billing. Vendor provisioning is an external input; the code targets standard discovery/JWKS endpoints with configured issuer/audience and does not implement passwords.
