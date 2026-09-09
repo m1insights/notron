@@ -133,13 +133,43 @@ final class AccountSessionTests: XCTestCase {
         XCTAssertEqual(transport.refreshCalls,0)
     }
 
+    @MainActor func testFailedMarkerWriteStillDeletesRefreshBeforeRestart() async throws {
+        let vault=MemoryVault();let transport=FakeTransport();let barrier=MemoryBarrier()
+        let session=AccountSession(vault:vault,transport:transport,barrier:barrier,stopManaged:{})
+        try await session.complete(code:"code",verifier:"verifier",nonce:"expected")
+        barrier.writeFails=true;transport.revocationFails=true
+        await session.signOut()
+        XCTAssertEqual(vault.deleteCalls,1)
+        XCTAssertNil(vault.values["managed-refresh"])
+        XCTAssertTrue(session.credentialCleanupFailed)
+        XCTAssertFalse(session.isSignedIn)
+        let restarted=AccountSession(vault:vault,transport:transport,barrier:barrier,stopManaged:{})
+        do {_=try await restarted.accessToken();XCTFail("deleted refresh must not be reused")}catch{}
+        XCTAssertFalse(restarted.isSignedIn)
+        XCTAssertEqual(transport.refreshCalls,0)
+    }
+    @MainActor func testBothLocalCleanupFailuresRemainExplicit() async throws {
+        let vault=MemoryVault();let transport=FakeTransport();let barrier=MemoryBarrier()
+        let session=AccountSession(vault:vault,transport:transport,barrier:barrier,stopManaged:{})
+        try await session.complete(code:"code",verifier:"verifier",nonce:"expected")
+        barrier.writeFails=true;vault.deleteFails=true;transport.revocationFails=true
+        await session.signOut()
+        XCTAssertEqual(vault.deleteCalls,1)
+        XCTAssertTrue(session.credentialCleanupFailed)
+        XCTAssertFalse(session.isSignedIn)
+        do {_=try await session.accessToken();XCTFail("current session must stop")}catch{}
+        // Neither durable store changed: do not claim cleanup survived restart.
+        XCTAssertNotNil(vault.values["managed-refresh"])
+        XCTAssertEqual(barrier.state,.active)
+    }
+
 }
 final class MemoryVault: SessionVault {
     var values:[String:Data]=[:]
-    var deleteFails=false
+    var deleteFails=false;var deleteCalls=0
     func get(_ name:String)throws->Data?{values[name]}
     func put(_ name:String,value:Data)throws{values[name]=value}
-    func delete(_ name:String)throws{if deleteFails{throw SessionError.unavailable};values.removeValue(forKey:name)}
+    func delete(_ name:String)throws{deleteCalls+=1;if deleteFails{throw SessionError.unavailable};values.removeValue(forKey:name)}
 }
 @MainActor final class FakeTransport: SessionTransport {
     var nonce="expected";var rejected=false
@@ -155,6 +185,7 @@ final class MemoryVault: SessionVault {
 
 final class MemoryBarrier: SessionBarrier {
     var state:SessionBarrierState = .signedOut
+    var writeFails=false
     func read()throws->SessionBarrierState {state}
-    func write(_ state:SessionBarrierState)throws {self.state=state}
+    func write(_ state:SessionBarrierState)throws {if writeFails{throw SessionError.unavailable};self.state=state}
 }

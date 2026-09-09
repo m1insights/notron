@@ -227,15 +227,22 @@ public struct DeviceIdentity: Codable {
         locallySignedOut=true
         generation+=1;access=nil;expiry = .distantPast;identity=nil;isSignedIn=false
         stopManaged()
+        // Try both independent protections. A full/unwritable metadata volume
+        // must not prevent otherwise-working Keychain credential deletion.
+        var cleanupFailed=false
+        do {try barrier.write(.cleanupPending)}
+        catch {cleanupFailed=true}
+        var credentialDeleted=false
         do {
-            // Persist before touching Keychain: interruption or cleanup failure
-            // leaves a durable stop with a visible retry action after relaunch.
-            try barrier.write(.cleanupPending)
             try vault.delete("managed-refresh")
-            try barrier.write(.signedOut)
-            credentialCleanupFailed=false
+            credentialDeleted=true
+        } catch {cleanupFailed=true}
+        if credentialDeleted {
+            do {try barrier.write(.signedOut)}
+            catch {cleanupFailed=true}
         }
-        catch {credentialCleanupFailed=true;throw SessionError.unavailable}
+        credentialCleanupFailed=cleanupFailed
+        if cleanupFailed {throw SessionError.unavailable}
     }
     /// Clear first, then best-effort remote revocation. No Notes deletion calls.
     public func signOut() async {

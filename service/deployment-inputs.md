@@ -157,3 +157,9 @@ unreadable, malformed or insecure metadata also fails closed. Cleanup retry stay
 visible after restart. Successful cleanup retains `signedOut`; only explicit,
 nonce-verified browser login can replace the refresh credential and write `active`.
 Legacy Keychain credentials without this metadata therefore require fresh login.
+
+Sign-out independently attempts metadata persistence and Keychain deletion: failure
+of either must not suppress the other. Any failed step leaves cleanup uncertainty
+visible. If both local mutations fail and remote revocation is offline, only the
+current in-memory session is guaranteed stopped; the UI explicitly asks the user
+to retry before closing Notron. No successful durable sign-out is claimed then.

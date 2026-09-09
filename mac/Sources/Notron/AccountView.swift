@@ -73,7 +73,7 @@ extension KeychainStore: SessionVault {}
     }
     func signOut() {
         cancel()
-        operation=Task {await session?.signOut();status=session?.credentialCleanupFailed == true ? "Processing stopped, but Keychain could not clear sign-in. Unlock your Mac and sign out again." : "Signed out. Managed processing is stopped. Your Notes are unchanged.";objectWillChange.send()}
+        operation=Task {await session?.signOut();status=session?.credentialCleanupFailed == true ? "Processing is stopped for now, but sign-out could not be completed. Retry before closing Notron." : "Signed out. Managed processing is stopped. Your Notes are unchanged.";objectWillChange.send()}
     }
     func revokeThisDevice() {
         guard let session,let device=session.identity?.deviceID else{return}
