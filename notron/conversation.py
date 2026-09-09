@@ -14,7 +14,8 @@ anything outside those.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field
 
 from . import markup, notedoc
 
@@ -46,6 +47,7 @@ MAX_GAP = 1
 class Question:
     text: str
     after: int          # insert the reply after this block index
+    before: int | None = None  # first source block; never re-find duplicate text
 
 
 def _is_notron(text: str) -> bool:
@@ -70,81 +72,165 @@ def _is_furniture(text: str, ignore: tuple[str, ...]) -> bool:
     return any(stripped == line or stripped.startswith(line) for line in ignore)
 
 
-def unanswered(
-    body_html: str,
-    *,
-    ignore: tuple[str, ...] = (),
-    require_tag: bool = False,
-) -> list[Question]:
-    """Every turn of yours that Notron has not replied to yet.
+@dataclass(frozen=True)
+class Turn:
+    role: str
+    text: str
+    request_id: str | None = None
 
-    A turn is a run of lines you wrote together. Lines typed one after another
-    belong to the same thought and stay together; a real gap between paragraphs
-    starts a new one. Getting this wrong loses messages: a question typed above
-    an older exchange was swallowed into it, saw Notron's old reply sitting
-    underneath, and concluded it had already been answered.
 
-    `ignore` lists the note's standing header lines, which are scenery rather
-    than anything anyone said. `require_tag` restricts this to turns that
-    mention her, which is how she behaves in notes that are not hers — she stays
-    quiet unless spoken to.
+@dataclass(frozen=True)
+class ConversationContext:
+    thread_id: str
+    turns: list[Turn] = field(default_factory=list)
+    action_refs: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _Piece:
+    role: str
+    text: str
+    before: int
+    after: int
+    complete: bool = True
+
+
+def _filed(text: str) -> bool:
+    parts = text.splitlines()
+    spoke = [p for p in parts if TAG.search(p)] or parts
+    return bool(spoke) and all(p.removeprefix("• ").startswith(notedoc.FILED) for p in spoke)
+
+
+def _pieces(body_html: str, ignore: tuple[str, ...]):
+    """One source-indexed scan shared by detection and history selection.
+
+    Signatures describe display structure only; they establish no authorship or
+    operation identity. An unclosed reply remains answered for detection but is
+    never a complete historical exchange.
     """
     texts = notedoc.texts(body_html)
-    out: list[Question] = []
+    ignore = (*ignore, QA_RULE)
     i = 0
     while i < len(texts):
+        start = i
         if _is_notron(texts[i]):
-            # Everything through to her closing rule is one reply of hers.
+            parts = [texts[i].lstrip()[len(SIGNATURE):].strip()]
             i += 1
             while i < len(texts) and texts[i].strip() != RULE:
+                parts.append(texts[i].strip())
                 i += 1
+            yield _Piece('assistant', "\n".join(p for p in parts if p).strip(), start, i,
+                         complete=i < len(texts))
             i += 1
             continue
-
+        if texts[i].strip() == 'New topic':
+            yield _Piece('topic', '', i, i)
+            i += 1
+            continue
+        if texts[i].strip() == RULE:
+            yield _Piece('break', '', i, i)
+            i += 1
+            continue
         if _is_furniture(texts[i], ignore):
             i += 1
             continue
-
         parts, end, gap = [], i, 0
-        while i < len(texts) and not _is_notron(texts[i]) and texts[i].strip() != RULE:
+        while i < len(texts) and not _is_notron(texts[i]) and texts[i].strip() not in (RULE, 'New topic'):
             if _is_furniture(texts[i], ignore):
                 gap += 1
-                if gap > MAX_GAP:      # a real break between two separate thoughts
+                if gap > MAX_GAP:
                     break
             else:
                 gap = 0
                 parts.append(texts[i].strip())
                 end = i
             i += 1
+        text = "\n".join(parts).strip()
+        if text:
+            yield _Piece('filed' if _filed(text) else 'user', text, start, end)
 
-        # Answered only if Notron speaks next. Blank space between does not count,
-        # but a rule does: a reply on the far side of a rule belongs to a
-        # different exchange, not to this question.
-        peek = i
-        while peek < len(texts) and _is_blank(texts[peek], ignore):
-            peek += 1
-        answered = peek < len(texts) and _is_notron(texts[peek])
 
-        # A turn the Filer has ticked is done too: the lines that spoke to her
-        # now read `✓ … → Somewhere`, and the receipt is the reply. Without this
-        # rule a filed `@notron file this` would be read as unanswered forever.
-        # Untagged lines typed alongside are context, not the question, so they
-        # do not have to be ticked — unless nothing was tagged (the Ask note),
-        # where every line is the question.
-        spoke = [p for p in parts if TAG.search(p)] or parts
-        # `to_text` (what `parts` is made of) turns a list item's opening tag
-        # into a literal "• " ahead of whatever the line starts with — so a
-        # ticked list item reads "• ✓ …", not "✓ …", and a bare `startswith`
-        # would call it unfiled forever. A block-level part, not a per-line
-        # one, so the bullet marker is `parts`'s own prefix to strip here, not
-        # something the mark itself could have put first.
-        filed = bool(parts) and all(p.removeprefix("• ").startswith(notedoc.FILED) for p in spoke)
+def unanswered(
+    body_html: str,
+    *,
+    ignore: tuple[str, ...] = (),
+    require_tag: bool = False,
+) -> list[Question]:
+    """Find unanswered source-positioned user runs, including mid-note inserts."""
+    pieces = list(_pieces(body_html, ignore))
+    return [Question(piece.text, piece.after, piece.before)
+            for index, piece in enumerate(pieces)
+            if piece.role == 'user'
+            and (index + 1 == len(pieces) or pieces[index + 1].role != 'assistant')
+            and (not require_tag or TAG.search(piece.text))]
 
-        turn = "\n".join(parts).strip()
-        if turn and not answered and not filed and (not require_tag or TAG.search(turn)):
-            out.append(Question(text=turn, after=end))
 
-    return out
+def _history_and_topic(body_html: str, question: Question, *, ignore: tuple[str, ...],
+                       require_tag: bool, max_exchanges: int, max_chars: int):
+    texts = notedoc.texts(body_html)
+    # Notes' first body line is always its title, and its standing help is not a
+    # conversation turn. Callers can supply additional registered furniture.
+    title = next((text.strip() for text in texts if text.strip()), '')
+    furniture = (*ignore, title, 'Type anything below this line') if title else ignore
+    pieces = list(_pieces(body_html, furniture))
+    start = question.before
+    if start is None:
+        matches = [p for p in pieces if p.role == 'user' and p.after == question.after
+                   and p.text == question.text]
+        if len(matches) != 1:
+            return [], 0
+        start = matches[0].before
+    exchanges = []
+    pending = None
+    topic = 0
+    for piece in pieces:
+        if piece.before >= start:
+            break
+        if piece.role == 'topic':
+            exchanges.clear()
+            pending = None
+            topic += 1
+        elif piece.role == 'user':
+            pending = piece if not require_tag or TAG.search(piece.text) else None
+        elif piece.role == 'assistant':
+            if pending and piece.complete and piece.text and piece.after < start:
+                exchanges.append((Turn('user', pending.text), Turn('assistant', piece.text)))
+            pending = None
+        else:
+            pending = None
+    selected, size = [], 0
+    # Keep the most recent contiguous whole exchanges. Skipping an oversized
+    # recent answer would make "that" silently refer to an older answer.
+    for exchange in reversed(exchanges):
+        chars = sum(len(turn.text) for turn in exchange)
+        if len(selected) >= max(0, min(3, max_exchanges)) or size + chars > min(8000, max_chars):
+            break
+        selected.append(exchange)
+        size += chars
+    return [turn for exchange in reversed(selected) for turn in exchange], topic
+
+
+def history_before(body_html: str, question: Question, *, max_exchanges: int = 3,
+                   max_chars: int = 8000) -> list[Turn]:
+    """At most three whole preceding exchanges in this topic, capped at 8,000 chars."""
+    turns, _ = _history_and_topic(body_html, question, ignore=(), require_tag=False,
+                                 max_exchanges=max_exchanges, max_chars=max_chars)
+    return turns
+
+
+def context_before(body_html: str, question: Question, *, note_id: str,
+                   ignore: tuple[str, ...] = (), require_tag: bool = False,
+                   max_exchanges: int = 3, max_chars: int = 8000) -> ConversationContext:
+    """A note/topic identity stable across answer inserts and later appends.
+
+    Topic ordinals change if boundaries are edited; durable clarification source
+    revisions must additionally be checked before consenting to any action.
+    Text never supplies trusted request IDs or action references.
+    """
+    turns, topic = _history_and_topic(body_html, question, ignore=ignore, require_tag=require_tag,
+                                     max_exchanges=max_exchanges, max_chars=max_chars)
+    thread_id = hashlib.sha256(f'{len(note_id)}:{note_id}:topic:{topic}'.encode()).hexdigest()
+    return ConversationContext(thread_id, turns)
 
 
 def turn(markdown: str) -> str:
