@@ -356,6 +356,8 @@ class Billing:
 
     def repair(self, limit=100):
         """Restart-safe inbox replay plus independent scheduled authoritative repair."""
+        if type(limit) is not int or not 1<=limit<=1000:
+            raise ValueError('invalid_limit')
         counts={'processed':0,'reconciled':0,'failed':0}
         with self.store._connect() as conn:
             events=conn.execute("SELECT * FROM webhook_events WHERE processed_at IS NULL ORDER BY COALESCE(last_attempt_at,received_at),event_id LIMIT %s",(limit,)).fetchall()

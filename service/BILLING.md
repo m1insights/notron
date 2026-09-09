@@ -121,6 +121,9 @@ the same approved configuration/credentials as the service:
 python -m notron_service.billing_repair --limit 100
 ```
 
+The limit must be an integer from 1 through 1000. Both the CLI and direct
+`Billing.repair` reject invalid limits before any database or provider work.
+
 This replays the durable inbox and independently fetches current subscriptions,
 paid invoices/payments and owned top-up sessions, including missing webhook repair.
 Multiple workers serialize by account/event and grants remain unique. Failed

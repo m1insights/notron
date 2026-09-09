@@ -14,8 +14,8 @@ def main(argv=None):
     parser=argparse.ArgumentParser(description='Replay billing inbox and reconcile authoritative Stripe state')
     parser.add_argument('--limit',type=int,default=100)
     args=parser.parse_args(argv)
-    if not 1<=args.limit<=10000:
-        parser.error('limit must be between 1 and 10000')
+    if not 1<=args.limit<=1000:
+        parser.error('limit must be between 1 and 1000')
     try:
         billing=create_default_app().state.services.billing
         if billing is None:
