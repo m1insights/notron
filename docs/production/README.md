@@ -1,6 +1,6 @@
 # Notron production roadmap
 
-Status: **P01 Tasks 1–5, P02 Tasks 1–6 and P03 Tasks 1–4 implemented; P05 Task 1 implemented, Task 2 next; P04 device testing deferred**. Updated 2026-09-09. Native secure-startup and release qualification remain pending P06/P07. See the [branch reconciliation](handoffs/2026-09-09-branch-integration.md).
+Status: **P01 Tasks 1–5, P02 Tasks 1–6 and P03 Tasks 1–4 implemented; P05 Tasks 1–6 locally implemented; P04 device testing deferred**. Updated 2026-09-09. Native secure-startup and release qualification remain pending P06/P07. See the [branch reconciliation](handoffs/2026-09-09-branch-integration.md).
 Evidence: [P02 Task 6 handoff](handoffs/2026-09-05-P02-task-6.md), [P02 Task 5 handoff](handoffs/2026-09-05-P02-task-5.md), [P02 Tasks 3–4 batch handoff](handoffs/2026-09-05-P02-tasks-3-4.md), [P02 Tasks 1–2 batch handoff](handoffs/2026-09-05-P02-tasks-1-2.md), [P01 Task 5 session handoff](handoffs/2026-09-05-P01-task-5.md), [security report](evidence/P01-security-boundaries.md), [secure storage evidence](evidence/P01-secure-storage.md) and [outbound caller map](evidence/P01-outbound-map.md).
 Audience: the owner and an engineer starting a fresh coding session.
 
@@ -20,7 +20,7 @@ Read the [shared design and contracts](design.md) before any plan. Findings are 
 | P02 | [Reliable execution and recovery](plans/02-reliable-execution.md) | P01 policy APIs | Durable operations, guarded writes, safe retries and stale-request handling | Local implementation complete — Tasks 1–6; native P06/M1 gates open |
 | P03 | [Ask conversation](plans/03-ask-conversation.md) | P01; P02 request contracts | Bounded contextual follow-ups and clarification | Implemented and reviewed; 1,264 tests pass |
 | P04 | [Mobile Shortcut feasibility](plans/04-shortcut-prototype.md) | Local experiment can start immediately; hosted test requires P01 and P02 contracts | Real-iPhone evidence and explicit continue/stop decision | Deferred until owner can test on iPhone |
-| P05 | [Accounts and paid service](plans/05-accounts-service.md) | P01; P02 contracts; P04 backend contract if experiment proceeds | Authenticated, metered service with server-enforced access | In progress — Task 1 foundation implemented; Task 2 next |
+| P05 | [Accounts and paid service](plans/05-accounts-service.md) | P01; P02 contracts; P04 backend contract if experiment proceeds | Authenticated, metered service with server-enforced access | Local coding implemented; staging and signed-device gates open |
 | P06 | [Mac installer and onboarding](plans/06-mac-distribution.md) | Runtime work can start after P01; completion uses P02/P03; paid path uses P05 | Portable signed app, truthful onboarding/status, updates and uninstall | Companion/onboarding/pin UI exists and builds; portable signed distribution pending |
 | P07 | [Pilot and public release](plans/07-pilot-release.md) | Gate requirements below | Measured pilot, security review and release decision | Planned |
 
@@ -126,14 +126,14 @@ This approved roadmap supersedes older product assumptions where they conflict: 
 
 ## Next implementation session
 
-Continue with **P05 Task 2: native sign-in and account verification**.
-The owner deferred P04 device testing while away from their desk. P05 does not
-require that experiment to complete first. Task 1 now provides the service
-configuration, account schema, readiness checks and deployment templates.
-See the [P05 Task 1 handoff](handoffs/2026-09-09-P05-task-1.md) and
-[foundation evidence](evidence/P05-service-foundation.md).
+Next coding plan: **P06 Mac packaging and onboarding**, followed by its signed-device qualification.
+P05 Tasks 2–6 implement sign-in, billing, metered AI transport, device leases,
+service account deletion and operations tooling. The owner deferred P04 device testing while away;
+that does not block the managed-service coding work.
+See the [managed-service handoff](handoffs/2026-09-09-P05-managed-service.md).
 
-P03 is complete with 1,264 passing desktop tests. Native Apple adapter behavior,
-P01 private reporting and P06/P07 signed/native/security review gates remain open.
-Real processing stays paused. No hosted service was provisioned or deployed;
-P05 sign-in, billing, metering and operations remain Tasks 2–6.
+P05 still needs approved external provisioning, real Stripe test clocks, signed
+native login/Keychain/worker qualification, deployment and release evidence.
+P06 remains the signed startup/distribution gate; real processing stays paused.
+No service was provisioned, no live billing/provider calls ran, and nothing was
+pushed. P04 resumes when the owner can perform the iPhone experiment.
