@@ -6,7 +6,7 @@ The owner authorized coding while away, with real-device/account checks deferred
 ## Observed local validation
 
 - Desktop: 1,343 synthetic Python tests passed (baseline 1,264).
-- Service: 221 tests passed, zero skipped, against disposable PostgreSQL 18.6.
+- Service: 238 tests passed, zero skipped, against disposable PostgreSQL 18.6.
 - Swift: 17 session/IPC/lease tests passed; app build passed.
 - Installed service wheel imports successfully with shared privacy source and all
   migration/rollback resources. No repository-working-directory import fallback.
@@ -30,6 +30,25 @@ expired encrypted cache; revoked source during token refresh; malformed response
 and usage; lease transfer/expiry/loss before effects; exact local recovery;
 deleted-account cost retention; fair retention batches; old-key write fencing;
 rate limiting and privilege separation. Tests use synthetic data only.
+
+Independent task reviews and the final whole-branch integration review passed;
+no critical or important finding remained open for local integration.
+
+## Final branch verification
+
+On the final code tree (through `93cfd98`), all commands exited 0:
+
+```sh
+.venv/bin/python -m pytest tests -q -o addopts=''
+service/scripts/test-postgres.sh
+swift test --package-path mac
+swift build --package-path mac
+```
+
+The service runner used the local PostgreSQL 18.6 binary/share overrides documented
+below. Desktop: 1,343 passed in 27.66s; service: 238 passed in 14.09s, zero skipped;
+Swift: 17 passed and build completed. One upstream Starlette/AnyIO deprecation
+warning remains; it did not fail the service suite.
 
 ## Commands and reproducibility
 

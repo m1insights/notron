@@ -3,7 +3,8 @@
 ## Scope and status
 
 The owner asked to complete coding while away from their desk. P04 real-iPhone
-validation remains deferred. P05 Tasks 2–6 are locally implemented and task-reviewed; final integration review follows. No remote deployment,
+validation remains deferred. P05 Tasks 2–6 are locally implemented and independently reviewed. The final
+whole-branch review passed with no material findings; local integration is authorized. No remote deployment,
 provider payment/inference call, real Notes access, push or signed startup occurred.
 
 Stack: Python, FastAPI/Pydantic, PostgreSQL, Stripe SDK, PyJWT and Swift/SwiftUI.
@@ -38,7 +39,8 @@ Detailed contracts: [billing](../../../service/BILLING.md),
 Independent task reviews accepted Tasks 2–6 after correcting persistent sign-out failure
 handling, historical refunded-price grants, refreshed-upload privacy checks,
 malformed provider replies/usage counts, retention-batch starvation and maintenance
-batch validation before side effects. Synthetic
+batch validation before side effects. The final whole-branch review accepted auth/billing/usage/lease/deletion integration
+with no additional material findings. Synthetic
 regressions reproduce the failures; no issue was dismissed merely to finish.
 
 Write-path invariants remain: #2 existing-text preservation still uses the original
