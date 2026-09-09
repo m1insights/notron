@@ -70,6 +70,10 @@ def latest(envelope, order):
         data = get(envelope.request_id + ':checkpoint:' + name)
         if data is None:
             continue
+        from .conversation import ConversationContext, Turn
+        if data.get('conversation'):
+            c = data['conversation']
+            data['conversation'] = ConversationContext(c['thread_id'], [Turn(**t) for t in c['turns']], c.get('action_refs', []))
         data['actions'] = [Action(**a) for a in data['actions']]
         data['writes'] = [Write(**w) for w in data['writes']]
         data['write_targets'] = {k: Write(**v) for k, v in data['write_targets'].items()}

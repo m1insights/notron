@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from .requests import RequestEnvelope
 
 from .outbound import Passage
+from .conversation import ConversationContext
 
 
 @dataclass
@@ -56,11 +57,18 @@ class Action:
     notes: str = ""
     target_id: str | None = None     # stable reminder/calendar/list identifier
     timezone: str = ""               # captured IANA zone, set locally
+    origin_request_id: str = ""      # original proposal; active reply still owns execution
     operation_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 @dataclass
 class State:
+    conversation: ConversationContext | None = None
+    resolved_request: str = ""
+    response_mode: str = "answer"
+    clarification_id: str = ""
+    action_request_id: str = ""
+    action_request: str = ""
     resumed: bool = False
     request_id: str = ""
     envelope: RequestEnvelope | None = None

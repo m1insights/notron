@@ -173,6 +173,21 @@ class RequestStore:
             return [self._read(row) for row in db.execute(
                 "SELECT * FROM requests WHERE status IN ('prepared','running','needs_review') ORDER BY created_at")]
 
+    def history_request_ids(self, note_id, thread_id, user_turns):
+        """Match unique visible user turns to durable identities, never signatures."""
+        from . import privacy
+        with self.operations.connection() as db:
+            records = [self._read(row) for row in db.execute(
+                "SELECT * FROM requests WHERE note_id=? AND payload_ref IS NOT NULL ORDER BY created_at DESC LIMIT 200",
+                (note_id,))]
+        ids = []
+        for text in user_turns:
+            matches = [r.envelope.request_id for r in records if r.envelope.thread_id == thread_id
+                       and privacy.redact(r.envelope.source_text or r.envelope.text).strip() == text.strip()]
+            if len(matches) == 1:
+                ids.extend(matches)
+        return ids
+
     def claim(self, request_id: str) -> bool:
         with self.operations.transaction() as db:
             row = db.execute('SELECT * FROM requests WHERE request_id=?', (request_id,)).fetchone()
@@ -209,7 +224,10 @@ class RequestStore:
             raise ValueError('Occurrences require a Notes source.')
         rev = revision(body)
         blocks = [revision(text) for text in notedoc.texts(body)]
-        items = [{'anchor': revision(q.text), 'after': q.after, 'raw': q.text} for q in questions]
+        items = [{'anchor': revision(q.text), 'after': q.after, 'raw': q.text,
+                  'thread_id': conversation.context_before(body, q, note_id=note_id,
+                                                           ignore=(title,), require_tag=source == 'mention').thread_id}
+                 for q in questions]
         if len({q.after for q in questions}) != len(questions):
             raise ValueError('Occurrence spans must be distinct.')
         with self.operations.transaction() as db:
@@ -301,13 +319,13 @@ class RequestStore:
                     # Pending source observations can move before inference.
                     # Once claimed, preserve the exact input of the active run.
                     if record.status == 'prepared':
-                        envelope = replace(envelope, source_revision=rev,
+                        envelope = replace(envelope, source_revision=rev, thread_id=item['thread_id'],
                                            reply_to=(title, folder, item['after']), source_modified=modified,
                                            here=self._context(body, item['raw']) if source == 'mention' else '')
                         self._save(db, envelope)
                 else:
                     text = conversation.strip_tag(conversation.tagged_lines(item['raw'])) if source == 'mention' else item['raw']
-                    envelope = create(text, source=source, note_id=note_id, source_revision=rev,
+                    envelope = create(text, source=source, note_id=note_id, source_revision=rev, thread_id=item['thread_id'],
                                       source_text=item['raw'], reply_to=(title, folder, item['after']),
                                       source_modified=modified,
                                       here=self._context(body, item['raw']) if source == 'mention' else '')
@@ -385,6 +403,11 @@ class RequestStore:
             rows = db.execute('SELECT request_id,note_id FROM requests WHERE payload_ref IS NOT NULL').fetchall()
             removed = {row['request_id'] for row in rows if all_content or (row['note_id'] and
                        (not snap.can_read(row['note_id']) or (live is not None and row['note_id'] not in live)))}
+            if all_content or removed:
+                # A revoked request invalidates saved consent and its replay payload.
+                for table in ('clarifications', 'clarification_replies'):
+                    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone():
+                        db.execute(f'DELETE FROM {table}')
             for request_id in removed:
                 db.execute("UPDATE requests SET payload_ref=NULL,payload_hash=NULL,status=CASE WHEN status='completed' THEN status ELSE 'needs_review' END,"
                            "failure_code='policy_changed',updated_at=? WHERE request_id=?", (now(), request_id))
