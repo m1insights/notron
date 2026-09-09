@@ -186,8 +186,11 @@ def _conversation(envelope, supplied=None, *, state=None):
             raise requests.OperationConflict('Conversation source changed.')
         ignore = watch.ASK_FURNITURE if envelope.source == 'ask' else (envelope.reply_to[0],)
         questions = conversation.unanswered(body, ignore=ignore, require_tag=envelope.source == 'mention')
+        source = envelope.source_text or envelope.text
         matches = [q for q in questions if q.after == envelope.reply_to[2]
-                   and q.text == (envelope.source_text or envelope.text)]
+                   and (q.text == source or (envelope.source == 'mention'
+                        and conversation.tagged_lines(q.text) == source
+                        and conversation.strip_tag(source) == envelope.text))]
         if len(matches) != 1:
             raise requests.OperationConflict('Conversation source occurrence changed.')
         if state is not None and envelope.source == 'mention':
