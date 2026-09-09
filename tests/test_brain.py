@@ -159,3 +159,9 @@ def test_direct_response_validation_matches_managed_boundary(brain):
     brain.use([([],None)])
     with pytest.raises(PolicyError):
         brain.ask(system='static',user=[Passage('hello','user_request')],purpose='write')
+
+def test_direct_provider_false_reasoning_is_not_optional_text(brain):
+    from notron.policy import PolicyError
+    brain.use([('answer',False)])
+    with pytest.raises(PolicyError):
+        brain.ask(system='static',user=[Passage('hello','user_request')],purpose='write')

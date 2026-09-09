@@ -134,3 +134,58 @@ def test_direct_search_rejects_malformed_answer(monkeypatch):
     from notron.transport import ManagedError
     monkeypatch.setattr(research,'_search',lambda *args:{'answer':[],'results':[]})
     with pytest.raises(ManagedError):research.search([Passage('hi','user_request')])
+
+@pytest.mark.parametrize('operation,origin',[(op,origin) for op in ['infer','embed','search','vision'] for origin in ['note','standing','memory','lesson','history'] if op!='vision' or origin=='note'])
+@pytest.mark.parametrize('change',['revision','deleted','unreadable'])
+def test_refresh_retry_rechecks_note_source_before_retransmission(managed,monkeypatch,operation,origin,change):
+    from notron import notes,policy,outbound
+    from notron.policy import PolicyError
+    t,s,calls=managed
+    state={'revision':'v1','readable':True,'deleted':False}
+    monkeypatch.setattr(policy,'require_ready',lambda:SimpleNamespace(readable=lambda n:state['readable'],system_role=lambda _:outbound.SYSTEM_ROLES.get(origin)))
+    monkeypatch.setattr(notes,'get_note',lambda _:None if state['deleted'] else SimpleNamespace(id='source',modified=state['revision']))
+    source=Passage('approved content',origin,'source','title','v1')
+    def token(force_refresh=False):
+        if force_refresh:
+            if change=='revision':state['revision']='v2'
+            elif change=='deleted':state['deleted']=True
+            else:state['readable']=False
+        return 'short-access'
+    s.access_token=token
+    def http(op,body,token,deadline):
+        calls.append(body)
+        return 401,{'code':'signin_required'}
+    t.http=http
+    actions={
+        'infer':lambda:t.infer('fast','system',[source],4,False,.2,'write',999999999),
+        'embed':lambda:t.embed([source],999999999),
+        'search':lambda:t.search([source],5,'basic',999999999),
+        'vision':lambda:t.vision('describe','data:image/png;base64,eA==',4,.2,source,999999999)}
+    with pytest.raises(PolicyError):actions[operation]()
+    assert len(calls)==1
+
+def test_brain_vision_401_source_change_cannot_upload_again(managed,monkeypatch):
+    from notron.brain import Brain
+    from notron import notes,policy
+    t,s,calls=managed;revision=['v1']
+    monkeypatch.setattr(policy,'require_ready',lambda:SimpleNamespace(readable=lambda n:True,system_role=lambda _:None))
+    monkeypatch.setattr(notes,'get_note',lambda _:SimpleNamespace(id='source',modified=revision[0]))
+    def http(op,body,token,deadline):
+        calls.append(body);revision[0]='v2'
+        return 401,{'code':'signin_required'}
+    t.http=http
+    with pytest.raises(policy.PolicyError):
+        Brain(api_key='',transport=t).see(image=b'fixture',mime='image/png',question='describe',source=Passage('','note','source','title','v1'))
+    assert len(calls)==1
+    assert s.refresh==[False,True]
+
+def test_managed_boundary_uses_policy_after_final_source_read(managed,monkeypatch):
+    from notron import notes,policy
+    t,s,calls=managed;allowed=[True]
+    monkeypatch.setattr(policy,'require_ready',lambda:SimpleNamespace(readable=lambda n,approved=allowed[0]:approved,system_role=lambda _:None))
+    def read(_):
+        allowed[0]=False
+        return SimpleNamespace(id='source',modified='v1')
+    monkeypatch.setattr(notes,'get_note',read)
+    with pytest.raises(policy.PolicyError):t.infer('fast','system',[Passage('text','note','source','title','v1')],4,False,.2,'write',999999999)
+    assert calls==[]

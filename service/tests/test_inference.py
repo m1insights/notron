@@ -170,3 +170,67 @@ def test_vision_maximum_input_budget_requires_operator_configuration():
     from notron_service.inference import RateTable
     rates={k:{'input':1,'output':1,'fixed':1} for k in ['infer:fast','infer:smart','infer:deep','embed:fast','vision:fast','search:fast']}
     with pytest.raises(ValueError):RateTable('fixture',rates)
+
+@pytest.mark.parametrize('field',['content','reasoning','reasoning_content'])
+@pytest.mark.parametrize('value',[[],{},0,False])
+def test_falsy_generation_fields_remain_uncertain(engine,field,value):
+    from notron_service.inference import PaidRequest
+    from notron_service.usage import UsageError
+    e,a,calls,body=engine
+    def http(*args):
+        calls.append(args)
+        return {'choices':[{'message':{'content':'answer',field:value}}],'usage':{'prompt_tokens':1,'completion_tokens':2}}
+    e.provider.http=http
+    for _ in range(2):
+        with pytest.raises(UsageError,match='outcome_uncertain'):e.execute(a,'infer',PaidRequest(**body))
+    assert len(calls)==1
+    with e.usage.store._connect() as c:
+        assert c.execute('SELECT status FROM usage_reservations').fetchone()['status']=='uncertain'
+        assert c.execute('SELECT count(*) AS n FROM usage_cache').fetchone()['n']==0
+
+@pytest.mark.parametrize('field',['answer','title','url','content'])
+@pytest.mark.parametrize('value',[[],{},0,False])
+def test_falsy_search_fields_remain_uncertain(engine,field,value):
+    from notron_service.inference import PaidRequest
+    from notron_service.usage import UsageError
+    e,a,calls,body=engine
+    response={'answer':'summary','results':[{'title':'title','url':'https://example.test','content':'text'}]}
+    if field=='answer':response[field]=value
+    else:response['results'][0][field]=value
+    def http(*args):calls.append(args);return response
+    e.provider.http=http
+    for _ in range(2):
+        with pytest.raises(UsageError,match='outcome_uncertain'):e.execute(a,'search',PaidRequest(**body))
+    assert len(calls)==1
+    with e.usage.store._connect() as c:
+        assert c.execute('SELECT status FROM usage_reservations').fetchone()['status']=='uncertain'
+        assert c.execute('SELECT actual_micro_usd FROM usage_meter').fetchone()['actual_micro_usd'] is None
+
+@pytest.mark.parametrize('token_usage',[{'total_tokens':10,'completion_tokens':4}, {'prompt_tokens':1,'completion_tokens':2,'total_tokens':9}])
+def test_incomplete_or_contradictory_generation_usage_is_not_settled(engine,token_usage):
+    from notron_service.inference import PaidRequest
+    from notron_service.usage import UsageError
+    e,a,calls,body=engine
+    def http(*args):calls.append(args);return {'choices':[{'message':{'content':'answer'}}],'usage':token_usage}
+    e.provider.http=http
+    with pytest.raises(UsageError,match='outcome_uncertain'):e.execute(a,'infer',PaidRequest(**body))
+    with e.usage.store._connect() as c:
+        assert c.execute('SELECT actual_units FROM usage_reservations').fetchone()['actual_units'] is None
+        assert c.execute('SELECT charged_units FROM billing_allocations').fetchone()['charged_units'] is None
+
+def test_authoritative_generation_totals_and_null_optional_text(engine):
+    from notron_service.inference import PaidRequest
+    e,a,calls,body=engine
+    e.provider.http=lambda *args:{'choices':[{'message':{'content':None,'reasoning':'thought','reasoning_content':None}}],'usage':{'prompt_tokens':1,'completion_tokens':2,'total_tokens':3}}
+    result=e.execute(a,'infer',PaidRequest(**body))
+    assert result=={'content':'','reasoning':True}
+    with e.usage.store._connect() as c:
+        assert c.execute('SELECT actual_micro_usd FROM usage_meter').fetchone()['actual_micro_usd']==4
+
+def test_embedding_total_only_usage_is_input_count(engine):
+    from notron_service.inference import PaidRequest
+    e,a,calls,body=engine
+    e.provider.http=lambda *args:{'data':[{'index':0,'embedding':[.1,.2]}],'usage':{'total_tokens':2}}
+    assert e.execute(a,'embed',PaidRequest(**body))=={'embeddings':[[.1,.2]]}
+    with e.usage.store._connect() as c:
+        assert c.execute('SELECT actual_micro_usd FROM usage_meter').fetchone()['actual_micro_usd']==3

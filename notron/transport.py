@@ -116,7 +116,7 @@ class ManagedTransport:
         finally:
             fcntl.flock(fd,fcntl.LOCK_UN);os.close(fd)
 
-    def request(self,operation,payload,deadline):
+    def request(self,operation,payload,deadline,*,before_send):
         if self.stopped: raise ManagedError('signin_required')
         body=payload|{'request_id':self._identity(operation,payload),'lease_fence':self.lease_fence()}
         if type(body['lease_fence']) is not int or body['lease_fence']<=0: raise ManagedError('permission_required')
@@ -124,6 +124,13 @@ class ManagedTransport:
             if self.stopped: raise ManagedError('signin_required')
             try:
                 token=self.session.access_token(force_refresh=bool(attempt))
+            except ManagedError: raise
+            except Exception: raise ManagedError('signin_required') from None
+            if self.stopped: raise ManagedError('signin_required')
+            # Native refresh can yield while Notes or policy changes. Validate
+            # the original source immediately before every network transmission.
+            before_send()
+            try:
                 status,data=self.http(operation,body,token,deadline)
             except ManagedError: raise
             except Exception: raise ManagedError('outcome_uncertain') from None
@@ -140,10 +147,26 @@ class ManagedTransport:
     def _passages(self,purpose,passages):
         from .privacy import redact
         return [asdict(p)|{'text':text,'title':redact(p.title)} for p,text in zip(passages,prepare_outbound(purpose,passages))]
+    def _prepared_boundary(self,purpose,passages):
+        sources=tuple(passages)
+        prepared=self._passages(purpose,sources)
+        def validate():
+            from . import notes,policy,retention
+            retention.require_ready()
+            for source in sources:
+                if source.note_id:
+                    live=notes.get_note(source.note_id)
+                    if (live is None or live.id!=source.note_id or not policy.require_ready().readable(live)
+                            or live.modified!=source.modified):
+                        raise ManagedError('permission_required')
+            if self._passages(purpose,sources)!=prepared:
+                raise ManagedError('permission_required')
+        return prepared,validate
     def infer(self,tier,system,passages,budget,json_mode,temperature,purpose,deadline):
         from .privacy import redact
-        data=self.request('infer',{'tier':tier,'system':redact(system),'passages':self._passages(purpose,passages),
-             'max_tokens':budget,'json_mode':json_mode,'temperature':temperature},deadline)
+        prepared,validate=self._prepared_boundary(purpose,passages)
+        data=self.request('infer',{'tier':tier,'system':redact(system),'passages':prepared,
+             'max_tokens':budget,'json_mode':json_mode,'temperature':temperature},deadline,before_send=validate)
         return self._message(data)
     @staticmethod
     def _message(data):
@@ -154,13 +177,16 @@ class ManagedTransport:
         from .outbound import Passage
         mime,encoded=data_uri.split(';base64,',1)
         if len(encoded)>682668: raise ManagedError('permission_required')
-        return self._message(self.request('vision',{'passages':self._passages('write',[source,Passage(question,'user_request')]),
-            'image':encoded,'mime':mime.removeprefix('data:'),'max_tokens':budget,'temperature':temperature},deadline))
+        prepared,validate=self._prepared_boundary('write',[source,Passage(question,'user_request')])
+        return self._message(self.request('vision',{'passages':prepared,
+            'image':encoded,'mime':mime.removeprefix('data:'),'max_tokens':budget,'temperature':temperature},deadline,before_send=validate))
     def embed(self,passages,deadline):
-        data=self.request('embed',{'passages':self._passages('embed',passages)},deadline)
+        prepared,validate=self._prepared_boundary('embed',passages)
+        data=self.request('embed',{'passages':prepared},deadline,before_send=validate)
         return _validated_embeddings(data.get('embeddings'),len(passages))
     def search(self,passages,limit,depth,deadline):
-        data=self.request('search',{'passages':self._passages('search',passages),'limit':limit,'depth':depth},deadline)
+        prepared,validate=self._prepared_boundary('search',passages)
+        data=self.request('search',{'passages':prepared,'limit':limit,'depth':depth},deadline,before_send=validate)
         return _validated_search(data,limit)
 
 def _validated_search(data,limit):
@@ -181,7 +207,7 @@ def _direct_message(message):
     content=getattr(message,'content',None)
     reasoning=getattr(message,'reasoning',None)
     if content is not None and not isinstance(content,str): raise ManagedError('outcome_uncertain')
-    if reasoning is not None and not isinstance(reasoning,(str,bool)): raise ManagedError('outcome_uncertain')
+    if reasoning is not None and not isinstance(reasoning,str): raise ManagedError('outcome_uncertain')
     return ManagedTransport._message({'content':content or '', 'reasoning':bool(reasoning)})
 
 class DirectTransport:

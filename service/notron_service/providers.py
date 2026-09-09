@@ -103,11 +103,17 @@ class ProviderAdapter:
             from .search import validate_search
             return validate_search(data,body.limit),0,0
         usage=data['usage']
-        used_in=usage.get('prompt_tokens',usage.get('total_tokens'))
+        if not isinstance(usage,dict): raise ValueError('invalid_usage')
+        used_in=usage.get('prompt_tokens',usage.get('total_tokens')) if op=='embed' else usage.get('prompt_tokens')
         used_out=usage.get('completion_tokens',0) if op=='embed' else usage['completion_tokens']
         if any(type(x) is not int or x<0 for x in (used_in,used_out)): raise ValueError('invalid_usage')
+        total=usage.get('total_tokens')
+        if 'total_tokens' in usage and (type(total) is not int or total!=used_in+used_out): raise ValueError('invalid_usage')
+        if op=='embed' and used_out!=0: raise ValueError('invalid_usage')
         # completion_tokens includes reasoning; a separate count must not exceed it.
-        details=usage.get('completion_tokens_details') or {}
+        details=usage.get('completion_tokens_details')
+        if details is None: details={}
+        if not isinstance(details,dict): raise ValueError('invalid_usage')
         reasoning=details.get('reasoning_tokens',0)
         if type(reasoning) is not int or not 0<=reasoning<=used_out: raise ValueError('invalid_usage')
         if op=='embed':
@@ -117,6 +123,11 @@ class ProviderAdapter:
             if any(not isinstance(v,list) or not 1<=len(v)<=8192 or any(type(x) not in (int,float) or not math.isfinite(x) for x in v) for v in vectors): raise ValueError('invalid_embeddings')
             if len({len(v) for v in vectors})!=1: raise ValueError('invalid_embeddings')
             return {'embeddings':vectors},used_in,used_out
-        msg=data['choices'][0]['message']; content=msg.get('content') or ''; reasoning=msg.get('reasoning') or msg.get('reasoning_content') or ''
-        if not isinstance(content,str) or not isinstance(reasoning,str) or len(content)>262144 or len(reasoning)>262144: raise ValueError('invalid_response')
+        msg=data['choices'][0]['message']
+        if not isinstance(msg,dict): raise ValueError('invalid_response')
+        from .search import optional_text
+        content=optional_text(msg,'content',262144)
+        reasoning=optional_text(msg,'reasoning',262144)
+        alternate_reasoning=optional_text(msg,'reasoning_content',262144)
+        reasoning=reasoning or alternate_reasoning
         return {'content':content,'reasoning':bool(reasoning)},used_in,used_out

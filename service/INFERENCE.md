@@ -59,6 +59,10 @@ allocation/usage/currency/cache in one transaction. `uncertain(...)` holds all
 capacity. No provider-side retries run: a missing/invalid usage record, timeout,
 malformed response, interruption or excess settlement remains uncertain. Completion
 tokens include reasoning; inconsistent separately reported reasoning is rejected.
+Infer/vision require explicit prompt_tokens and completion_tokens; supplied
+total_tokens must equal their sum. Only embedding-only usage may treat total_tokens
+as input tokens. Missing/contradictory counts remain uncertain. Optional response
+text accepts absent/null or strings only; falsy non-string fields are malformed.
 Reservations use UTF-8 bytes plus framing allowance for input, the full output
 budget, and the configured full vision-input budget.
 
@@ -91,8 +95,10 @@ local pending/review state and receipt recovery are preserved, never empty answe
 `Brain.transport` accepts `ManagedTransport`; otherwise `DirectTransport` retains
 user-Keychain Nebius behavior. `Brain.from_credentials` and research use the
 protected configured managed transport without loading company/provider keys.
-Existing preparation and live vision source revision/policy checks remain on
-every call. `ManagedTransport` permits only four fixed routes on the injected
+Every managed HTTP attempt runs a boundary callback after access-token acquisition
+(including forced refresh): all note-derived source revisions/readability and current
+policy are checked again, then prepared passages must still match the original
+payload. Revision/policy changes refuse retransmission without changing request ID. `ManagedTransport` permits only four fixed routes on the injected
 native service origin, pinned public DNS addresses, TLS and no redirects/proxies.
 
 P02 `active_request()` derives deterministic child UUIDs from parent + operation
