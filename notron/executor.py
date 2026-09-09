@@ -539,7 +539,7 @@ class Executor:
                     body = notes.read_body(origin.envelope.note_id)
                     questions = conversation.unanswered(body, ignore=(workspace.ASK,))
                     normalize = lambda value: conversation.TAG.sub('', value).strip()
-                    matching = [q for q in questions if normalize(q.text) == normalize(envelope.text)]
+                    matching = [q for q in questions if normalize(q.text) == normalize(envelope.source_text or envelope.text)]
                     if (len(matching) != 1 or not clarifications.prefix_matches(resolution.proposal, body) or
                         sum(t.role == 'user' and normalize(t.text) == normalize(origin.envelope.source_text or origin.envelope.text)
                             for t in conversation.history_before(body, matching[0])) != 1):

@@ -185,3 +185,13 @@ def test_unrelated_question_cancels_old_consent(exchange):
     h.submit('What is dark matter?')
     result=h.submit('yes')
     assert not h.rows and not result.actions
+
+
+def test_multiline_tagged_reply_fulfills_once(exchange):
+    h=exchange
+    h.source='mention'
+    first=h.submit('@notron remind me to buy milk')
+    assert not h.rows and 'Which existing' in first.answer
+    result=h.submit('Additional context\n@notron Work')
+    assert len(h.rows)==1, result.answer
+    assert result.actions[0].origin_request_id==first.request_id
