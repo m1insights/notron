@@ -24,6 +24,7 @@ class Services:
     auth: object | None = None
     billing: object | None = None
     inference: object | None = None
+    abuse: object | None = None
 
 
 class BoundedBody:
@@ -131,6 +132,12 @@ def create_app(settings: Settings, services: Services) -> FastAPI:
 
     from .inference import PaidRequest
     from .usage import UsageError
+
+    from .operations import RateLimited
+
+    @app.exception_handler(RateLimited)
+    async def rate_limited(request,exc):
+        return JSONResponse({'code':'rate_limited'},status_code=429,headers={'Retry-After':'60'})
 
     @app.exception_handler(UsageError)
     async def usage_error(request,exc):
@@ -242,6 +249,8 @@ def create_app(settings: Settings, services: Services) -> FastAPI:
 
     @app.post('/v1/oidc/verify')
     def verify(body: LoginVerification, request: Request):
+        if services.abuse is not None:
+            require_principal(request)
         if services.auth is None:
             raise HTTPException(503,detail='identity_unavailable')
         try:
@@ -270,4 +279,5 @@ def create_default_app():
                     monthly_micro_usd=int(settings.monthly_spend_ceiling*1000000),
                     units_per_micro_usd=settings.units_per_micro_usd)
         inference=Inference(usage,settings.inference_rates,ProviderAdapter(settings.nebius_key,settings.tavily_key))
-    return create_app(settings, Services(store=store,auth=auth,billing=billing,inference=inference))
+    from .operations import Operations
+    return create_app(settings, Services(store=store,auth=auth,billing=billing,inference=inference,abuse=Operations(store)))

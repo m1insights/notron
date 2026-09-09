@@ -32,7 +32,7 @@ class Deletion:
                       (identity_digest(row['issuer'],row['subject']),))
         c.execute("UPDATE accounts SET status='deleted',contact_email=NULL WHERE id=%s",(account_id,))
         c.execute('UPDATE devices SET revoked_at=COALESCE(revoked_at,now()) WHERE account_id=%s',(account_id,))
-        for table in ('usage_cache','worker_leases','identity_sessions','identities','audit_metadata'):
+        for table in ('usage_cache','worker_leases','identity_sessions','identities','audit_metadata','account_rate_windows'):
             c.execute(f'DELETE FROM {table} WHERE account_id=%s',(account_id,))
         c.execute("UPDATE entitlements SET status='revoked' WHERE account_id=%s",(account_id,))
         c.execute("UPDATE billing_orders SET return_url='',checkout_url=NULL WHERE account_id=%s",(account_id,))

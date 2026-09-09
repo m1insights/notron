@@ -7,7 +7,7 @@ from API audience. An issuer without this profile must stay disabled.
 from __future__ import annotations
 
 import json
-from urllib.request import Request, urlopen
+from urllib.request import Request as URLRequest
 from urllib.parse import urlsplit
 
 import jwt
@@ -28,7 +28,7 @@ def _document(url):
     class NoRedirect(HTTPRedirectHandler):
         def redirect_request(self, *args, **kwargs):
             return None
-    with build_opener(NoRedirect).open(Request(url, headers={'Accept':'application/json'}), timeout=5) as response:
+    with build_opener(NoRedirect).open(URLRequest(url, headers={'Accept':'application/json'}), timeout=5) as response:
         raw = response.read(262145)
         if len(raw) > 262144:
             raise AuthenticationError('identity unavailable')
@@ -129,6 +129,11 @@ def require_principal(request: Request) -> Principal:
     if auth is None:
         raise HTTPException(503,detail='identity_unavailable')
     try:
-        return auth.authenticate(bearer_from_request(request))
+        principal=auth.authenticate(bearer_from_request(request))
+        abuse=request.app.state.services.abuse
+        if abuse is not None and not abuse.admit(principal):
+            from .operations import RateLimited
+            raise RateLimited()
+        return principal
     except AuthenticationError:
         raise HTTPException(401,detail='authentication_required') from None

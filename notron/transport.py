@@ -14,7 +14,7 @@ from .outbound import prepare_outbound
 from .policy import PolicyError
 from . import network
 
-CODES={'signin_required','subscription_required','allowance_exhausted','provider_unavailable','permission_required','outcome_uncertain','request_conflict'}
+CODES={'rate_limited','signin_required','subscription_required','allowance_exhausted','provider_unavailable','permission_required','outcome_uncertain','request_conflict'}
 _NAMESPACE=UUID('a1ec9d32-06c9-4ec0-a86e-8af5fecc43ee')
 _managed=None
 
@@ -104,6 +104,8 @@ class ManagedTransport:
             except Exception:raise ManagedError('provider_unavailable') from None
             if self.stopped:raise ManagedError('signin_required')
             if status==401 and attempt==0:continue
+            if status==429 and isinstance(data,dict) and data.get('code')=='rate_limited':
+                raise ManagedError('rate_limited')
             if status!=200 or not isinstance(data,dict):
                 raise ManagedError('signin_required' if status==401 else 'permission_required')
             return data

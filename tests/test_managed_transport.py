@@ -189,3 +189,27 @@ def test_managed_boundary_uses_policy_after_final_source_read(managed,monkeypatc
     monkeypatch.setattr(notes,'get_note',read)
     with pytest.raises(policy.PolicyError):t.infer('fast','system',[Passage('text','note','source','title','v1')],4,False,.2,'write',999999999)
     assert calls==[]
+
+
+def test_rate_limit_preserves_reason_and_request_without_automatic_retry(managed):
+    from notron.transport import ManagedError
+    from notron.worker import failure
+    from notron.health import HealthStore
+    t,s,calls=managed
+    def limited(op,body,token,deadline):
+        calls.append(body)
+        return 429,{'code':'rate_limited'}
+    t.http=limited
+    for _ in range(2):
+        with pytest.raises(ManagedError,match='rate_limited') as error:
+            t.infer('fast','system',[Passage('hi','user_request')],4,False,.2,'write',9999999999)
+        failure(error.value)
+        assert HealthStore().row()['reason_code']=='rate_limited'
+    assert len(calls)==2
+    assert calls[0]['request_id']==calls[1]['request_id']
+
+
+def test_lease_control_preserves_rate_limit(managed):
+    from notron.transport import ManagedError
+    t,_,_=managed;t.http=lambda *args:(429,{'code':'rate_limited'})
+    with pytest.raises(ManagedError,match='rate_limited'):t.control('check',{'fence':1})

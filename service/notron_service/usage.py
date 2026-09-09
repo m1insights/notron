@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
+from hashlib import sha256
 import json
 import os
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -20,6 +21,7 @@ class Usage:
         if any(type(x) is not int or x<=0 for x in (monthly_micro_usd,units_per_micro_usd,max_concurrency,cache_seconds)):
             raise ValueError('invalid_meter_configuration')
         self.store,self.billing,self.cipher=store,billing,AESGCM(key)
+        self.key_digest=sha256(key).hexdigest()
         self.monthly_micro_usd,self.units_per_micro_usd=monthly_micro_usd,units_per_micro_usd
         self.max_concurrency,self.cache_seconds=max_concurrency,cache_seconds
 
@@ -84,6 +86,12 @@ class Usage:
             self.billing.lock_account(c,p.account_id)
             r=c.execute('SELECT * FROM usage_reservations WHERE account_id=%s AND id=%s FOR UPDATE',(p.account_id,reservation_id)).fetchone()
             if not r: raise UsageError('outcome_uncertain')
+            evidence=c.execute('SELECT actual_micro_usd FROM operator_evidence WHERE account_id=%s AND reservation_id=%s',(p.account_id,reservation_id)).fetchone()
+            if evidence:
+                # Operator reconciliation is authoritative and cannot create
+                # new retry content or be overwritten by a late worker.
+                if evidence['actual_micro_usd']!=actual:raise UsageError('outcome_uncertain')
+                return
             meter=c.execute('SELECT reserved_micro_usd FROM usage_meter WHERE account_id=%s AND reservation_id=%s',(p.account_id,reservation_id)).fetchone()
             if not meter or r['reserved_units']%meter['reserved_micro_usd']: raise UsageError('outcome_uncertain')
             units=actual*(r['reserved_units']//meter['reserved_micro_usd'])
@@ -94,7 +102,9 @@ class Usage:
             c.execute('UPDATE usage_meter SET actual_micro_usd=%s WHERE account_id=%s AND reservation_id=%s',(actual,p.account_id,reservation_id))
             # Deletion/revocation must not be undone by late response caching.
             active=c.execute("SELECT 1 FROM accounts a JOIN devices d ON d.account_id=a.id WHERE a.id=%s AND a.status='active' AND d.id=%s AND d.revoked_at IS NULL",(p.account_id,p.device_id)).fetchone()
-            if active:
+            c.execute('SELECT pg_advisory_xact_lock(505007)')
+            generation=c.execute('SELECT key_digest FROM cache_key_generation WHERE singleton=true').fetchone()
+            if active and (not generation or generation['key_digest']==self.key_digest):
                 nonce=os.urandom(12); aad=f'{p.account_id}:{reservation_id}:{r["payload_digest"]}'.encode()
                 encrypted=nonce+self.cipher.encrypt(nonce,json.dumps(response,separators=(',',':'),allow_nan=False).encode(),aad)
                 c.execute('INSERT INTO usage_cache VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING',(p.account_id,reservation_id,encrypted,datetime.now(timezone.utc)+timedelta(seconds=self.cache_seconds)))

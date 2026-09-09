@@ -136,7 +136,7 @@ retention and maximum vision/token accounting; issuer/Keychain/signed socket rou
 Task 5 leases/deletion/periodic cache purge; TLS deployment and edge per-IP/account
 rate limiting; restore/backup retention and key rotation procedure; P06/P07 approval.
 Aggregate provider spend and account concurrency are enforced locally in code;
-edge abuse controls remain a deployment gate, not a claimed implemented feature.
+account/time and peer-IP abuse controls are implemented in Task 6; actual deployment verification remains a gate.
 
 ## Lease and deletion integration (Task 5)
 
@@ -145,3 +145,5 @@ edge abuse controls remain a deployment gate, not a claimed implemented feature.
 desktop worker lifecycle. Usage checks not-before and released state as well as
 account/device/fence/expiry. [RETENTION.md](RETENTION.md) specifies immediate
 response purge on account deletion and accounting retention without budget reset.
+
+Task 6 operations and rate_limited/Retry-After behavior are documented in [OPERATIONS.md](OPERATIONS.md). The complete periodic CLI now schedules cache/deletion/metadata cleanup.

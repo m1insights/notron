@@ -27,7 +27,7 @@ VAULT_TITLE = re.compile(
     re.I,
 )
 
-# A labelled secret: "password: hunter2", "API key = sk-...", and the far more
+# A labelled secret: "password: hunter2", "API key = sk-...", and the far more  # pragma: allowlist secret
 # common "password hunter2" with no punctuation at all.
 _LABEL = (r"pass(?:word|code|phrase)?|pwd|pw|pin|api[\s_-]?key|secret|token|"
           r"auth|bearer|client[\s_-]?secret|private[\s_-]?key|seed[\s_-]?phrase")

@@ -80,7 +80,11 @@ class PostgresStore:
                     'usage_meter','usage_cache')),
                 (6, MIGRATION.parent / '006_devices.sql', _TABLES + ('identity_sessions',
                     'billing_accounts','billing_subscriptions','billing_orders','billing_grants','billing_allocations',
-                    'usage_meter','usage_cache','account_deletions','identity_deletion_tombstones'))]
+                    'usage_meter','usage_cache','account_deletions','identity_deletion_tombstones')),
+                (7, MIGRATION.parent / '007_operations.sql', _TABLES + ('identity_sessions',
+                    'billing_accounts','billing_subscriptions','billing_orders','billing_grants','billing_allocations',
+                    'usage_meter','usage_cache','account_deletions','identity_deletion_tombstones',
+                    'account_rate_windows','operator_evidence','cache_key_generation'))]
 
     def _check(self, conn, *, allow_inactive=False, allow_prefix=False):
         rows = conn.execute('SELECT version,checksum,fingerprint,active FROM schema_migrations ORDER BY version').fetchall()
