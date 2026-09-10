@@ -1,8 +1,37 @@
 # Findings-to-task coverage
 
+## September 10 repositioning coverage
+
+All R-series tasks are planned. Existing production ownership below is retained.
+
+| New requirement / observed gap | Owning task | Required evidence |
+|---|---|---|
+| Python 3.11 syntax and tests touching real state | R00 T1 | Supported-runtime suite passes with isolated state |
+| Real Siri/Claude SDK support and exact provider/model | R00 T2 | Versioned live capability matrix and honest fallback |
+| Stable tool schemas, connection grants and code trust | R01 T1 | Malformed manifest, path escape, revocation tests |
+| Durable tasks, approval binding, lease, cancellation and crash recovery | R01 T2 | No duplicate dispatch across failure/concurrency matrix |
+| Encrypted external context, outbound provenance, retention and credentials | R01 T3 | Revoke/retry/purge, hostile output and IPC leak cases |
+| Claude owned sessions and bounded delegation | R02 T1 | Actual start/resume/result/cancel with supported SDK |
+| Second independent external API connection | R02 T2 | Real scoped GitHub reads through shared registry |
+| Context-aware tool choice and durable multi-step workflow | R02 T3 | Correct project, approved context, persisted child stages |
+| Siri async task entry, status and stable identity | R03 T1; P06 T2 | Real Siri timing/disambiguation; no main-thread blocking |
+| Visible connections, approvals and cancellation | R03 T2 | Proposal-change and revoke races; accessible UI |
+| Notes results, delivery recovery and task follow-ups | R03 T3 | Failed delivery never reruns successful agent |
+| Open-source developer SDK and installation lifecycle | R04 T1 | Conformance for both shipped adapters and example |
+| Reusable skills and independent contributor experience | R04 T2 | Tool validation and independent extension record |
+| Signed bundle including external adapter runtime | P06 T1–T6; R05 T1 | Fresh account, no developer tools, correct permission identity |
+| Measured product value, costs and reliability | R05 T1; P07 T3/T5 | Controlled runs, developer pilot and security evidence |
+| Deadline, demo/source/license and judge access | R05 T2 | Reviewable packet, actual submission and access through judging |
+| Phone relay, marketplace and generic MCP bridge | Post-hackathon | Separate scoped design and device/security evidence before claims |
+| Managed paid release | P05 staging; P06; P07 | Existing service, billing, update and release gates remain open |
+
+See [active roadmap](README.md) for linked plans, dates and scope-cut rules.
+
+## Retained production coverage
+
 September 9 integration: P01/P02 implementation is reconciled with main. Media uploads now use note provenance and policy checks; extracted files/words are encrypted and covered by retention and explicit offline migration. Photo replies preserve their original source checks and complete through the durable ledger. See [verification and limits](handoffs/2026-09-09-branch-integration.md).
 
-This table tracks scope, not implementation completion. All tasks are initially planned.
+The historical table tracks ownership, not current completion. Use the active roadmap and linked handoffs for status.
 
 | Finding / product requirement | Owning task | Required evidence |
 |---|---|---|

@@ -1,11 +1,18 @@
 # NOTRON
 
-**A personal AI agent that lives inside the Notes app you already have.**
+**A personal AI rooted in Apple Notes, being extended to connect Siri with external agents and APIs.**
 
-No new app. No new account. No new habit. You type into Apple Notes on your
-phone — the same place you already dump your life — and Notron reads it, thinks
-about it on NVIDIA Nemotron, and writes back into your notes. The answer is on
-your phone about ten seconds later.
+Notron's existing Python workflow thinks with NVIDIA Nemotron via Nebius and
+works through Apple Notes on an awake Mac, with a SwiftUI companion. The next
+product direction is **Siri → Notron → the world**: chosen project context,
+connected tools, durable tasks and useful results back in Siri and Notes.
+
+**Planned, not shipped:** Claude session and GitHub adapters, task-aware Siri
+intents and an open-source plugin developer kit. See the
+[implementation roadmap](docs/production/README.md) for scope and evidence gates.
+The internal demo target is October 1; the hackathon deadline is October 30.
+Examples below describe the existing Notes workflow; timing depends on the Mac,
+sync and provider, and phone-to-Mac execution is not guaranteed.
 
 Built for the [Nebius × NVIDIA Global AI Hackathon](https://nebiusglobalaihackathon.devpost.com/) — Personal AI track.
 
@@ -259,7 +266,7 @@ a plan costs one Nano plus one Super. Cost scales with what you actually asked f
 
 ## Powered by
 
-- **[Nebius Token Factory](https://tokenfactory.nebius.com)** — all inference.
+- **[Nebius Token Factory](https://tokenfactory.nebius.com)** — core inference; planned external-agent integrations use separately authorized providers.
 - **[Tavily](https://tavily.com)** — web search, when the answer is not in her
   head or your notes. Optional; leave the key out and she works without it.
 - **NVIDIA Nemotron 3** (Nano 30B / Super 120B / Ultra 550B) — open-source models.

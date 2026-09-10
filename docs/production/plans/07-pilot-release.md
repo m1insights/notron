@@ -1,5 +1,13 @@
 # P07 — Pilot validation and public release plan
 
+**September 10 disposition:** [R05](R05-hackathon-release.md) owns the initial
+three-developer preview, demo and hackathon submission. Reuse this plan's
+security/reliability/restore evidence; the Becky consumer pilot below is a later
+paid-product validation track, not the October critical path. Public paid release
+still requires P05 staging/billing, P06 updates and this plan's explicit decision.
+References below to M1 mean the retained P01–P03 contracts plus the current R00
+baseline gate; the [active roadmap](../README.md) replaces the former M0–M3 schedule.
+
 > **For agentic workers:** Use `superpowers:executing-plans` to execute this plan task-by-task. External testing, customer contact, deployment and publication require the owner's authorization for the concrete action.
 
 **Goal:** Decide from evidence whether Notron is safe, usable and economically viable enough for paid public use.

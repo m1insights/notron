@@ -1,139 +1,83 @@
-# Notron production roadmap
+# Notron product and production roadmap
 
-Status: **P01 Tasks 1–5, P02 Tasks 1–6 and P03 Tasks 1–4 implemented; P05 Tasks 1–6 locally implemented; P04 device testing deferred**. Updated 2026-09-09. Native secure-startup and release qualification remain pending P06/P07. See the [branch reconciliation](handoffs/2026-09-09-branch-integration.md).
-Evidence: [P02 Task 6 handoff](handoffs/2026-09-05-P02-task-6.md), [P02 Task 5 handoff](handoffs/2026-09-05-P02-task-5.md), [P02 Tasks 3–4 batch handoff](handoffs/2026-09-05-P02-tasks-3-4.md), [P02 Tasks 1–2 batch handoff](handoffs/2026-09-05-P02-tasks-1-2.md), [P01 Task 5 session handoff](handoffs/2026-09-05-P01-task-5.md), [security report](evidence/P01-security-boundaries.md), [secure storage evidence](evidence/P01-secure-storage.md) and [outbound caller map](evidence/P01-outbound-map.md).
-Audience: the owner and an engineer starting a fresh coding session.
+Updated **September 10, 2026**. Direction approved; new R-series work is **planned, not implemented**.
 
-## Outcome and scope
+**Build the personal execution layer between Siri and the outside world.** Notron keeps context, connects tools and agents, tracks work, and returns useful results to Siri and Apple Notes. It remains useful directly through Notes and the Mac app. The first audience for this repositioning is developers using Apple devices.
 
-Build a safe assisted pilot, then earn a public paid release through evidence. Notron remains a small organizer inside Apple Notes: capture, filing, contextual questions, and explicit reminder/calendar creation. The primary customer is Becky: a nontechnical Apple Notes user with a regularly used Mac. Mobile-only demand is a separate validation question.
+## Delivery dates
 
-The owner approved this direction in the September 4 planning conversation. This roadmap makes those defaults concrete. Detailed mechanisms below are implementation proposals, not claims that the product already has them. Creating plans does not authorize charging customers, contacting testers, publishing releases, purchasing infrastructure, or uploading personal notes.
-
-Read the [shared design and contracts](design.md) before any plan. Findings are grounded in the [product assessment](../assessments/2026-09-04-product-readiness.md), with further security findings from the subsequent conversation included here. The [coverage map](coverage.md) shows which task owns each issue.
-
-## Plan index
-
-| ID | Plan | Prerequisite | Exit deliverable | Status |
-|---|---|---|---|---|
-| P01 | [Privacy and permissions](plans/01-privacy-permissions.md) | Shared design | Private inputs, credentials, permissions and network destinations have enforced boundaries | Local implementation complete — Tasks 1–5; private reporting decision and native P06/P07 gates open |
-| P02 | [Reliable execution and recovery](plans/02-reliable-execution.md) | P01 policy APIs | Durable operations, guarded writes, safe retries and stale-request handling | Local implementation complete — Tasks 1–6; native P06/M1 gates open |
-| P03 | [Ask conversation](plans/03-ask-conversation.md) | P01; P02 request contracts | Bounded contextual follow-ups and clarification | Implemented and reviewed; 1,264 tests pass |
-| P04 | [Mobile Shortcut feasibility](plans/04-shortcut-prototype.md) | Local experiment can start immediately; hosted test requires P01 and P02 contracts | Real-iPhone evidence and explicit continue/stop decision | Deferred until owner can test on iPhone |
-| P05 | [Accounts and paid service](plans/05-accounts-service.md) | P01; P02 contracts; P04 backend contract if experiment proceeds | Authenticated, metered service with server-enforced access | Local coding implemented; staging and signed-device gates open |
-| P06 | [Mac installer and onboarding](plans/06-mac-distribution.md) | Runtime work can start after P01; completion uses P02/P03; paid path uses P05 | Portable signed app, truthful onboarding/status, updates and uninstall | Companion/onboarding/pin UI exists and builds; portable signed distribution pending |
-| P07 | [Pilot and public release](plans/07-pilot-release.md) | Gate requirements below | Measured pilot, security review and release decision | Planned |
-
-```mermaid
-flowchart TD
-    D["Shared design / request contracts"] --> P1["P01 privacy"]
-    P1 --> P2["P02 reliability"]
-    P2 --> P3["P03 conversation"]
-    D --> S["P04 local Shortcut feasibility"]
-    P1 --> H["P04 hosted experiment"]
-    P2 --> H
-    S --> H
-    P1 --> P5["P05 managed service"]
-    P2 --> P5
-    H -. "reuse if successful" .-> P5
-    P1 --> P6["P06 Mac packaging / onboarding"]
-    P2 --> P6
-    P3 --> P6
-    P5 -. "paid path" .-> P6
-    P6 --> Pilot["P07 assisted pilot"]
-    P5 --> Paid["P07 public paid release"]
-    Pilot --> Paid
-```
-
-Do not execute whole plans concurrently if they edit the same modules. P01 owns policy and outbound input first; P02 owns request/execution contracts next. P03 then extends those contracts. P04 owns a separate user-triggered mobile surface, never another autonomous watcher. Packaging research and synthetic Shortcut tests can happen independently.
-
-## Milestones and release gates
-
-### M0 — plans and feasibility framing
-
-- [x] Record the agreed product scope and shared contracts.
-- [x] Create seven subsystem plans and session handoff template.
-- [ ] Verify available Mac/iPhone hardware and Apple signing access through P06/P04 inventories.
-- [ ] Execute the synthetic-only Shortcut action inventory; record actual OS version and action behavior.
-
-### M1 — safe local core
-
-- [x] P01 passes its privacy, zero-home, corruption and outbound-network regressions (Task 5: 664 full-suite passes; synthetic evidence only).
-- [x] P02 passes synthetic crash/retry, concurrency, stale-date, undo and single-worker checks; native qualification remains P06/P07.
-- [x] P03 passes follow-up and clarification fixtures, including the actual two-question example (synthetic deterministic tests; live-model quality remains unverified).
-- [x] All existing tests pass after deliberate behavior updates; no live Notes access in unit tests (1,190 passed after September 9 reconciliation).
-
-### M2 — assisted pilot
-
-- [ ] M1 complete; no unresolved critical/high security or data-integrity finding.
-- [ ] P06 signed, notarized installation works in a fresh account without development tools.
-- [ ] Notes-only setup works; optional Calendar/Reminders grants do not block it.
-- [ ] Pilot has an immediately usable AI access path: managed invite accounts from P05, or explicitly disclosed owner-assisted BYO setup. Do not represent BYO testing as proof of zero-setup consumer onboarding.
-- [ ] Independent security review covers the shipped bundle and the hosted service if used.
-- [ ] P07 restore, support and stop procedures rehearsed using test data.
-- [ ] Mobile experiment is clearly optional and is advertised only for behaviors actually proven by P04.
-
-### M3 — public paid release
-
-- [ ] M2 evidence accepted, P05 completed, final paid onboarding exercised in P06.
-- [ ] Subscription lifecycle, usage enforcement, account deletion, device revocation and outage behavior tested.
-- [ ] Update/rollback/revocation chain verified; help, privacy disclosures and billing terms match actual behavior.
-- [ ] Pilot cost and customer evidence supports a price and included-usage allowance.
-- [ ] Owner chooses and verifies the private vulnerability reporting route in SECURITY.md; provider retention and shipped dependency/build inventory are reviewed.
-- [ ] Owner makes an explicit release decision with the P07 evidence packet.
-
-Passing tests is necessary, not a claim of being impossible to hack. No calendar/Notes/iCloud API provides a transaction spanning all external writes; uncertain outcomes must be surfaced rather than retried blindly.
-
-## Agreed defaults
-
-- One active Mac executor per managed account; other devices may capture or view.
-- Mac must be awake for autonomous Apple Notes organization. No promise of immediate passive iPhone Notes processing.
-- An explicitly invoked Shortcut is a feasibility experiment, not an iOS app or an always-running listener.
-- Home = approved filing destination, Read only = retrieval by default, Ignore = excluded. An explicit tagged request permits its own reply in a readable note, not automatic filing or rewriting. Zero homes means zero automatic filing destinations.
-- Rewrite disabled by default. Even authorized rewrites must pass revision and supported-content checks.
-- A clear user request may create a reminder or calendar event; ambiguous targets/dates ask. No calendar move/delete, recurring scheduling, or bulk inferred actions in this release.
-- Short conversation history is distinct from permanent Memory; retrieved text is not permission.
-- MIT community app stays useful with BYO credentials; security and signed installation are not paywalled.
-- Managed inference is paid after the pilot. The September 6 decision is an included allowance, hard pause and explicit top-ups, never automatic overage billing. $12/month remains an unconfigured target; allowance/top-up amounts and terms require P07 cost evidence.
-- Retain Python 3.11+ and Swift/SwiftUI; Nebius inference remains mandatory under the current project constraint. No model/provider swap in these plans.
-
-## External inputs: stop only the dependent task
-
-| Input | Needed by | Work that can proceed first |
+| Target | Deliverable | Exit evidence |
 |---|---|---|
-| Real iPhone and test Notes account | P04 device feasibility | Shortcut instructions and mocked service tests |
-| Clean macOS account; supported hardware inventory | P06 native permission/installation validation | Runtime path and lifecycle tests |
-| Developer ID / Apple team and distribution domain | P06 signing and updater configuration | Unsigned local build/release scripts with validation |
-| Hosting region, approved spend ceiling, managed OIDC issuer | P05 staging deployment | Container, SQL migrations, fake OIDC and payment integration tests |
-| Stripe account, billing entity and selected production price | P05/P07 live billing | Stripe test mode and lifecycle fixtures |
-| Testers, security reviewer and budget | P07 external pilot | Internal scenario harness and report templates |
+| Sept 10–13 | R00: reliable baseline and integration feasibility | Runtime/test failures resolved; actual Siri, SDK and permission results recorded |
+| Sept 14–20 | R01 and P06 Tasks 1–3: execution foundation | Durable tasks, approved connections, process supervision and working secure native bridge |
+| Sept 21–27 | R02 and R03: complete product workflow | Claude session + GitHub connections, Siri handoff, task status and Notes result |
+| Sept 28–Oct 1 | Internal demonstration milestone | Repeatable real Siri → Notron → external agent → result on the selected Mac |
+| Oct 2–9 | R04 and remaining P06: extensibility and installation | Independent example plugin; signed install without development tools |
+| Oct 10–16 | R05 qualification and small developer pilot | Reliability, setup and cost evidence; failure cases visibly handled |
+| Oct 17–23 | Submission candidate | Frozen tested build, source/setup instructions, video and submission text ready |
+| Oct 24–29 | Buffer and approved submission | Only release fixes; verify judge access and submit before deadline |
+| **Oct 30, 1pm EDT** | **Official deadline** | 10am PDT / 17:00 UTC; October 1 is our internal milestone |
 
-These are external provisioning inputs, not invitations to guess secrets or make purchases. P05 records the chosen issuer/host in a deployment manifest before connecting accounts. No cloud vendor is silently treated as already selected.
+These are target windows, not measured engineering estimates. Work advances through dependencies below; no extra staffing or parallel agents is assumed. Review scope each Friday. Missing a gate moves or cuts dependent scope; it never converts an unverified capability into a completion claim.
 
-## Session execution protocol
+The [official rules](https://nebiusglobalaihackathon.devpost.com/rules) require Nebius runtime use and an NVIDIA open-source model, public licensed source, setup instructions, a working demo/test build and a public YouTube demonstration under three minutes. Explain significant updates to this existing project. Keep judge access working through **December 15, 2026, noon Pacific**. Prepare submission by October 23; verify the live form and rules again before submission.
 
-1. Read this file, `design.md`, the selected plan, `CLAUDE.md`, relevant UI guidelines, and the latest handoff. Inspect the current diff before edits.
-2. Choose one task or a tightly related group. Identify the exact acceptance cases before coding. Isolate code work when the workspace contains unrelated edits.
-3. Add meaningful regression tests for the observed failure; implement the minimum complete behavior; run targeted tests then required integration checks.
-4. Record commands, exit results, commits, remaining risks and next task in a [handoff](handoff-template.md). Mark checkboxes only on fresh evidence.
-5. Commit only task-owned changes when executing an implementation task. Never stage another session's unrelated changes. Opening a new session does not reset the roadmap.
+## Read and execute
 
-Task plans show representative executable contract tests plus the full behavioral case matrix. Use actual production implementations, never test-only bypasses. Proposed files are labeled Create; existing paths are labeled Modify. If an interface must change, update this design and all consuming plans in the same change.
+1. [Repositioning design and shared contracts](repositioning-design.md) — current product scope and new interfaces.
+2. [Existing production contracts](design.md) — implemented privacy, Notes actions, requests and service guarantees remain binding.
+3. The selected task plan below, then the [latest roadmap handoff](handoffs/2026-09-10-repositioning-roadmap.md).
 
-## Known historical-document conflicts
+| ID | Plan | Dependency | Completion means |
+|---|---|---|---|
+| R00 | [Baseline and feasibility](plans/R00-baseline-feasibility.md) | Existing main | Reliable synthetic baseline; supported Siri/Claude paths and explicit fallbacks |
+| R01 | [Connections and durable tasks](plans/R01-connections-tasks.md) | R00 | Stable task/connection contracts; approvals, recovery, cancellation and provenance |
+| R02 | [External agents and APIs](plans/R02-external-connectors.md) | R01; R00 SDK qualification | Two working adapters: Claude Code sessions and GitHub repository data |
+| R03 | [Siri and task experience](plans/R03-siri-experience.md) | R01; P06 T2; R02 for end-to-end proof | Siri starts work, checks status, cancels; Mac approvals and Notes delivery |
+| R04 | [Open-source plugin developer kit](plans/R04-plugin-kit.md) | R01 protocol and R02 lessons | Documented SDK, fixture harness, independent plugin without changing core |
+| R05 | [Demo, pilot and submission](plans/R05-hackathon-release.md) | R00–R04; applicable P06/P07 gates | Verified installable workflow and complete reviewable submission packet |
 
-This approved roadmap supersedes older product assumptions where they conflict: mandatory Calendar/Reminders during onboarding, starting before note selection, paid-only safe installation, guaranteed ten-second replies, and automatic phone capture without an awake Mac. Earlier commercialization/OpenClaw market claims are historical research, not release evidence. Existing design tokens still apply; P06 updates obsolete onboarding copy rather than inventing a parallel design system.
+R01 owns shared contracts before R02/R03 consume them. P06 owns the subprocess runner and signed identity; R03 uses them, not a second bridge. R04 publishes the proven protocol rather than inventing another plugin format. Each task includes files, interfaces and acceptance checks. Do not start the entire roadmap in one coding session.
 
-## Next implementation session
+## Preserve the production investment
 
-Next coding plan: **P06 Mac packaging and onboarding**, followed by its signed-device qualification.
-P05 Tasks 2–6 implement sign-in, billing, metered AI transport, device leases,
-service account deletion and operations tooling. The owner deferred P04 device testing while away;
-that does not block the managed-service coding work.
-See the [managed-service handoff](handoffs/2026-09-09-P05-managed-service.md).
+| Existing phase | Verified status inherited from handoffs | Repositioning decision |
+|---|---|---|
+| [P01 privacy](plans/01-privacy-permissions.md) | Tasks 1–5 locally implemented | Keep; R01 extends boundaries to external content and connections |
+| [P02 reliability](plans/02-reliable-execution.md) | Tasks 1–6 locally implemented | Keep Notes ledger/worker; R01 adds correlated external-task state |
+| [P03 conversation](plans/03-ask-conversation.md) | Tasks 1–4 locally implemented | Keep; R03 adds task-aware follow-ups without weakening permissions |
+| [P04 mobile experiment](plans/04-shortcut-prototype.md) | Real-iPhone test deferred | Optional later track; no phone→Mac, iOS Notes automation or new iOS app promise |
+| [P05 accounts/service](plans/05-accounts-service.md) | Tasks 1–6 locally implemented; staging/native gates open | Preserve; use BYO developer pilot first, finish managed paid readiness after hackathon if needed |
+| [P06 Mac distribution](plans/06-mac-distribution.md) | Portable signed runtime/startup still pending | Critical path: native bridge early, full install before external pilot/submission |
+| [P07 pilot/release](plans/07-pilot-release.md) | Planned | Reuse security, reliability and release gates; R05 replaces the initial Becky pilot with developer evidence |
 
-P05 still needs approved external provisioning, real Stripe test clocks, signed
-native login/Keychain/worker qualification, deployment and release evidence.
-P06 remains the signed startup/distribution gate; real processing stays paused.
-No service was provisioned, no live billing/provider calls ran, and nothing was
-pushed. P04 resumes when the owner can perform the iPhone experiment.
+“Locally implemented” is not a new passing-test claim. The September 10 fresh Python 3.11 baseline failed: CLI syntax compatibility and tests accessing the real Application Support directory are recorded in R00 T1. P05 staging, signed-device qualification and billing evidence remain open.
+
+## What must ship
+
+- **One complete useful workflow:** “Ask Notron to investigate issue 42 in the demo project.” Notron resolves a connected GitHub issue, uses selected project context and delegates to its connected Claude session. Siri acknowledges promptly. Later, the user gets a supported diagnosis and proposed patch artifact, with evidence, in Notron/Notes.
+- **Two genuine adapters:** Claude Code/Agent SDK sessions and a read-only GitHub API connector. Their tools appear through one versioned plugin contract.
+- **Personal continuity:** follow-ups use the right project/task; explicit durable memory remains under existing permission rules. A short reusable “investigate issue” skill selects these tools through the normal core controls.
+- **Control users can understand:** approved project/repository access, provider disclosure, bounded runs, cancellation, honest partial/error status, and no duplicate side effects after restart.
+- **Developer extensibility:** an independently authored example can be installed deliberately, tested, enabled and removed without modifying Notron core. MIT core remains useful with BYO credentials.
+- **Installable evidence:** signed/notarized Mac build, reproducible demo setup and working access for judges. The movie alone is insufficient.
+
+## Scope cuts, in order
+
+1. Defer richer Siri schemas, semantic indexing and result snippets; retain working branded App Shortcuts/App Intents.
+2. Defer phone entry, remote Mac relay and cloud execution; disclose that the selected Mac must be awake.
+3. Defer public marketplace, automatic plugin downloads/updates, third-party executable sandbox claims and generic MCP bridge. Ship two reviewed adapters plus developer SDK.
+4. Defer autonomous shell/test execution and repository edits; retain useful investigation and proposed patch artifacts. Do not advertise a fix as applied or tested.
+5. Defer managed billing launch and large consumer pilot; retain secure BYO setup and small developer validation.
+
+Never cut permissions, encrypted task content, recovery, accurate outcome reporting, real external integration, Nebius/NVIDIA runtime use or installability. If Claude integration cannot be qualified by September 13, record it as blocked and bring the specific substitute adapter/scope decision to the owner; do not silently replace the promised agent workflow with a mock. If the minimal real workflow misses October 1, freeze expansion until it works.
+
+## Release boundaries and success measures
+
+The hackathon build is a developer preview, not a paid production launch. P07 still owns the later public paid decision, service/billing evidence and updater requirements. Preparing artifacts is authorized; publishing, contacting testers, spending money and submitting remain separate owner actions unless already authorized in that session.
+
+R05 records at least 20 complete synthetic/demo-task runs: no duplicate external starts, no wrong-project data, all failures disclosed; at least 18 useful completions with each remaining failure understood. On the qualified Mac, target acknowledgement within 5 seconds in at least 9 of 10 trials; report actual timing separately from external-task duration. Three developers should complete setup and one useful task using the documentation; outreach needs authorization. These are project targets, not present performance claims.
+
+## Immediate next task
+
+**R00 Task 1 — establish a trustworthy baseline and runtime contract.** Then qualify the real Siri/Claude path in R00 Task 2 before building the plugin protocol. Record each result in the [handoff template](handoff-template.md); update the [coverage map](coverage.md) and relevant checkbox only with fresh evidence. Work in an isolated branch and preserve unrelated local changes.

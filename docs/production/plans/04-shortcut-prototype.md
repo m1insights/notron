@@ -1,5 +1,11 @@
 # P04 — Mobile Shortcut feasibility and prototype plan
 
+**September 10 disposition: deferred optional experiment.** This historical plan
+is not the Siri integration plan and is not on the hackathon critical path.
+[R03](R03-siri-experience.md) owns Siri on the Mac; phone capture/relay requires
+separate real-device evidence and a later scope decision. Preserve this plan for
+that experiment; do not build its hosted two-note classifier as the new product.
+
 > **For agentic workers:** Use `superpowers:executing-plans` for the tasks below. Task 1 is a feasibility experiment: do not represent untested Shortcuts behavior as a finished integration.
 
 **Goal:** Find out whether Becky can explicitly capture and file one thought on her iPhone while her Mac sleeps.

@@ -1,16 +1,22 @@
 # Shared production design and interface contract
 
+**September 10 scope update:** Read the [repositioning design](repositioning-design.md)
+and [active roadmap](README.md) first. They extend Notron to approved external
+agents/APIs and own R-series interfaces. The implemented privacy, Notes-action,
+request, storage and managed-service contracts below remain binding. Historical
+implementation paragraphs describe their original checkpoint, not current open-task status.
+
 September 9 integration addendum: attachments use Nebius `openbmb/MiniCPM-V-4_5` for vision and on-device macOS Speech for audio. `Brain.see` requires a note-origin `Passage`; each attempt checks policy and credentials through the constrained provider transport and deadlines. Originals and descriptions/transcripts are encrypted; platform tools receive temporary private paths. Ignored/deleted sources are purged and legacy media is migrated only into encrypted recovery backups until explicit acceptance. Raw images can contain secrets that text redaction cannot detect before upload; this remains a disclosure/release-review requirement. P05 must meter vision and support explicitly purchased top-ups with an allowance hard stop.
 
 Spec version: 1. Date: 2026-09-04. Status: approved product direction; concrete implementation contracts for the seven plans.
 
 ## 1. Product boundary
 
-The user captures and organizes in Apple Notes. Notron is an organizer with short contextual conversation, not a general command-executing agent. It uses a Python workflow and a SwiftUI companion. On macOS it reads/writes Notes through AppleScript and Calendar/Reminders through EventKit. On iPhone, a user-invoked Shortcut may bridge selected content to hosted inference and supported Notes actions, subject to P04 evidence. There is no proposed iOS app in this program.
+The existing Notes subsystem supports capture, organization and contextual conversation. The approved R-series extends the product with bounded delegation to connected agents and APIs under the repositioning design; Notes permissions do not authorize external actions. It uses a Python workflow and a SwiftUI companion. On macOS it reads/writes Notes through AppleScript and Calendar/Reminders through EventKit. On iPhone, a user-invoked Shortcut may bridge selected content to hosted inference and supported Notes actions, subject to P04 evidence. There is no proposed iOS app in this program.
 
 macOS 14+ remains the code floor; the first shipped binary is Apple silicon, matching the inspected build. Intel is out of the initial distribution scope unless P06 expands and validates the matrix. P04 initially tests the available supported iPhone and records its exact OS; it must not advertise a minimum iOS version until the action sequence has been tested there.
 
-Inference stays on Nebius. Defaults: `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` for routing/scheduling; `nvidia/nemotron-3-super-120b-a12b` for writing/planning/filing; `Qwen/Qwen3-Embedding-8B` for embeddings. Ultra is configured but not a release requirement. Validate account availability at setup and handle unavailable models explicitly.
+Core inference stays on Nebius; R00/R02 qualify separately authorized external-agent providers. Defaults: `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B` for routing/scheduling; `nvidia/nemotron-3-super-120b-a12b` for writing/planning/filing; `Qwen/Qwen3-Embedding-8B` for embeddings. Ultra is configured but not a release requirement. Validate account availability at setup and handle unavailable models explicitly.
 
 ## 2. Trust boundaries and privacy
 
@@ -264,7 +270,7 @@ One managed Mac holds a renewable worker lease. A replacement requires explicit 
 
 ## 6. Distribution and user experience
 
-P06 moves mutable state to `~/Library/Application Support/Notron`; code and bundled Python remain read-only inside the app. Explicit development overrides are supported; no developer absolute paths ship. Migration copies validated legacy state with the listener stopped and a backup; it never uploads notes as a migration side effect.
+P01 already places protected mutable state in `~/Library/Application Support/com.m1labs.notron`; P06 completes portable runtime integration; code and bundled Python remain read-only inside the app. Explicit development overrides are supported; no developer absolute paths ship. Migration copies validated legacy state with the listener stopped and a backup; it never uploads notes as a migration side effect.
 
 First run: welcome/privacy → Notes permission → choose accessible notes and filing homes → choose managed/BYO AI and validate → optional Reminders/Calendar → seed Notes and prepare index with progress → start listener → verify one user-approved round trip. A local preview does not enable inference. Skipping optional grants disables corresponding functionality and says why. The Help flow describes sleep and pending work.
 

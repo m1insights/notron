@@ -1,20 +1,27 @@
 # NOTRON — working notes for Claude
 
-A personal AI agent that lives inside the user's Apple Notes. They type in Notes;
-she reads, thinks on NVIDIA Nemotron via Nebius, and writes back into Notes.
+Notron is being extended from an Apple Notes personal AI into the execution
+layer **Siri → Notron → external agents and APIs**, with Notes as memory/results
+and SwiftUI for connections, tasks and approvals. New integration work is planned,
+not shipped. Read `docs/production/README.md` and
+`docs/production/repositioning-design.md` before implementation; these supersede
+older organizer-only scope and roadmap ordering. Preserve existing Notes guards.
 
-Built for the Nebius × NVIDIA Global AI Hackathon (Personal AI track, due
-**2026-10-30**). Two hackathon rules constrain every choice: **all inference must
-run on Nebius Token Factory**, and **at least one NVIDIA open model must be used**.
-Do not swap the model provider.
+Built for the Nebius × NVIDIA Global AI Hackathon, Personal AI track. Official
+deadline: **October 30, 2026, 10am PDT / 1pm EDT**; October 1 is our internal demo
+target. The rules require runtime use of Nebius Token Factory or AI Cloud and an
+NVIDIA open-source model, not exclusive inference through Nebius. Core reasoning
+still uses NVIDIA Nemotron via Nebius; external-agent providers/credentials are
+separate opt-in integrations qualified in R00. Do not silently swap core models.
+See https://nebiusglobalaihackathon.devpost.com/rules (checked September 10).
 
 ## Status: pre-launch
 
 No production users. The developer is the only person running this, against
 their own Notes/Reminders/Calendar, to find rough edges before anyone else touches
-it. No deadline pressure beyond the hackathon date above — prefer the correct
-long-term design over the fastest thing to ship, and it's fine to land a feature
-in stages (e.g. safe-default now, riskier opt-in once its safety net exists).
+it. Follow the dated roadmap gates: working demo October 1, submission candidate
+October 23, deadline October 30. Keep safety and recovery intact; reduce optional
+scope when evidence slips. A developer preview is not a public paid release.
 
 ## Secure runtime gate (P01 Task 3)
 
@@ -510,8 +517,8 @@ answer a prompt). Never call `requestAuthorization` — under `osascript` the
 callback never fires, because there is no usage string in its bundle, so a
 design that waits for a grant hangs forever. Recognising a *local file*
 on-device needs no grant: it works with `authorizationStatus` sitting at `0`.
-`requiresOnDeviceRecognition = true` is not an optimisation but the hackathon
-rule — without it Apple may send the audio to its own servers. This is the one
+`requiresOnDeviceRecognition = true` is a Notron privacy constraint, not an
+exclusive-provider hackathon rule — without it Apple may send audio to its servers. This is the one
 permission `notron permissions` reports by capability rather than by its numeric
 status, because here the number says "not determined" forever while
 transcription works perfectly.

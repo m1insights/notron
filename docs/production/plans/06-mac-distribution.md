@@ -1,8 +1,21 @@
 # P06 — Production Mac application and distribution implementation plan
 
+**September 10 integration with the new roadmap:** P06 remains required.
+Tasks 1–3 are on the critical path before R03's real Siri demo; Tasks 4–6 qualify
+the developer-preview installation by October 9. Reuse P01's existing paths,
+encrypted migration and key handling. Bundle R02's qualified adapter runtimes,
+not just core Python. Qualify plugin subprocess signing, credential IPC and
+permission identity separately; plugins must never inherit an Apple Notes writer
+capability simply because they ship in the app. [R03](R03-siri-experience.md) owns connection/task UI and
+consumes this plan's async process runner. Its supervised plugin lifecycle must
+also stop/recover correctly on quit, sleep and upgrade. BYO developer setup is
+the first preview path; managed P05 staging and paid onboarding remain open.
+Manual signed full-installer updates are sufficient for the preview; Sparkle
+and the full paid-release gates remain required before public paid launch.
+
 > **For agentic workers:** Use `superpowers:executing-plans` to implement this plan task-by-task. Before UI edits read `docs/design/DESIGN.md` and reuse `DesignSystem.swift` tokens.
 
-**Goal:** Becky installs Notron, chooses its access, sees a useful result and can stop/remove it without using Terminal.
+**Goal:** A developer installs Notron, chooses Notes and connection access, sees a useful result and can stop/remove it without using Terminal; the same safe foundation supports the later consumer release.
 **Architecture:** Portable bundled Python, Application Support state, stable native helper identity, explicit onboarding state machine, health-backed menu, signed distribution/update chain and safe migration.
 **Tech Stack:** Swift/SwiftUI/AppKit, macOS Security and EventKit, Python 3.11+, launchd/appropriate supported login-item APIs, Developer ID/notarization, proposed Sparkle 2 public updater.
 **Spec:** [Shared design §§1–2, 6](../design.md).
@@ -18,7 +31,7 @@
 
 ## Task 1 — Runtime layout and safe legacy migration
 
-**Files:** Create `notron/paths.py`, `notron/migration.py`, `tests/test_paths.py`, `tests/test_migration.py`, `mac/Sources/Notron/RuntimePaths.swift`; Modify `Core.swift`, `NotronApp.swift`, `notron/cli.py`, all `.notron` path constants in brain/index/library/rewrite/undo/watch/mentions/care/reflect/filer/applescript and corresponding tests.
+**Files:** Modify existing `notron/paths.py`, `notron/migration.py`, `tests/test_cache_migration.py`; Create `tests/test_paths.py`, `mac/Sources/Notron/RuntimePaths.swift`; Modify `Core.swift`, `NotronApp.swift`, `notron/cli.py`, all `.notron` path constants in brain/index/library/rewrite/undo/watch/mentions/care/reflect/filer/applescript and corresponding tests.
 **Consumes:** P01 encrypted/atomic stores and validated legacy state.
 **Produces:** `RuntimePaths` for immutable resources, Python/helper executable and writable state; `state_root()` in Python; versioned migration journal and backup.
 
@@ -27,12 +40,14 @@
 ```python
 def test_production_state_is_outside_app(monkeypatch, tmp_path):
     from notron.paths import state_root
-    monkeypatch.setenv('NOTRON_STATE_DIR', str(tmp_path / 'Application Support' / 'Notron'))
+    monkeypatch.setenv('NOTRON_DEV_MODE', '1')
+    monkeypatch.setenv('NOTRON_STATE_DIR', str(tmp_path / 'Application Support' / 'com.m1labs.notron'))
     root = state_root()
-    assert root == tmp_path / 'Application Support' / 'Notron'
+    assert root == tmp_path / 'Application Support' / 'com.m1labs.notron'
     assert '.app' not in root.parts
 ```
 
+- [ ] Reconcile the already implemented P01 migration before modifying it. Preserve its explicit offline initialize/migrate/accept sequence, encrypted backups and refusal to auto-import secrets. Add `state_root()` as a tested accessor around the existing `DATA_DIR`, not a second competing root. Development override requires explicit development mode; production ignores it. Do not replay accepted migrations or replace working retention behavior.
 - [ ] Production Swift computes paths from Bundle URLs and the user's Application Support; Python receives only explicit nonsecret path configuration. Development overrides are opt-in and tested. Reject writable resource/state confusion and missing bundled interpreter with a useful error.
 - [ ] Migration stops the old listener, copies validated choices/state to a versioned backup, invokes P01 sanitization/encryption, verifies counts/schema, then atomically switches roots. On failure retain old data and paused state. Do not automatically migrate raw `.env` secrets or upload an index.
 - [ ] Run migration twice to prove idempotence; interrupt each phase; test existing user notes are untouched and a failed migration does not launch either worker. Run targeted tests and commit.
