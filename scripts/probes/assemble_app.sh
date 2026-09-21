@@ -52,6 +52,18 @@ cp "$WORK/build/debug/Notron" "$APP/Contents/MacOS/Notron"
 # Contents/Resources/Metadata.appintents.
 cp -R "$WORK/meta/Metadata.appintents" "$APP/Contents/Resources/"
 
+# Post-condition, because the trap above is easy to reintroduce and fails in a
+# confusing place (codesign, with a message about "bundle format unrecognized")
+# rather than here. Assert the layout instead of trusting the line above.
+if [ -d "$APP/Contents/Metadata.appintents" ]; then
+    echo "ERROR: Metadata.appintents is at Contents/ -- it must be under Contents/Resources/." >&2
+    exit 1
+fi
+if [ ! -f "$APP/Contents/Resources/Metadata.appintents/extract.actionsdata" ]; then
+    echo "ERROR: no extract.actionsdata under Contents/Resources/ -- metadata step failed." >&2
+    exit 1
+fi
+
 if [ "$IDENTITY" = "-" ]; then
     echo "==> signing skipped; ad-hoc signing instead"
     codesign --force --sign - "$APP"
