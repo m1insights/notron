@@ -155,3 +155,56 @@ def provision_storage_key(root: Path) -> None:
     if require(STORAGE_KEY) != key:
         raise CredentialUnavailable('Storage key could not be verified.')
     EncryptedStore(root, key).write('key-check', b'notron-storage-v1')
+
+#: Credential names a user may set from the command line. `storage-key` is
+#: provisioned by `storage initialize` against an empty destination, where it is
+#: generated rather than supplied; `managed-refresh` is native-only by design and
+#: the helper refuses it. Neither belongs in a general "store a key" command, and
+#: allowing them would quietly widen a deliberate boundary.
+PROVISIONABLE = (NEBIUS_KEY, SEARCH_KEY, DEV_NEBIUS_KEY)
+
+#: A pasted key is one line. Anything longer or multi-line is a paste accident,
+#: and storing it writes a credential that fails much later, somewhere far from
+#: the cause -- the failure mode this whole module exists to avoid.
+MAX_SECRET_BYTES = 4096
+
+
+def provision_api_key(name: str, secret: str) -> None:
+    """Store one API key, then read it back.
+
+    The value never appears in an argument, a log line, or a diagnostic: callers
+    pass text they read from stdin, and this function is the only path to
+    `put` for anything other than the storage key.
+    """
+    if name not in PROVISIONABLE:
+        raise CredentialUnavailable('That credential cannot be set here.')
+    if _provider is None:
+        raise CredentialUnavailable('Keychain unavailable; protected processing paused.')
+    if not isinstance(secret, str):
+        raise CredentialUnavailable('Secret must be text.')
+    value = secret.strip()
+    if (not value or len(value.encode('utf-8')) > MAX_SECRET_BYTES
+            or any(character.isspace() for character in value)):
+        raise CredentialUnavailable('That does not look like a single-line key.')
+    encoded = value.encode('utf-8')
+    _provider.put(name, encoded)
+    if get(name) != encoded:
+        raise CredentialUnavailable('Stored key could not be verified.')
+
+
+def provisioned() -> list[tuple[str, bool]]:
+    """Which provisionable names are present. Presence only, never a value.
+
+    A Keychain failure propagates rather than reporting `False`: "absent" and
+    "unreadable" are different problems and only one of them is fixed by pasting
+    a key.
+    """
+    return [(name, get(name) is not None) for name in PROVISIONABLE]
+
+
+def forget_api_key(name: str) -> None:
+    if name not in PROVISIONABLE:
+        raise CredentialUnavailable('That credential cannot be removed here.')
+    if _provider is None:
+        raise CredentialUnavailable('Keychain unavailable; protected processing paused.')
+    _provider.delete(name)

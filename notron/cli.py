@@ -46,6 +46,47 @@ def cmd_storage(args):
         migration.accept(source, target, key)
         print('Migration accepted. Legacy originals and recovery copies retired; approved-note rebuild required.')
 
+def _read_secret(name):
+    """One line from stdin. Hidden when a person is typing, read as-is from a pipe.
+
+    Deliberately NOT a command-line argument: argv is visible to every process on
+    the machine and lands in shell history. `printf '%s' "$KEY" | notron key set
+    nebius` and an interactive paste both work; neither can leak through ps.
+    """
+    if sys.stdin.isatty():
+        import getpass
+        return getpass.getpass(f"Paste {name} (input hidden): ")
+    return sys.stdin.readline()
+
+
+def cmd_key(args):
+    """Store, list or remove the API keys Notron uses. Secrets arrive on stdin."""
+    from . import credentials
+    if credentials._provider is None:
+        credentials.startup()
+    if args.action == 'list':
+        for name, present in credentials.provisioned():
+            print(f"  {'stored' if present else 'missing':8} {name}")
+        return
+    if not args.name:
+        raise SystemExit(f"'{args.action}' needs a key name; try: notron key list")
+    if args.action == 'delete':
+        credentials.forget_api_key(args.name)
+        print(f"Removed {args.name}.")
+        return
+    try:
+        credentials.provision_api_key(args.name, _read_secret(args.name))
+    except credentials.CredentialUnavailable as problem:
+        # The generic "protected processing paused" message that main() prints is
+        # right for an agent command and useless here. This is a setup command run
+        # by a person, and they need to know whether their paste was wrong or the
+        # Keychain refused -- "try again" is not actionable when the paste was the
+        # problem.
+        print(f"  {problem}", file=sys.stderr)
+        raise SystemExit(2) from None
+    print(f"Stored {args.name}.")
+
+
 @maintenance
 def cmd_setup(args):
     print(f"\nSetting up {workspace.FOLDER} in Apple Notes\n")
@@ -508,6 +549,13 @@ def main(argv=None):
     pe.set_defaults(fn=cmd_permissions)
     sub.add_parser("agenda", help="what's in your calendar and what's still open"
                    ).set_defaults(fn=cmd_agenda)
+
+    from .credentials import PROVISIONABLE
+    keys = sub.add_parser('key', help='store, list or remove the API keys Notron uses')
+    keys.add_argument('action', choices=['set', 'list', 'delete'])
+    keys.add_argument('name', nargs='?', choices=list(PROVISIONABLE),
+                      help='which key; the secret itself is read from stdin, never argv')
+    keys.set_defaults(fn=cmd_key)
 
     from .paths import DATA_DIR
     storage = sub.add_parser('storage', help='explicit offline storage setup or migration')

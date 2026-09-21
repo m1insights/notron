@@ -15,6 +15,18 @@ public struct KeychainStore {
 
     public init() {}
 
+    /// Never prompts. Reads happen in the background worker, where a dialog would
+    /// be a hang with nobody to answer it, and a blocked prompt is worse than a
+    /// refusal -- so every operation is non-interactive.
+    ///
+    /// OPEN QUESTION, 2026-09-21: `put` has never been observed to succeed from
+    /// the development session. An earlier attempt to allow interaction on the
+    /// write path was reverted because the evidence did not support it: Apple's
+    /// own `security add-generic-password` fails identically from that shell with
+    /// `UNIX[Operation not permitted]`, which points at the runner rather than at
+    /// these attributes. Verify writes on a normal login session before assuming
+    /// this needs to change; if writes DO need interaction, split the context by
+    /// operation rather than weakening reads.
     private func query(_ name: String) throws -> [String: Any] {
         guard Self.names.contains(name) else { throw Failure.invalidRequest }
         let context = LAContext()
