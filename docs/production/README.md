@@ -51,7 +51,9 @@ R01 owns shared contracts before R02/R03 consume them. P06 owns the subprocess r
 | [P06 Mac distribution](plans/06-mac-distribution.md) | Portable signed runtime/startup still pending | Critical path: native bridge early, full install before external pilot/submission |
 | [P07 pilot/release](plans/07-pilot-release.md) | Planned | Reuse security, reliability and release gates; R05 replaces the initial Becky pilot with developer evidence |
 
-“Locally implemented” is not a new passing-test claim. The September 10 fresh Python 3.11 baseline failed: CLI syntax compatibility and tests accessing the real Application Support directory are recorded in R00 T1. P05 staging, signed-device qualification and billing evidence remain open.
+“Locally implemented” is not a new passing-test claim. The September 10 fresh Python 3.11 baseline failed on exactly two things: CLI syntax compatibility and tests accessing the real Application Support directory. **Both were repaired on 2026-09-21** — see the [R00 Task 1 handoff](handoffs/2026-09-21-R00-task-1.md). The suite is 1344 passed / 0 failed on 3.11.14 and 3.14.2 locally and in CI on both 3.11 and 3.12, the repository is public with MIT detected, and a stranger's unauthenticated clone installs and runs green. The isolation bug was worse than "tests failed": `transport` resolves `paths.DATA_DIR` at call time, so 57 tests were performing live writes to real application state on this machine and only surfaced as errors under a sandboxed runner.
+
+Two floors remain unverified and are recorded in that handoff. `mac/Package.swift` declares `platforms: [.macOS(.v14)]`, but nothing in CI builds against a macOS 14 SDK — the `native-account` job now runs on `macos-26` because the `macos-14` image rejected `guard let self` inside `MainActor.run` nested in `Task.detached` as a hard error across `Library.swift`, `NotronApp.swift` and `Onboarding.swift`. On `macos-26` the same 88 diagnostics are warnings carrying `this is an error in the Swift 6 language mode [#SendableClosureCaptures]`, so that pattern is a latent break, not a clean bill of health. P05 staging, signed-device qualification and billing evidence remain open.
 
 ## What must ship
 
@@ -80,4 +82,8 @@ R05 records at least 20 complete synthetic/demo-task runs: no duplicate external
 
 ## Immediate next task
 
-**R00 Task 1 — establish a trustworthy baseline and runtime contract.** Then qualify the real Siri/Claude path in R00 Task 2 before building the plugin protocol. Record each result in the [handoff template](handoff-template.md); update the [coverage map](coverage.md) and relevant checkbox only with fresh evidence. Work in an isolated branch and preserve unrelated local changes.
+**R00 Task 2 — qualify the real Siri/Claude path on the intended Mac.** R00 Task 1 is complete ([handoff](handoffs/2026-09-21-R00-task-1.md)); do Task 2 before building the plugin protocol. Record each result in the [handoff template](handoff-template.md); update the [coverage map](coverage.md) and relevant checkbox only with fresh evidence. Work in an isolated branch and preserve unrelated local changes.
+
+Constraint discovered in Task 1, and it changes how Task 2 must be shaped: this machine has **no macOS 27 SDK** (macOS 26.2, Xcode 26.2, Swift 6.2.3). `LongRunningIntent` and `CancellableIntent` are therefore unavailable, the 30-second intent timeout is a hard wall that cannot be raised, and the asynchronous start-then-poll design is mandatory rather than stylistic. Do not plan against API that will not compile.
+
+**Then, before the plugin protocol:** commit a bounded OpenShell spike for the delegated-agent execution path (`openshell sandbox create -- claude` on this Apple silicon Mac, a per-project YAML policy, an L3/L7 denial proven, and the Python SDK reading a result). It replaces R00 Task 2's open Claude-session-steering question with a containable one, and it is the named NVIDIA tooling for this track. The fallback if macOS support disappoints is dispatching the agent as a local subprocess under the existing Guard and `outbound.py` — the submission does not depend on the spike succeeding.
