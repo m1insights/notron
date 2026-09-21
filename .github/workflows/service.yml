@@ -34,7 +34,15 @@ jobs:
           docker build -f service/Dockerfile -t notron-service-ci .
           docker run --rm --entrypoint python notron-service-ci -c 'from notron_service.app import create_default_app; from notron_service.store import PostgresStore; assert all(p.is_file() for _, p, _ in PostgresStore._migrations())'
   native-account:
-    runs-on: macos-14
+    # macos-14 cannot build this target. Its SDK rejects the `guard let self`
+    # pattern inside `MainActor.run` nested in `Task.detached` across Library,
+    # NotronApp and Onboarding with "reference to captured var 'self' in
+    # concurrently-executing code", so the job failed while every file reported
+    # as compiled. The same sources build clean against the macOS 26 SDK this
+    # project actually targets. NOTE: this means `platforms: [.macOS(.v14)]` in
+    # mac/Package.swift is unverified — nothing here builds against a macOS 14
+    # SDK. Raise or verify that floor before claiming 14 support.
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
