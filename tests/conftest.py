@@ -24,6 +24,8 @@ makes that a rule rather than a habit.
 
 import pytest
 
+from pathlib import Path
+
 from notron import (applescript, attachments, mentions, notes,
                     rewrite, undo, library, workspace)
 
@@ -31,6 +33,45 @@ from notron import (applescript, attachments, mentions, notes,
 @pytest.fixture(autouse=True)
 def _no_search_key(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _app_state_is_disposable(monkeypatch, tmp_path):
+    """The fourth way a test could reach the machine, and the quietest of them.
+
+    `transport._identity` imports `paths.DATA_DIR` *inside* the function, so it
+    resolves at call time rather than at import — and nothing redirected it.
+    Fifty-seven tests in `test_managed_transport.py` were writing
+    `managed-requests.json` into the developer's real application state and
+    calling `securestore.private_directory` (a mkdir and a chmod) on the way in.
+    Every other module binds `DATA_DIR` at import into its own constant and is
+    redirected by its own fixture, so this one had no fixture — it looked
+    covered. It was not. On a runner that cannot chmod outside its own
+    workspace the same bug surfaced as 57 PermissionErrors, which is how it was
+    finally found; on the developer's machine it was silent live writes.
+
+    Two things now hold. The directory is a `tmp_path`, reached through
+    `paths.data_dir()` so `NOTRON_DATA_DIR` is the single override. And
+    `private_directory` refuses the real root, so a future test that re-derives
+    the developer's path fails loudly instead of creating state in it.
+    """
+    from notron import paths, securestore
+
+    root = tmp_path / 'app-state'
+    monkeypatch.setenv('NOTRON_DATA_DIR', str(root))
+    monkeypatch.setattr(paths, 'DATA_DIR', root)
+
+    real_root = Path.home() / 'Library' / 'Application Support' / 'com.m1labs.notron'
+    real_private_directory = securestore.private_directory
+
+    def guarded(target):
+        resolved = Path(target).resolve()
+        if resolved == real_root or real_root in resolved.parents:
+            raise AssertionError(
+                f'Test reached real application state: {target} — point it at tmp_path.')
+        return real_private_directory(target)
+
+    monkeypatch.setattr(securestore, 'private_directory', guarded)
 
 
 @pytest.fixture(autouse=True)
