@@ -1,18 +1,24 @@
 # NOTRON
 
-**A personal AI rooted in Apple Notes, being extended to connect Siri with external agents and APIs.**
+**Siri speaks. Nemotron decides. Plain code authorizes. A contained sandbox acts.
+The result comes back into Notes.**
 
-Notron's existing Python workflow thinks with NVIDIA Nemotron via Nebius and
-works through Apple Notes on an awake Mac, with a SwiftUI companion. The next
-product direction is **Siri → Notron → the world**: chosen project context,
-connected tools, durable tasks and useful results back in Siri and Notes.
+Notron is a private, always-on personal AI that lives on your Mac. It reaches into
+the Apple seams that are open and unused, decides with an NVIDIA open model, and
+acts on your real work without letting the model hold the authority to do it.
 
-**Planned, not shipped:** Claude session and GitHub adapters, task-aware Siri
-intents and an open-source plugin developer kit. See the
-[implementation roadmap](docs/production/README.md) for scope and evidence gates.
-The internal demo target is October 1; the hackathon deadline is October 30.
-Examples below describe the existing Notes workflow; timing depends on the Mac,
-sync and provider, and phone-to-Mac execution is not guaranteed.
+**Planned, not shipped:** the contained-execution path, task-aware Siri intents and
+the task board. The Notes workflow described in this README is real and running
+today; the orchestration layer is a documented roadmap. See the
+[implementation roadmap](docs/production/README.md) and
+[submission strategy](docs/production/submission-strategy.md) for scope and
+evidence gates. The hackathon deadline is October 30; the internal demo target is
+October 6. Examples below describe the existing Notes workflow; timing depends on
+the Mac, sync and provider, and phone-to-Mac execution is not guaranteed.
+
+**Where frontier agents sit.** Claude Code and Codex are optional, disclosed,
+bring-your-own capability inside a contained run. They never make a decision, and
+Notron's reasoning runs on NVIDIA Nemotron via Nebius.
 
 Built for the [Nebius × NVIDIA Global AI Hackathon](https://nebiusglobalaihackathon.devpost.com/) — Personal AI track.
 
@@ -21,6 +27,24 @@ Keychain integration is verified in P06. Examples below describe product behavio
 not an instruction to bypass that gate. No production-readiness or sandbox claim.
 See [SECURITY.md](SECURITY.md) for implemented boundaries, limitations and the
 owner's unresolved private-reporting decision.
+
+### Why Apple, when the documented doors are shut
+
+There is **no API for Apple Notes**. There is **no API for Siri's personal
+context** — Apple's five documented Apple Intelligence integration steps are all
+outbound. A third-party app **cannot invoke another app's intents**, and Apple's
+own Notes does not use the public `.notes` schema path: checked first-hand on
+macOS 26.2, all **48 of 48** of Notes.app's App Intents declare an empty
+`assistantDefinedSchemas`.
+
+Everyone building personal AI works *beside* Apple because the documented doors
+are shut. Notron goes *through* Apple using the seams that are open and unused —
+index-addressed bulk AppleScript queries, EventKit read directly, a headless
+`Shortcuts Events` runner, a per-binary TCC identity. That is a deliberately
+strange way to build software, and it is the only way to get durable,
+Siri-writable, cross-device context that a sandboxed agent framework cannot be
+handed. It is also why the Notes quirks documented at the bottom of this README
+are permanent constraints rather than bugs waiting on more effort.
 
 ---
 
@@ -36,6 +60,14 @@ turns it into an agent workspace.
 
 Your notes become three things at once: the interface, the memory, and the
 instructions.
+
+**And in the direction this project is heading, they become a fourth: the grant.**
+A `#notron` line in a project's note *is* the connection to that project. So when
+you say "ask Notron to look at why checkout is failing," the request arrives
+already bound to the right repository and the right context — because Siri has no
+idea which of your twenty projects "the checkout thing" means, and the note does.
+That is the job Notes is doing here, and it is not the job of a chat box. Claude
+Code on a phone lets you talk to *a session*. This lets you talk to *your work*.
 
 ## How you talk to her
 
@@ -263,6 +295,45 @@ order, and on which model.
 
 Nodes decline work they do not own, so a "note to self" costs one Nano call and
 a plan costs one Nano plus one Super. Cost scales with what you actually asked for.
+
+### Which Nemotron tier, and why the answer surprised us
+
+The usual intuition is *small model = fast, so route the easy calls down*. We
+measured it, and on this workload it is false.
+
+Choosing the tier for the Brain Dump filer on **2026-09-01**, on the same prompt:
+
+| Model | Latency | Output |
+|---|---|---|
+| Nemotron **Nano 30B** | **43 s** on a two-line prompt — **235 s** on five | padded with irrelevant context |
+| Nemotron **Super 120B** | **1.3 s** | exact |
+
+The nominally smaller, cheaper model was **30–180× slower** and less precise.
+So tier selection here is not a function of how hard the question looks. It is a
+function of **whether a person is waiting, and what a wrong answer costs**:
+
+- **Nano 30B** — classification on paths nobody is watching, where code re-checks
+  the answer and a retry is free. The router. Most wake-ups stop here.
+- **Super 120B** — everything a person waits on and everything whose error is
+  expensive. Not the compromise tier here; the measured sweet spot.
+- **Ultra 550B** — configured deep tier, optional, off the default path.
+
+*These figures come from a single measurement on one prompt. They are the reason
+the graph is shaped this way, not a benchmark claim — reproduce them on your own
+workload before you rely on them.*
+
+### Two Nemotron tiers used against each other
+
+`notron reflect` runs the self-improvement loop, and it is the clearest example of
+why the graph is a graph rather than one agent in a loop. Super proposes up to
+three lessons drawn from answers that missed — **and every proposed lesson must
+quote the transcript verbatim, string-checked in plain code.** A **separate** Nano
+call then verifies those lessons against your standing instructions. Only the
+survivors reach the Guard, which writes them to `📖 Lessons`, capped at twelve.
+
+Two different Nemotron models, arranged adversarially, with plain Python as the
+arbiter. A model that can only produce quotable evidence and cannot approve its
+own output is the whole design in one function.
 
 ## Powered by
 

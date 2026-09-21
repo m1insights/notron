@@ -1,10 +1,37 @@
 # Notron repositioning design and contracts
 
-Version 1 • September 10, 2026 • Approved direction; proposed interfaces below require implementation.
+Version 2 • September 21, 2026 • Approved direction; proposed interfaces below require implementation.
+**v2 corrects §1–§3:** the first workflow no longer delegates its reasoning to a
+Claude session, R04 is cut, and the user surface collapses to one hero screen.
+See [submission-strategy.md](submission-strategy.md) for the reasoning; the
+task and plugin contracts in §4–§6 remain binding and unchanged.
 
 ## 1. Product and precedence
 
-**Siri → Notron → the world.** Siri supplies a familiar invocation surface. Notron owns chosen context, tool selection, durable work, permission checks and useful results. Apple Notes remains memory and delivery; the SwiftUI companion handles connections, tasks and explicit approvals. Notes-only use continues to work. The initial repositioned product serves developers, with a consumer experience later built on the same core.
+**Siri speaks. Nemotron decides. Plain code authorizes. A contained sandbox acts.
+The result comes back into Notes.**
+
+Siri supplies a familiar invocation surface. Notron owns chosen context, decision,
+durable work, permission checks and useful results. Apple Notes is the grant and
+the durable receipt — a `#notron` line in a project's note *is* the connection that
+binds a spoken request to the right project — and Notes-only use continues to work.
+The SwiftUI companion presents one hero screen: tasks, with approval inline.
+
+**NVIDIA Nemotron owns the reasoning and every decision.** Claude Code, Codex and
+other frontier agents are disclosed, opt-in, bring-your-own capability. They are
+never the source of a decision and never the basis of the product's claim, because
+the claim is *the model proposes and plain code disposes* — which only holds if the
+proposer is a model we control the tier and the budget of. This corrects v1, where
+the first workflow routed the interesting reasoning to a third-party session.
+
+The defensible half of this product is the Apple bridge: there is no Apple Notes
+API, no Siri personal-context API, no third-party access to another app's intents,
+and Apple's own Notes does not use the public `.notes` schema path (verified
+first-hand, macOS 26.2 — 48 of 48 App Intents declare empty
+`assistantDefinedSchemas`). Notron reaches through the seams that are open and
+unused — index-addressed bulk AppleScript queries, EventKit read directly, a
+headless `Shortcuts Events` runner, a per-binary TCC identity. A sandboxed agent
+framework can be built by anyone; this half cannot be added as a feature.
 
 This document and the active [roadmap](README.md) supersede the older organizer-only product boundary, P04-first mobile assumption and P07's initial consumer pilot. Existing [production contracts](design.md) remain binding except where a specific R task versions an interface. This is an extension of the Python workflow, not a replacement of the Notes graph or a wholesale framework migration.
 
@@ -19,7 +46,11 @@ This document and the active [roadmap](README.md) supersede the older organizer-
 - No autonomous shell commands, repository writes, merge, deployment, messaging or payment in the default demonstration.
 - Use existing SwiftUI design tokens; new screens must reconcile the existing design documents before implementation.
 
-Verified core defaults in `notron/brain.py`: routing `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`; writing/planning `nvidia/nemotron-3-super-120b-a12b`; configured deep tier `nvidia/Nemotron-3-Ultra-550b-a55b`; embeddings `Qwen/Qwen3-Embedding-8B`; vision `openbmb/MiniCPM-V-4_5`. Ultra is optional. Claude provider/model is not yet configured: R00 records the exact selected model, SDK version and permitted credential path. A plugin never silently changes Notron's core provider.
+Verified core defaults in `notron/brain.py`: routing `nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B`; writing/planning `nvidia/nemotron-3-super-120b-a12b`; configured deep tier `nvidia/Nemotron-3-Ultra-550b-a55b`; embeddings `Qwen/Qwen3-Embedding-8B`; vision `openbmb/MiniCPM-V-4_5`. Ultra is optional. A plugin never silently changes Notron's core provider.
+
+**Tier selection is a function of latency and recoverability, not of apparent difficulty.** Measured 2026-09-01, same prompt: Nemotron **Nano 30B took 43 s** on two lines and **235 s** on five, padding its answer with irrelevant context, while **Super 120B answered in 1.3 s** and exact. The nominally smaller model was 30–180× slower. So Nano stays on paths nobody is waiting on and whose answer code re-checks; Super takes everything a person waits on and everything whose error is expensive. Re-measure before quoting these numbers publicly, and record the method alongside them.
+
+Two Nemotron behaviours constrain the implementation and are documented in `README.md` and `CLAUDE.md`: reasoning is billed against `max_tokens` and is not the answer (a request can return empty content with `finish_reason: "stop"` and no error, hence `REASONING_HEADROOM` and one retry at double budget), and JSON replies truncate mid-string (hence four progressively forgiving parsers and a safe router fallback). Neither is a workaround to remove; both are why the graph is shaped this way.
 
 The [hackathon rules](https://nebiusglobalaihackathon.devpost.com/rules) require runtime use of Nebius and an NVIDIA open model, not exclusive inference through Nebius. This corrects older repository wording. Separate external agents still need valid provider authorization. Core model selection is a product constraint, not a claim that the event forbids every other provider.
 
@@ -28,24 +59,38 @@ The [hackathon rules](https://nebiusglobalaihackathon.devpost.com/rules) require
 ```mermaid
 flowchart LR
     Siri[Siri / App Intents] --> Core[Notron context and task controller]
-    Notes[Apple Notes / Mac app] --> Core
-    Core --> Gate[Core permission and approval checks]
-    Gate --> Claude[Claude session adapter]
-    Gate --> GitHub[GitHub read-only adapter]
-    Gate --> Future[Developer plugins]
-    Claude --> Tasks[Durable results and status]
-    GitHub --> Tasks
-    Tasks --> Core
-    Core --> Delivery[Guarded Notes delivery / Siri status]
+    Notes[Apple Notes: grant + receipt] --> Core
+    Core --> Decide[NEMOTRON decides:<br/>project, approval, task or question]
+    Decide --> Gates[Plain-code gates + the Guard<br/>no model in the write path]
+    Gates -->|approved| Contain[Contained execution<br/>per-project policy]
+    Gates -->|uncertain| Approve[Approval on the hero screen]
+    Approve --> Contain
+    Contain --> Result[Durable result and status]
+    Result --> Delivery[Guarded Notes delivery / Siri status]
+    Contain -. optional, disclosed .-> BYO[Claude Code / Codex<br/>bring-your-own, never decides]
 ```
 
-The first workflow uses an explicitly chosen local demo project and GitHub repository. Notron reads an issue, resolves permitted Notes context, delegates analysis to a Notron-owned Claude session and returns a diagnosis plus proposed patch text/artifact. It does not claim a patch was applied or tested. Follow-up “what did it find?” resolves the selected task; ambiguous project/task names trigger clarification before invocation. A second request can reuse an explicitly identified session without silently choosing the most recent session on disk.
+The first workflow uses an explicitly chosen local demo project and GitHub repository. Notron reads an issue, resolves permitted Notes context, and **has Nemotron produce the decision: which project this belongs to, whether it may run unattended, and whether the request is a task or a question.** Plain-code gates then authorize it and the run is contained under that project's policy. The result is a diagnosis plus proposed patch text or artifact, delivered to the project's note and the hero screen. It does not claim a patch was applied or tested.
+
+**The decision is the demonstration.** Its tier, its output and its measured latency are visible on screen, because a judge scoring how effectively Nemotron is used should be able to watch Nemotron being used rather than take it on trust.
+
+**Where the frontier agents go.** A contained run may invoke Claude Code or Codex as an opt-in, bring-your-own capability, disclosed in the UI and in the README as the user's provider rather than ours. Three rules hold: it never makes the decision, it is never required for the workflow to succeed, and there is no silently-configured provider — R00 records the exact selected model, SDK version and permitted credential path before anything is enabled. A consumer subscription is not assumed reusable for third-party automation.
 
 The [official Claude session API](https://code.claude.com/docs/en/agent-sdk/sessions) supports query/resume and session history. R00 must qualify the actual installed SDK, cancellation and permission hooks. This does **not** establish the ability to control every already-running terminal session. Owned sessions come first; explicitly selected existing-session history or forks require separate qualification and access. No scanning all projects or reading ambient credentials.
 
 Apple's [App Intents guidance](https://developer.apple.com/videos/play/wwdc2026/240/) is the integration boundary. Typed intents/entities improve discoverability; they do not make Notron Siri's unrestricted internal tool router. R00 measures real availability; R03 retains the existing branded Ask route. A Mac intent does not create an iPhone relay. The product must not depend on an unverified keynote feature or an assumed general-agent schema.
 
 ## 4. Plugin contract v1 (R01)
+
+> **v2 scope cut.** The contract below survives as the **internal seam between
+> first-party adapters and the core** — two reviewed adapters behind one
+> documented interface is real. **R04 (the developer kit, template, conformance
+> runner and public contribution path) is cut.** A protocol with one
+> implementation is not extensibility, it is overhead, and the criterion this
+> project is judged on asks for a coherent product rather than a platform. No
+> supervised multi-process plugin runner ships in October; adapters run in
+> process behind the same contracts. Revisit only when a third independent
+> implementation exists to justify the boundary.
 
 Keep the core permission system, scheduler and Notes executor fixed. Borrow explicit dependency/capability contracts and lifecycle management from [DeepSeek Harness](https://www.deepseek.com/harness/en/), not an all-at-once runtime rewrite. Community installability is not a security boundary. First-party shipped adapters are reviewed and bundled. Developer plugin installation explicitly trusts executable code; do not claim process separation is an OS sandbox. A public untrusted-code marketplace waits for an independently reviewed isolation model.
 
@@ -121,11 +166,31 @@ Reuse P01 encryption and revocation. Retain completed task content for 7 days by
 
 All existing Notes guards remain: Ignore wins; read permission is not rewrite permission; About Me is user-write-only; photo-bearing notes are not overwritten; uncertain writes require review; existing calendar/reminder action limits remain. Optional calendar/reminder grants must not block developer tasks or Notes-only use. The managed inference transport and storage key gates remain enforced; no early flipping of `protectedManagedStartupValidated`.
 
-## 7. User surfaces and extensibility
+## 7. User surfaces
+
+**One hero screen: the task board.** A single view where each request is a row —
+what was asked, which project it resolved to, **the Nemotron decision with its
+tier and measured latency**, whether it is waiting on approval, the contained
+run's state, and the receipt. Approval is inline and bound to a digest of the
+exact proposal. One screen is a deliberate constraint: the criterion this is
+judged on asks for a coherent product, and v1's spread of connections, tasks,
+approvals and plugins across several surfaces reads as fragmentation instead.
+
+| Surface | Its one job |
+|---|---|
+| Siri / App Intents | Speak the request; hear a short status. Never a chat surface. |
+| Mac app | The hero screen: watch, approve, audit. |
+| Apple Notes | The grant and the durable receipt — how a spoken request acquires a project. |
 
 R03 adds task entities with stable opaque IDs, list/disambiguation, start/status/cancel intents and concise dialogs. Approval opens the Mac's concrete proposal, showing project, tool, provider and data destinations; no unbound voice “yes” is treated as blanket permission. Sensitive results are not spoken by default. The task screen exposes full results, provider costs when available, cancellation state and Notes-delivery state separately.
 
-R04 ships a manifest validator, local conformance runner, documented examples and a reusable declarative skill `investigate-issue` that invokes only registered tools. Skills are versioned instructions with named inputs/tools, not credentials or policy code. Developers can change integrations and workflows without changing core. Model-provider, storage, loop and UI replacement plus generic MCP servers are future extension categories, not v1 guarantees. The later MCP adapter must pin its supported protocol and treat server tools as untrusted; current [MCP task extensions](https://blog.modelcontextprotocol.io/posts/2026-07-28/) must not be assumed available on every server.
+**R04 is cut** (see §4). Its one salvageable piece is the declarative skill
+`investigate-issue` as versioned instructions with named inputs and registered
+tools — not credentials, not policy code — because the demo needs one reusable
+workflow and a skill is the cheapest honest way to express it. Model-provider,
+storage, loop and UI replacement plus generic MCP servers remain future extension
+categories. The later MCP adapter must pin its supported protocol and treat server
+tools as untrusted; current [MCP task extensions](https://blog.modelcontextprotocol.io/posts/2026-07-28/) must not be assumed available on every server.
 
 ## 8. Definition of done
 

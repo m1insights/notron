@@ -1,25 +1,48 @@
 # NOTRON — working notes for Claude
 
-Notron is being extended from an Apple Notes personal AI into the execution
-layer **Siri → Notron → external agents and APIs**, with Notes as memory/results
-and SwiftUI for connections, tasks and approvals. New integration work is planned,
-not shipped. Read `docs/production/README.md` and
-`docs/production/repositioning-design.md` before implementation; these supersede
-older organizer-only scope and roadmap ordering. Preserve existing Notes guards.
+Notron is a private, always-on personal AI on the Mac:
+**Siri speaks. Nemotron decides. Plain code authorizes. A contained sandbox acts.
+The result comes back into Notes.**
+
+It is being extended from an Apple Notes personal AI into an orchestration layer,
+with Notes as the grant and the durable receipt, and one SwiftUI hero screen (the
+task board) to watch, approve and audit. New integration work is planned, not
+shipped. Read `docs/production/README.md`,
+`docs/production/submission-strategy.md` and
+`docs/production/repositioning-design.md` (v2) before implementation; these
+supersede older organizer-only scope and roadmap ordering. Preserve existing
+Notes guards.
 
 Built for the Nebius × NVIDIA Global AI Hackathon, Personal AI track. Official
-deadline: **October 30, 2026, 10am PDT / 1pm EDT**; October 1 is our internal demo
-target. The rules require runtime use of Nebius Token Factory or AI Cloud and an
-NVIDIA open-source model, not exclusive inference through Nebius. Core reasoning
-still uses NVIDIA Nemotron via Nebius; external-agent providers/credentials are
-separate opt-in integrations qualified in R00. Do not silently swap core models.
-See https://nebiusglobalaihackathon.devpost.com/rules (checked September 10).
+deadline: **October 30, 2026, 10am PDT / 1pm EDT**; the internal demo target is
+**October 6**. The rules require runtime use of Nebius Token Factory or AI Cloud and
+an NVIDIA open-source model, not exclusive inference through Nebius. See
+https://nebiusglobalaihackathon.devpost.com/rules (checked September 10).
+
+**NVIDIA Nemotron owns the reasoning and every decision — tier, budget and latency
+included.** The judging criteria name Nemotron in three of four axes, so this is a
+product constraint, not a preference: do not move the interesting reasoning to
+another provider, and do not let an external agent become the source of a decision.
+
+Claude Code, Codex and similar are **optional, disclosed, bring-your-own capability
+inside a contained run** — never the decision-maker, never required for the workflow
+to succeed, never silently configured. Their credentials and provider usage are
+separate opt-in integrations qualified in R00.
+
+The defensible half of this product is the **Apple bridge**. There is no Apple Notes
+API, no Siri personal-context API, and no third-party access to another app's
+intents; Apple's own Notes does not use the public `.notes` schema path (48 of 48
+App Intents declare empty `assistantDefinedSchemas`, measured on macOS 26.2). The
+seams Notron uses — index-addressed bulk AppleScript queries, EventKit read
+directly, headless `Shortcuts Events`, per-binary TCC identity — are the moat. Treat
+the Notes limitations documented below as structural constraints, not as bugs
+awaiting more effort.
 
 ## Status: pre-launch
 
 No production users. The developer is the only person running this, against
 their own Notes/Reminders/Calendar, to find rough edges before anyone else touches
-it. Follow the dated roadmap gates: working demo October 1, submission candidate
+it. Follow the dated roadmap gates: working demo October 6, submission candidate
 October 23, deadline October 30. Keep safety and recovery intact; reduce optional
 scope when evidence slips. A developer preview is not a public paid release.
 
