@@ -277,7 +277,7 @@ a plan costs one Nano plus one Super. Cost scales with what you actually asked f
 Requires macOS and Python 3.11+.
 
 ```bash
-git clone <this repo> && cd notron
+git clone https://github.com/m1insights/notron && cd notron
 uv sync --locked --extra dev
 .venv/bin/python -m pytest tests -q
 ```
