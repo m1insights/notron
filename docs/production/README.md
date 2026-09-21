@@ -82,7 +82,9 @@ R05 records at least 20 complete synthetic/demo-task runs: no duplicate external
 
 ## Immediate next task
 
-**R00 Task 2 — qualify the real Siri/Claude path on the intended Mac.** R00 Task 1 is complete ([handoff](handoffs/2026-09-21-R00-task-1.md)); do Task 2 before building the plugin protocol. Record each result in the [handoff template](handoff-template.md); update the [coverage map](coverage.md) and relevant checkbox only with fresh evidence. Work in an isolated branch and preserve unrelated local changes.
+**R00 Task 2 — qualify the real Siri path on the intended Mac.** R00 Task 1 is complete ([handoff](handoffs/2026-09-21-R00-task-1.md)). The Siri feasibility probe ran on 2026-09-21: see the [integration matrix](evidence/R00-integration-matrix.md). **Verdict: the branded App Shortcut is blocked on two fixable causes** — `mac/Notron.app` has no executable, and `notron ask` exits 2 at the credential gate — and the async start-then-poll design is now *forced* by measurement, not preference, because `LongRunningIntent` is absent from the macOS 26.2 SDK. Two corrections to earlier analysis are recorded there: `IndexedEntity` and `AssistantSchemas` have been available since macOS 15 and 13, so typed entities and semantic indexing are **buildable today** without an OS upgrade; and the App Intents metadata pipeline **works from the existing SwiftPM package**, so converting to an Xcode project is not required. That packaging step is P06's unlock and is not yet wired into CI.
+
+Record each result in the [handoff template](handoff-template.md); update the [coverage map](coverage.md) and relevant checkbox only with fresh evidence. Work in an isolated branch and preserve unrelated local changes.
 
 Constraint discovered in Task 1, and it changes how Task 2 must be shaped: this machine has **no macOS 27 SDK** (macOS 26.2, Xcode 26.2, Swift 6.2.3). `LongRunningIntent` and `CancellableIntent` are therefore unavailable, the 30-second intent timeout is a hard wall that cannot be raised, and the asynchronous start-then-poll design is mandatory rather than stylistic. Do not plan against API that will not compile.
 
