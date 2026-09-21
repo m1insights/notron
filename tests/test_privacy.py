@@ -31,6 +31,15 @@ def test_ordinary_talk_about_passwords_is_left_alone():
         assert privacy.redact(s) == s
 
 
+def test_pass_as_a_verb_is_not_mistaken_for_a_password():
+    """A wedding-meeting transcript's write was refused forever on 2026-09-15
+    because "Sindhu, I'll pass back over to you" matched label=pass, value=back."""
+    for s in ("Sindhu, I'll pass back over to you", "please pass along the message",
+              "I'll pass on that for now", "can you pass the mic"):
+        assert not privacy.contains_secret(s), s
+        assert privacy.redact(s) == s
+
+
 def test_credential_notes_are_dropped_from_retrieval():
     passages = [("Passwords", "gmail hunter2"), ("Grocery list", "milk, eggs")]
     kept = privacy.filter_passages("plan my day", passages)
