@@ -7,3 +7,6 @@ mac/.build/
 mac/Notron.app/
 
 .worktrees/
+
+# left behind by whole-module builds (appintents_metadata.sh)
+*.o

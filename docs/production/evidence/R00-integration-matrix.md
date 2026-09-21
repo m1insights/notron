@@ -67,7 +67,7 @@ on them before October 30:
 
 ---
 
-## 3. The Siri path as it actually stands — **blocked, on three measured causes**
+## 3. The Siri path as it actually stands — **blocked on two causes, one now repaired**
 
 `AskNotronIntent.perform()` is **synchronous**: it shells `Core.run(["ask",
 "--quiet", …])`, waits, and returns the answer as its dialog. Its latency *is*
@@ -75,23 +75,82 @@ Siri's acknowledgment latency, against a 30-second wall that cannot be raised
 (§2). So this is the measurement that matters, and it cannot yet be taken,
 because the path does not run.
 
-### 3a. The app has no executable
+### 3a. The bundle is stale, ad-hoc signed and carries no App Intents metadata
+
+> **Correction, same day.** The first version of this section claimed
+> `mac/Notron.app/Contents/MacOS/` was **empty** and that the binary was gone.
+> **That was wrong.** The binary is present and always was. It was missed because
+> `ls -la Notron.app/Contents/MacOS | head -3` truncated the output before the
+> file line, and the truncated listing was read as an empty directory instead of
+> re-checked. The error reached a commit, this document and the roadmap before a
+> `find -type f` contradicted it. The corrected facts are below; the underlying
+> conclusion (Siri phrases are not registered) survives, for a different reason.
+
+Actual state of the bundle as found:
+
+| | |
+|---|---|
+| `Contents/MacOS/Notron` | **present** — 107,728 bytes, Mach-O arm64, dated **Aug 30** |
+| Today's build for comparison | **2,884,496 bytes** — the shipped binary is ~27× smaller and predates all September work |
+| Signature | **`adhoc`**, `TeamIdentifier=not set` |
+| `Contents/Resources/Metadata.appintents` | **ABSENT** |
+| Intent present in the binary? | yes — `strings` finds `AskNotronIntent` / `Ask Notron` |
 
 ```
-mac/Notron.app/Contents/          Info.plist  PkgInfo  MacOS/  _CodeSignature/
-mac/Notron.app/Contents/MacOS/    (empty)
+$ codesign -dv --verbose=4 Notron.app
+Identifier=Notron-555549442c606610b9403f52b25f8512756489bf
+Signature=adhoc
+TeamIdentifier=not set
 ```
 
-`_CodeSignature/CodeResources` shows the bundle was signed when a binary existed;
-the binary is gone because `mac/Notron.app/` is gitignored. LaunchServices still
-carries a stale record (`executable: Contents/MacOS/Notron`), so this is a
-partially-deleted artifact, not a deliberate stub.
+`pluginkit -m -v | grep -i notron` → **nothing**.
 
-`pluginkit -m -v | grep -i notron` → **nothing**. No App Intents extension is
-registered.
+**The real cause is the missing `Metadata.appintents`, not a missing binary.** A
+SwiftPM build never produces that metadata, so the bundle the system sees has no
+declared App Intents at all — the phrases cannot be registered regardless of what
+the binary contains. Secondary: an `adhoc` signature has no stable identity, and
+TCC grants are keyed to identity, so any Notes/EventKit grant made against this
+bundle would not survive a rebuild.
+
+The `Identifier=Notron-5555...` hash rather than `com.m1labs.notron` is itself a
+symptom worth noting: an ad-hoc signature with no usable bundle identifier.
+
+### 3a′. Repaired the same day — bundle assembled and Developer ID signed
+
+`mac/Notron.app` has been rebuilt and signed. This is the first time the Apple
+half of this project has existed as a properly signed artifact.
+
+| | Before | After |
+|---|---|---|
+| Binary | Aug 30, 107 KB | current build, 2,884,496 bytes |
+| `Metadata.appintents` | absent | **present at `Contents/Resources/`** |
+| Signature | `adhoc`, no team | `Developer ID Application: M1 Insights Inc (NW783CVSJH)` |
+| Flags | — | `0x10000(runtime)` — hardened runtime |
+| Timestamp | none | secure timestamp, Sep 21 2026 |
+| `codesign --verify --deep --strict` | — | **valid on disk / satisfies its Designated Requirement** |
+
+**One correction to the packaging recipe, found by doing it:** `Metadata.appintents`
+belongs at **`Contents/Resources/Metadata.appintents/`**, not `Contents/`. Placing
+it at `Contents/` makes signing fail with *"bundle format unrecognized, invalid,
+or unsuitable — In subcomponent: …/Metadata.appintents"*, because `codesign`
+treats the `.appintents` directory as nested code. Verified by inspecting real
+apps: Books, Weather, Notes, Finder and Spotlight all ship it under
+`Contents/Resources/`. `scripts/probes/appintents_metadata.sh` writes it to
+whatever directory it is given; the caller must place it correctly.
+
+`spctl --assess` reports **`rejected — source=Unnotarized Developer ID`**. That is
+**expected and required at this stage**: notarization is a distribution gate, not
+a local-use one, and it needs the bundled Python runtime from P06 Task 5. It does
+not block local Siri testing.
+
+**Still outstanding:** the app has never been launched, and App Shortcut phrases
+register only when an installed app runs once. That launch will raise fresh TCC
+prompts against the new signing identity — which is precisely the P06 permission
+identity test — so it needs the owner present, not an automated run.
 
 **Consequence: the phrases `"Ask Notron <request>"` and `"Notron, <request>"` are
-not registered with the system, because the app can never have launched. The
+not registered with the system, because no bundle carrying the metadata has ever
+launched. The
 branded App Shortcut — the fallback the whole design rests on — does not work on
 this machine today.**
 
@@ -171,7 +230,7 @@ rather than implying schema-level integration.
 
 | Path | Verdict | Blocked by | Owner action |
 |---|---|---|---|
-| **Branded App Shortcut** (the mandatory fallback) | **Blocked, two fixable causes** | (a) empty app bundle — §3a; (b) credentials — §3b | P06 packaging + credential setup |
+| **Branded App Shortcut** (the mandatory fallback) | **Bundle repaired (§3a′); still blocked on credentials, and never yet launched** | (a) ~~missing bundle~~ **done — assembled + Developer ID signed**; (b) credentials §3b; (c) the app has never run, and phrases register only on first launch | Credential setup, then one owner-present launch |
 
 > **The fallback has to be true before the demo can be, and it is the one *planned*
 > thing that is not yet working.** Because `LongRunningIntent` is absent, an
@@ -224,11 +283,17 @@ decision is made, and fabricating one would put a fake artifact in the evidence.
 
 Everything below needs a human at the machine. Do these in order.
 
-**Prerequisites (both are P06/P01 work, not this probe's):**
+**Prerequisites:**
 
-1. Populate and sign `Notron.app` from the SwiftPM build, including the
-   `Metadata.appintents` from `scripts/probes/appintents_metadata.sh`.
-2. Make `notron ask --quiet "hello"` return words instead of exit 2.
+1. ~~Populate and sign `Notron.app`~~ — **done, §3a′**, reproducible via
+   `scripts/probes/assemble_app.sh`.
+2. Make `notron ask --quiet "hello"` return words instead of exit 2. Still
+   outstanding: P01 credential setup, and it may need P06's signed bridge.
+3. Launch the assembled app **once**. Phrases register only when an installed app
+   first runs, so nothing after this point can be measured until it happens.
+   Expect fresh TCC prompts against the new signing identity — that *is* the P06
+   Task 2 permission-identity result, so answer them deliberately and record
+   which identity each grant lands on.
 
 **Then:**
 
