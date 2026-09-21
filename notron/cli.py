@@ -137,7 +137,10 @@ def cmd_care(args):
         mark = {"ok": "  ", "nudge": " ·", "needs you": " !"}[s.severity]
         print(f" {mark} {s.fact}")
     print(f"\n{body}\n")
-    print(f"  {'\u2713' if result.ok else '\u2717'} {workspace.CARE} — {result.reason}\n")
+    # The glyph stays out of the f-string expression: `f"{'\u2713' if …}"` is
+    # PEP 701 and only parses on 3.12+, while pyproject declares a 3.11 floor.
+    mark = '\u2713' if result.ok else '\u2717'
+    print(f"  {mark} {workspace.CARE} — {result.reason}\n")
     return result
 
 
