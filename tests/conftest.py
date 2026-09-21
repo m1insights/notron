@@ -22,6 +22,8 @@ this suite passes its own fake `caller`; `_eventkit_is_never_the_real_one`
 makes that a rule rather than a habit.
 """
 
+import os
+
 import pytest
 
 from pathlib import Path
@@ -51,9 +53,11 @@ def _app_state_is_disposable(monkeypatch, tmp_path):
     finally found; on the developer's machine it was silent live writes.
 
     Two things now hold. The directory is a `tmp_path`, reached through
-    `paths.data_dir()` so `NOTRON_DATA_DIR` is the single override. And
-    `private_directory` refuses the real root, so a future test that re-derives
-    the developer's path fails loudly instead of creating state in it.
+    `paths.data_dir()` so `NOTRON_DATA_DIR` is the single override. And the real
+    root is guarded twice over, because one guard is not enough: patching the
+    name in `securestore` misses `health.py`, which binds `private_directory` at
+    import into its own namespace. Every route into real state ends in a chmod
+    whichever module called it, so the syscall is guarded too.
     """
     from notron import paths, securestore
 
@@ -62,16 +66,30 @@ def _app_state_is_disposable(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, 'DATA_DIR', root)
 
     real_root = Path.home() / 'Library' / 'Application Support' / 'com.m1labs.notron'
+
+    def reaches_real_state(target):
+        resolved = Path(target).resolve()
+        return resolved == real_root or real_root in resolved.parents
+
     real_private_directory = securestore.private_directory
 
-    def guarded(target):
-        resolved = Path(target).resolve()
-        if resolved == real_root or real_root in resolved.parents:
+    def guarded_private_directory(target):
+        if reaches_real_state(target):
             raise AssertionError(
                 f'Test reached real application state: {target} — point it at tmp_path.')
         return real_private_directory(target)
 
-    monkeypatch.setattr(securestore, 'private_directory', guarded)
+    monkeypatch.setattr(securestore, 'private_directory', guarded_private_directory)
+
+    real_chmod = os.chmod
+
+    def guarded_chmod(target, mode, *args, **kwargs):
+        if reaches_real_state(target):
+            raise AssertionError(
+                f'Test chmodded real application state: {target} — point it at tmp_path.')
+        return real_chmod(target, mode, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'chmod', guarded_chmod)
 
 
 @pytest.fixture(autouse=True)
