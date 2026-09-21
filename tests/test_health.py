@@ -48,9 +48,18 @@ def test_live_heartbeat_does_not_report_success_until_work_completes():
         with Heartbeat(store, interval=0.02):
             store.update(state='ready')
             before = store.status()['heartbeat_at']
-            time.sleep(0.08)  # Simulates serial provider work, independent beat runs.
+            # Poll to a deadline instead of assuming that an 0.08s sleep bought
+            # four beats. It did locally and on the 3.12 runner, and failed on
+            # the 3.11 one: the beat thread only takes the GIL between this
+            # thread's SQLite opens, so a loaded machine can swallow several
+            # 20ms intervals. The property under test is that the beat keeps
+            # running *independently of serial work* — not that it wins a race
+            # against a fixed sleep.
+            deadline = time.monotonic() + 5
+            while store.status()['heartbeat_at'] == before and time.monotonic() < deadline:
+                time.sleep(0.01)
             after = store.status()
-            assert after['heartbeat_at'] != before
+            assert after['heartbeat_at'] != before, 'beat thread never ran during serial work'
             assert after['state'] == 'ready'
             assert after['last_success_at'] is None
             store.success()
