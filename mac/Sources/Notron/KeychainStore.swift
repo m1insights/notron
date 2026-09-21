@@ -2,12 +2,18 @@ import Foundation
 import Security
 import LocalAuthentication
 
-/// P06 must package/sign this bridge with a stable identity before enabling it.
-/// Secrets are never command arguments, standard output, or diagnostic messages.
-struct KeychainStore {
+/// P06 packages and signs this bridge, and notron/bundle.py verifies the
+/// signature before the Python side will use it. Secrets are never command
+/// arguments, standard output, or diagnostic messages.
+///
+/// Public because it lives in NotronCore: the app and the credential helper both
+/// need it, and SwiftPM will not let them share a source file.
+public struct KeychainStore {
     static let service = "com.m1labs.notron"
     static let names: Set<String> = ["managed-refresh", "storage-key", "nebius-api-key", "tavily-api-key", "development-nebius-api-key"]
     enum Failure: Error { case unavailable, invalidRequest }
+
+    public init() {}
 
     private func query(_ name: String) throws -> [String: Any] {
         guard Self.names.contains(name) else { throw Failure.invalidRequest }
@@ -19,7 +25,7 @@ struct KeychainStore {
                 kSecUseAuthenticationContext as String: context]
     }
 
-    func get(_ name: String) throws -> Data? {
+    public func get(_ name: String) throws -> Data? {
         var attributes = try query(name)
         attributes[kSecReturnData as String] = true
         attributes[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -30,7 +36,7 @@ struct KeychainStore {
         return data
     }
 
-    func put(_ name: String, value: Data) throws {
+    public func put(_ name: String, value: Data) throws {
         guard !value.isEmpty else { throw Failure.invalidRequest }
         let attributes = try query(name)
         let update = [kSecValueData as String: value]
@@ -43,12 +49,12 @@ struct KeychainStore {
         } else if status != errSecSuccess { throw Failure.unavailable }
     }
 
-    func delete(_ name: String) throws {
+    public func delete(_ name: String) throws {
         let status = SecItemDelete(try query(name) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure.unavailable }
     }
 
-    static func serve(fd: Int32) {
+    public static func serve(fd: Int32) {
         guard fd > 2 else { return }
         let channel = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         var response: [String: String] = ["status": "unavailable"]
@@ -87,15 +93,3 @@ struct KeychainStore {
         }
     }
 }
-
-#if NOTRON_KEYCHAIN_HELPER
-@main
-struct KeychainBridge {
-    static func main() {
-        let arguments = CommandLine.arguments
-        guard arguments.count == 3, arguments[1] == "--credential-fd",
-              let fd = Int32(arguments[2]), fd > 2 else { return }
-        KeychainStore.serve(fd: fd)
-    }
-}
-#endif

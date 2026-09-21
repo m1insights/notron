@@ -23,12 +23,23 @@ def test_locked_or_lost_key_pauses_before_transport(outbound_transport):
     assert calls.chat == []
 
 
-def test_default_native_startup_remains_gated(monkeypatch):
-    from notron import credentials
+def test_startup_refuses_and_spawns_nothing_without_a_signed_bundle(monkeypatch):
+    """The P06 gate is not gone -- it is now a real check instead of an
+    unconditional refusal. With nothing verifiable to point at, startup must
+    refuse BEFORE executing anything, and must leave the provider unset so every
+    protected command stays paused."""
+    from notron import bundle, credentials
     import subprocess
-    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('must not start unsigned helper'))
-    with pytest.raises(credentials.CredentialUnavailable, match='P06'):
+
+    def refuse():
+        raise bundle.BundleUnavailable('nothing signed here')
+
+    monkeypatch.setattr(bundle, 'keychain_helper', refuse)
+    monkeypatch.setattr(subprocess, 'Popen',
+                        lambda *a, **k: pytest.fail('must not start an unverified helper'))
+    with pytest.raises(credentials.CredentialUnavailable, match='signed Notron bundle'):
         credentials.startup()
+    assert credentials._provider is None
 
 
 def test_missing_key_does_not_generate_replacement(tmp_path):

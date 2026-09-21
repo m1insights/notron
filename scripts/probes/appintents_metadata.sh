@@ -50,7 +50,13 @@ ls "$MAC"/Sources/Notron/*.swift > "$WORK/sources.txt"
 # compile and the const-values file is written. The const-values file — not the
 # exit code — is the success criterion, so it is checked directly.
 set +e
+# --product Notron matters. Without it this builds every product, and the
+# credential helper's link fails under -wmo (SwiftPM cannot find the per-file
+# objects WMO never emits), which aborts the build before the app module's const
+# values are written. Only the app module carries App Intents; the helper has
+# none, so restricting the product is correct as well as necessary.
 swift build --package-path "$MAC" --disable-sandbox --scratch-path "$WORK/build" \
+    --product Notron \
     --disable-index-store -Xswiftc -wmo \
     -Xswiftc -emit-const-values-path -Xswiftc "$WORK/Notron.swiftconstvalues" \
     -Xswiftc -Xfrontend -Xswiftc -const-gather-protocols-file \

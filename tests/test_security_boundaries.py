@@ -154,10 +154,21 @@ def test_launchctl_boundary_uses_fixed_argv(command, process_calls, monkeypatch,
 
 
 def test_startup_cannot_be_enabled_by_environment(monkeypatch, process_calls):
-    for name in ('NOTRON_DEVELOPMENT', 'NOTRON_KEYCHAIN_HELPER', 'NOTRON_PYTHON'):
+    """Hostile environment values must not conjure a provider or a helper path.
+    The helper is only ever found inside the signed bundle, so with nothing
+    verifiable these variables change nothing and no process is started."""
+    from notron import bundle
+    for name in ('NOTRON_DEVELOPMENT', 'NOTRON_KEYCHAIN_HELPER', 'NOTRON_PYTHON',
+                 'NOTRON_BUNDLE', 'NOTRON_HELPER'):
         monkeypatch.setenv(name, HOSTILE)
-    with pytest.raises(credentials.CredentialUnavailable, match='P06'):
+
+    def refuse():
+        raise bundle.BundleUnavailable('nothing signed here')
+
+    monkeypatch.setattr(bundle, 'keychain_helper', refuse)
+    with pytest.raises(credentials.CredentialUnavailable, match='signed Notron bundle'):
         credentials.startup()
+    assert credentials._provider is None
     assert not process_calls
 
 

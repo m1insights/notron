@@ -97,9 +97,24 @@ def configure(provider: CredentialStore | None) -> None:
 
 
 def startup() -> None:
-    # Deliberate native release gate, not an environment-controlled opt-out.
-    configure(None)
-    raise CredentialUnavailable('Secure startup requires the signed Keychain integration in P06.')
+    """Inject the verified Keychain helper.
+
+    Replaces the P06 placeholder gate, which raised unconditionally because there
+    was nothing to point at. The helper now exists and ships inside the app
+    bundle; `bundle.py` locates that bundle and verifies its identity and
+    signature before returning a path. There is still no environment, file or
+    model-supplied override for the helper path, and a bundle that is missing,
+    unsigned or signed by another team leaves the provider unset so every
+    protected command stays paused.
+    """
+    from . import bundle
+    try:
+        helper = bundle.keychain_helper()
+    except bundle.BundleUnavailable:
+        configure(None)
+        raise CredentialUnavailable(
+            'Secure startup requires a validly signed Notron bundle.') from None
+    configure(KeychainStore(helper))
 
 
 def get(name: str) -> bytes | None:
