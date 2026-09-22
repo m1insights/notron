@@ -147,9 +147,15 @@ def provision_storage_key(root: Path) -> None:
     """Explicit fresh setup only. A lost key must never be silently replaced."""
     from .securestore import EncryptedStore
     from .health import control_artifacts
-    if (_provider is None or get(STORAGE_KEY) is not None
-            or (root.exists() and {p.name for p in root.iterdir()} - control_artifacts(root))):
-        raise CredentialUnavailable('Storage setup requires an empty destination and no existing key.')
+    # Name what is in the way. The refusal itself is correct -- a lost key must
+    # never be silently replaced -- but "requires an empty destination" leaves a
+    # user staring at a directory with no idea which of its files is the problem,
+    # and no way to tell an orphaned leftover from real data.
+    blocking = sorted({p.name for p in root.iterdir()} - control_artifacts(root)) if root.exists() else []
+    if _provider is None or get(STORAGE_KEY) is not None or blocking:
+        detail = f' Blocking files: {", ".join(blocking)}.' if blocking else ''
+        raise CredentialUnavailable(
+            'Storage setup requires an empty destination and no existing key.' + detail)
     key = os.urandom(32)
     _provider.put(STORAGE_KEY, key)
     if require(STORAGE_KEY) != key:

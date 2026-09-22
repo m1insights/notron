@@ -19,14 +19,15 @@ public struct KeychainStore {
     /// be a hang with nobody to answer it, and a blocked prompt is worse than a
     /// refusal -- so every operation is non-interactive.
     ///
-    /// OPEN QUESTION, 2026-09-21: `put` has never been observed to succeed from
-    /// the development session. An earlier attempt to allow interaction on the
-    /// write path was reverted because the evidence did not support it: Apple's
-    /// own `security add-generic-password` fails identically from that shell with
-    /// `UNIX[Operation not permitted]`, which points at the runner rather than at
-    /// these attributes. Verify writes on a normal login session before assuming
-    /// this needs to change; if writes DO need interaction, split the context by
-    /// operation rather than weakening reads.
+    /// SETTLED, 2026-09-21. An earlier attempt to let writes prompt was reverted
+    /// and questioned here, because `put` had never been seen to succeed from the
+    /// development session. It was the runner, not these attributes: Apple's own
+    /// `security add-generic-password` failed identically from that shell with
+    /// `UNIX[Operation not permitted]`. On a normal login session the whole path
+    /// was then confirmed by hand -- `notron key set` stored a value, read it back
+    /// and deleted it. **No interaction is needed, and reads stay non-interactive
+    /// on purpose**, because they run in the background worker where a dialog
+    /// would be a hang with nobody to answer it.
     private func query(_ name: String) throws -> [String: Any] {
         guard Self.names.contains(name) else { throw Failure.invalidRequest }
         let context = LAContext()
