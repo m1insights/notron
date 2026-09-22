@@ -718,3 +718,44 @@ def test_a_permission_check_that_itself_fails_does_not_lose_the_agenda():
     assert "Standup" in state.agenda
     assert 'access could not be verified' in state.agenda
     assert 'Nothing outstanding' not in state.agenda
+
+
+def test_a_question_about_herself_is_not_sent_to_the_web():
+    """"what can you do" was classified as a world question, so a safety net
+    forced a search, and she answered with vendor marketing about AI assistants
+    in general — Norton, Jamf, SAP — while her own instructions sat unused.
+
+    The gate is plain code, like FILE_WORDS: what she is does not need looking up.
+    `brain=None` is safe here because a matched request returns before any model
+    is consulted, which is the point of the gate.
+    """
+    from notron import nodes, state as state_module
+
+    for question in ('what can you do', 'Who are you?', 'what are your capabilities',
+                     'tell me about yourself', 'so what can you do exactly?'):
+        result = nodes.router(state_module.State(request=question), brain=None)
+        assert result.about_self is True, question
+        assert result.needs_web is False, f'{question} must not be searched'
+        assert result.intent == 'question'
+
+
+def test_questions_that_merely_start_like_a_self_question_are_left_alone():
+    """The gate is anchored to the whole request, because "what can you do about
+    my reminder" is about the user's reminder, not about her. Checked on the
+    pattern rather than through `router`, which would go on to consult a model."""
+    from notron.nodes import SELF_WORDS
+
+    for question in ('what can you do about my reminder',
+                     'who are you meeting tomorrow',
+                     'what are your reminders today'):
+        assert not SELF_WORDS.search(question), question
+
+
+def test_her_own_surfaces_reach_the_writer_without_a_search():
+    """She answers from what she is, not from a citation."""
+    from notron import nodes, state as state_module, workspace
+
+    result = state_module.State(request='what can you do', about_self=True)
+    text = ' '.join(p.text for p in nodes._prompt(result))
+    assert workspace.ASK in text
+    assert 'not about AI assistants in general' in text

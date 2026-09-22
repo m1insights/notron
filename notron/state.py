@@ -81,6 +81,10 @@ class State:
     intent: str = ""                 # set by Router
     needs_context: bool = False
     needs_web: bool = False
+    #: True when the request asks about Notron itself rather than about the user's
+    #: notes or the world. There is no note and no source to cite, so it is answered
+    #: from her own surfaces and never from a search.
+    about_self: bool = False
     here: str = ""                   # the note she was tagged in, if any
     source: str = ""                 # the exact lines she was tagged in, tags intact —
                                      # what the Filer copies and ticks

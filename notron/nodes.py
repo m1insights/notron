@@ -37,6 +37,16 @@ FILE_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?(?:file\b|sort\s+(?:this|these|t
 # that decision, @notron what do you think" would fire a real, unchecked
 # restore on an ordinary opinion question.
 UNDO_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?(?:undo\b|revert\s+(?:that|this)\b)")
+# A question about her own capabilities. Anchored to the whole request on purpose:
+# "what can you do" is about her, but "what can you do about my reminder" is about
+# the user's reminder and must fall through to the normal path.
+SELF_WORDS = re.compile(
+    r"(?i)^\s*(?:hey|so|ok(?:ay)?|please\s+)?[,\s]*"
+    r"(?:what\s+can\s+you\s+do|what\s+do\s+you\s+do|who\s+are\s+you|"
+    r"what\s+are\s+you|what\s+are\s+your\s+(?:capabilities|abilities|features)|"
+    r"describe\s+yourself|tell\s+me\s+about\s+yourself|how\s+do\s+you\s+work)"
+    r"\s*(?:exactly|then|for\s+me|now|notron)?\s*[?.!]*\s*$")
+
 ORGANIZE_WORDS = re.compile(r"(?i)^\s*(?:please\s+)?(?:organize\s+this\b|"
                             r"clean\s+(?:this|it)\s+up\b|tidy\s+(?:this|it)\s+(?:note\s+)?up\b)")
 # The `yes` under her one-line offer to keep a note clean in place. Read here
@@ -111,6 +121,22 @@ def router(state: State, *, brain) -> State:
     if FILE_WORDS.search(state.request):
         state.intent = "file"
         state.note("router", "file — said so in plain words, no model asked")
+        return state
+    if SELF_WORDS.search(state.request):
+        # A question about her own capabilities is neither the user's notes nor the
+        # world, and the safety net further down treats "not their notes" as "the
+        # world". So "what can you do" was tagged needs_web, the researcher fetched
+        # five pages about AI assistants in general, and she answered with vendor
+        # marketing from Norton, Jamf and SAP — while 654 characters of her own
+        # instructions sat loaded and unused. The model had already returned
+        # needs_web=false; this is the code overruling it.
+        #
+        # No model is asked: what she is does not need looking up.
+        state.intent = "question"
+        state.about_self = True
+        state.needs_context = state.needs_web = False
+        state.resolved_request = state.request
+        state.note("router", "about herself — answered from her own surfaces, no search")
         return state
     if state.reply_to is not None:
         # Everything below is about *this* note, so it only means anything when
@@ -1182,6 +1208,15 @@ def _request_passage(state: State) -> Passage:
 
 def _prompt(state: State) -> list[Passage]:
     parts = [Passage(f"# Today\n{datetime.now():%A %-d %B %Y}", "diagnostic")]
+    if state.about_self:
+        # What she is, in the words of the product rather than a search result.
+        surfaces = "\n".join(f"- {title} — {why}" for title, why in workspace.PIN_WHY.items())
+        parts.append(Passage(
+            "# What you are\n"
+            "This request is about YOU, not about AI assistants in general. Answer "
+            "from the list below and from the standing instructions. Do not describe "
+            "assistants in general, do not cite anything, and do not claim anything "
+            "that is not in this list.\n" + surfaces, "diagnostic"))
     for attr, heading in (
         ("about", "The user's standing instructions"),
         ("lessons", "Lessons you have taught yourself — subordinate to standing instructions"),
