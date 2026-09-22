@@ -372,3 +372,45 @@ def test_a_failure_message_stays_short_enough_to_read_in_a_note(monkeypatch):
     ex._perform = explode
     result = ex.do(Action(kind="reminder", op="create", title="Call back", when=soon))
     assert len(result.reason) <= ex_mod.MAX_REASON_CHARS
+
+
+def test_byte_identical_bodies_are_a_landed_write():
+    from notron.executor import write_landed
+    body = '<div>Exact</div>'
+    assert write_landed(body, body)
+
+
+def test_a_write_that_landed_is_not_divergent_when_notes_re_encodes_it():
+    """Apple Notes is a renderer, not a byte store.
+
+    Measured 2026-09-22: an answer of 1,070 characters was written into
+    `📥 Ask Notron`, was present in the note, and was reported as "post-write
+    divergence; outcome needs review". Left alone, every successful write would
+    have been flagged — and a signal that fires on success is a signal people
+    learn to ignore, which costs the one time it means something.
+    """
+    from notron.executor import write_landed
+
+    expected = '<div>Hello <i>world</i></div><div>Second line</div>'
+    for reencoded in ('<div>Hello <em>world</em></div><div>Second line</div>',
+                      '<div>Hello <i>world</i></div><div>Second line</div><br>',
+                      '<div>Hello <i>world</i><br>Second line</div>'):
+        assert write_landed(expected, reencoded), reencoded
+
+
+def test_a_write_that_did_not_take_is_still_divergent():
+    """The point of the check survives: if the content is absent the flattened
+    text differs, and the outcome still needs review. This must not become a
+    rubber stamp."""
+    from notron.executor import write_landed
+
+    expected = '<div>Hello</div><div>the new answer</div>'
+    for untouched in ('<div>Hello</div>',                       # nothing written
+                      '<div>Hello</div><div>the new</div>',     # truncated
+                      '<div>Hello</div><div>something else</div>'):
+        assert not write_landed(expected, untouched), untouched
+
+
+def test_an_entirely_unrelated_note_is_divergent():
+    from notron.executor import write_landed
+    assert not write_landed('<div>intended</div>', '')

@@ -57,6 +57,29 @@ def write_transaction():
             os.close(fd)
 
 
+def write_landed(expected: str, observed_body: str) -> bool:
+    """Did the intended body actually land?
+
+    Exact bytes are checked first. When they differ, the TEXT a reader would see
+    is compared, because Apple Notes is a renderer rather than a byte store: it
+    re-encodes the HTML it is handed, so a byte comparison reports failure for a
+    write that landed perfectly.
+
+    Measured 2026-09-22: an answer of 1,070 characters was written into
+    `\u2b07 Ask Notron`, was present in the note, and was reported as
+    "post-write divergence; outcome needs review". Left as it was, EVERY
+    successful write would be flagged, which trains a person to ignore the one
+    signal that means something.
+
+    This is not a loosening. A write that did not take still fails: the content
+    is missing from the note, so the flattened text differs.
+    """
+    if revision(observed_body) == revision(expected):
+        return True
+    from . import markup
+    return markup.to_text(observed_body) == markup.to_text(expected)
+
+
 def capture_write(title: str, *, folder: str = workspace.FOLDER, note_id: str | None = None,
                   body: str | None = None, **kwargs) -> Write:
     """Bind an explicit ID and revision BEFORE generating a proposed change.
@@ -435,8 +458,9 @@ class Executor:
             else:
                 nid = notes.create_note(folder, new)
             recovery.boundary('after_external_save', write.operation_id)
-            observed = revision(notes.read_body(nid))
-            if observed != revision(new):
+            observed_body = notes.read_body(nid)
+            observed = revision(observed_body)
+            if not write_landed(new, observed_body):
                 store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
                                  external_id=nid, failure_code='post_write_divergence', observed_revision=observed)
                 return result(False, 'post-write divergence; outcome needs review', observed=observed, note_id=nid)
