@@ -75,7 +75,14 @@ on run argv
   tell application "Notes"
     if not (exists note id (item 1 of argv)) then return ""
     set n to note id (item 1 of argv)
-    return (id of n) & "{RS}" & (name of n) & "{RS}" & (name of container of n) & "{RS}" & (modification date of n as text)
+    -- Bind the container to a variable FIRST. Notes refuses the inline form
+    -- `name of container of n` on macOS 26.2 with -1700 / -1728 ("Can't get name
+    -- of container of note id ..."), while `set c to container of n` followed by
+    -- `name of c` returns the folder correctly. Measured against a real note on
+    -- 2026-09-22: the two-step form returned the folder name, the inline form
+    -- raised. Do not fold these back into one expression.
+    set c to container of n
+    return (id of n) & "{RS}" & (name of n) & "{RS}" & (name of c) & "{RS}" & (modification date of n as text)
   end tell
 end run
 """

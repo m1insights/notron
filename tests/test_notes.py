@@ -201,3 +201,32 @@ def test_mutation_adapters_never_retry_uncertain_write(monkeypatch):
     notes.write_body('nid', '<div>body</div>')
     notes.create_note('Notes', '<div>body</div>')
     assert [kw.get('retries') for kw in calls] == [0, 0]
+
+
+def test_the_metadata_script_binds_the_container_before_naming_it():
+    """Notes refuses the inline form, and a test suite cannot catch that.
+
+    Measured against a real note on macOS 26.2 (2026-09-22):
+
+        name of container of note id "..."        -> -1700 / -1728, raises
+        set c to container of n ; name of c       -> returns the folder name
+
+    The failure only appears once a note is actually bound by ID, so it survived
+    until the system notes were registered and `capture_write` first resolved one.
+    Nothing in the suite can execute AppleScript against Notes, so the shape of
+    the script itself is what is pinned here — folding these two lines back into
+    one expression reintroduces a bug that costs a full debugging session to find.
+    """
+    from notron import notes
+
+    # Check the executable lines, not the prose: the comment above the fix names
+    # the broken form in order to explain it, and a naive whole-string check
+    # fails on its own documentation.
+    executable = '\n'.join(
+        line.strip() for line in notes._METADATA.splitlines()
+        if line.strip() and not line.strip().startswith('--'))
+
+    assert 'set c to container of n' in executable, 'the container must be bound first'
+    assert 'name of c' in executable
+    assert 'name of container of' not in executable, (
+        'the inline form raises on macOS 26.2; bind the container to a variable first')
