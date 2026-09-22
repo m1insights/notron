@@ -181,7 +181,7 @@ def cmd_index(args):
     from .brain import batch_deadline
     with batch_deadline():
         stats = index.build(_brain(), on_progress=lambda m: print(f"  {m}"), force=args.rebuild,
-                            read_attachments=args.attachments)
+                            extract=args.attachments)
     print(f"\n  Indexed {stats['notes']} notes "
           f"({stats['embedded']} passages embedded, {stats['reused']} already current)\n")
 
