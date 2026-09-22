@@ -108,12 +108,19 @@ def control_artifacts(root):
     if not root.exists() or root.is_symlink():
         return set()
     names = {p.name for p in root.iterdir()}
+    # `notes-write.lock` belongs here for the same reason the other two locks do:
+    # it is a zero-byte artefact the executor creates to serialise Notes writes,
+    # not user data. Leaving it out made `storage initialize` refuse on a machine
+    # that had merely used the app once before -- a dead end that would hit every
+    # second person to set the product up, and that the refusal could only blame
+    # on a file the user had never heard of. Measured 2026-09-21: it was one of
+    # three files blocking a fresh key on the developer's own machine.
     allowed = {'worker.sqlite3', 'worker.sqlite3-wal', 'worker.sqlite3-shm',
-               'request-execution.lock', 'queue-admission.lock'}
+               'request-execution.lock', 'queue-admission.lock', 'notes-write.lock'}
     present = names & allowed
     if any((root / name).is_symlink() or not (root / name).is_file() for name in present):
         return set()
-    for name in present & {'request-execution.lock', 'queue-admission.lock'}:
+    for name in present & {'request-execution.lock', 'queue-admission.lock', 'notes-write.lock'}:
         if (root / name).stat().st_size:
             return set()
     if present & {'worker.sqlite3-wal', 'worker.sqlite3-shm'} and 'worker.sqlite3' not in present:

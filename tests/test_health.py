@@ -127,3 +127,31 @@ def test_status_reports_corrupt_schema_as_versioned_error(monkeypatch, capsys):
     assert out['state'] == 'error'
     assert out['reason_code'] == 'storage_unavailable'
     assert out['pending_count'] is None
+
+
+def test_a_used_notes_lock_does_not_block_a_fresh_storage_key(tmp_path):
+    """`storage initialize` refuses a destination holding user data, which is
+    right. But the executor's zero-byte Notes-write lock is not user data, and
+    treating it as such made setup fail on any machine that had merely run the
+    app once -- with a refusal that could only blame a file the person had never
+    heard of. Measured 2026-09-21: it was one of three files blocking a fresh key
+    on the developer's own machine.
+
+    Note the aggregate behaviour this pins: one unrecognised control file makes
+    the whole function return an empty set, so the lock becomes "blocking" too.
+    That is why the lock alone must be recognised.
+    """
+    from notron import health
+
+    (tmp_path / 'notes-write.lock').write_bytes(b'')
+    assert 'notes-write.lock' in health.control_artifacts(tmp_path)
+
+    # A lock that actually holds something is not a recognisable control plane.
+    (tmp_path / 'notes-write.lock').write_bytes(b'held')
+    assert health.control_artifacts(tmp_path) == set()
+
+    # And real user data is never waved through.
+    (tmp_path / 'notes-write.lock').write_bytes(b'')
+    (tmp_path / 'managed-requests.enc').write_bytes(b'x')
+    recognised = health.control_artifacts(tmp_path)
+    assert 'managed-requests.enc' not in recognised
