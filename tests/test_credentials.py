@@ -225,3 +225,40 @@ def test_key_list_prints_names_and_presence_but_no_secrets(_task3_storage, capsy
     out = capsys.readouterr().out
     assert 'nebius-api-key' in out and 'missing' in out
     assert 'synthetic-inference-key' not in out
+
+
+def test_setup_commands_report_their_specific_reason(monkeypatch, capsys, tmp_path):
+    """The generic "Protected processing paused" message hid an actionable reason
+    twice -- a wrong paste from `key set`, and the list of blocking files from
+    `storage initialize`. Both looked like dead ends when both were fixable. This
+    pins the specific message reaching the person who ran the command."""
+    from notron import cli, credentials, health
+
+    (tmp_path / 'leftover-from-an-old-run.enc').write_bytes(b'x')
+    monkeypatch.setattr(health, 'control_artifacts', lambda root: set())
+
+    class Empty:
+        def get(self, name): return None
+        def put(self, name, value): pass
+        def delete(self, name): pass
+
+    credentials.configure(Empty())
+    try:
+        with pytest.raises(SystemExit):
+            cli.main(['storage', 'initialize', '--target', str(tmp_path)])
+        err = capsys.readouterr().err
+        assert 'leftover-from-an-old-run.enc' in err, 'the blocking file must be named'
+        assert 'empty destination' in err
+    finally:
+        credentials.configure(None)
+
+
+def test_key_set_reports_why_a_paste_was_refused(monkeypatch, capsys, _task3_storage):
+    """Same property for `key set`: a person needs to know the paste was the
+    problem, not that the machine is unavailable."""
+    from notron import cli
+    monkeypatch.setattr('sys.stdin', io.StringIO('two\nlines\n'))
+    with pytest.raises(SystemExit):
+        cli.main(['key', 'set', 'tavily-api-key'])
+    err = capsys.readouterr().err
+    assert 'more than one line' in err

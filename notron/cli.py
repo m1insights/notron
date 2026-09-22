@@ -27,24 +27,41 @@ def _brain():
 
 
 
+def _setup_failure(problem):
+    """Report a setup failure to the person who ran it, and stop.
+
+    `main()` answers a `CredentialUnavailable` with "Protected processing paused.
+    Secure storage requires setup or recovery." That is the right message for an
+    agent command, where nobody is watching and the detail is not actionable.
+    It is useless for a command a person just typed: it hid a wrong paste from
+    `key set`, and it hid the list of blocking files from `storage initialize`,
+    in both cases making a fixable problem look like a dead end.
+    """
+    print(f"  {problem}", file=sys.stderr)
+    raise SystemExit(2)
+
+
 def cmd_storage(args):
     """Offline maintenance, explicitly invoked by the user; never reads Apple data."""
     from . import credentials, migration
-    if credentials._provider is None:
-        credentials.startup()
-    source, target = pathlib.Path(args.source).expanduser(), pathlib.Path(args.target).expanduser()
-    if args.action == 'initialize':
-        credentials.provision_storage_key(target)
-        print('Secure storage initialized.')
-        return
-    key = credentials.storage_key()
-    if args.action == 'migrate':
-        report = migration.migrate(source, target, key)
-        print(f"Migration {report['status']}. Originals and encrypted recovery copies preserved.")
-        print('Review before storage accept, which retires both recovery copies and original caches.')
-    else:
-        migration.accept(source, target, key)
-        print('Migration accepted. Legacy originals and recovery copies retired; approved-note rebuild required.')
+    try:
+        if credentials._provider is None:
+            credentials.startup()
+        source, target = pathlib.Path(args.source).expanduser(), pathlib.Path(args.target).expanduser()
+        if args.action == 'initialize':
+            credentials.provision_storage_key(target)
+            print('Secure storage initialized.')
+            return
+        key = credentials.storage_key()
+        if args.action == 'migrate':
+            report = migration.migrate(source, target, key)
+            print(f"Migration {report['status']}. Originals and encrypted recovery copies preserved.")
+            print('Review before storage accept, which retires both recovery copies and original caches.')
+        else:
+            migration.accept(source, target, key)
+            print('Migration accepted. Legacy originals and recovery copies retired; approved-note rebuild required.')
+    except (CredentialUnavailable, StorageError) as problem:
+        _setup_failure(problem)
 
 def _read_secret(name):
     """One line from stdin. Hidden when a person is typing, read as-is from a pipe.
@@ -56,7 +73,15 @@ def _read_secret(name):
     if sys.stdin.isatty():
         import getpass
         return getpass.getpass(f"Paste {name} (input hidden): ")
-    return sys.stdin.readline()
+    line = sys.stdin.readline()
+    # Refuse a multi-line paste instead of silently keeping the first line. A
+    # truncated credential stores perfectly well and then fails at the first
+    # inference call, far from the cause -- the exact failure this module is
+    # arranged to prevent. Found by a test that piped two lines and expected a
+    # refusal: the first version quietly stored "two".
+    if sys.stdin.read().strip():
+        raise CredentialUnavailable('That looks like more than one line; paste only the key.')
+    return line
 
 
 def cmd_key(args):
@@ -77,13 +102,7 @@ def cmd_key(args):
     try:
         credentials.provision_api_key(args.name, _read_secret(args.name))
     except credentials.CredentialUnavailable as problem:
-        # The generic "protected processing paused" message that main() prints is
-        # right for an agent command and useless here. This is a setup command run
-        # by a person, and they need to know whether their paste was wrong or the
-        # Keychain refused -- "try again" is not actionable when the paste was the
-        # problem.
-        print(f"  {problem}", file=sys.stderr)
-        raise SystemExit(2) from None
+        _setup_failure(problem)
     print(f"Stored {args.name}.")
 
 
