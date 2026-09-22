@@ -586,8 +586,17 @@ def main(argv=None):
     args = p.parse_args(argv)
     try:
         args.fn(args)
-    except (CredentialUnavailable, StorageError):
+    except (CredentialUnavailable, StorageError) as problem:
+        # Generic by default: this line can land in a log, a launchd file or a
+        # notification, where the detail is not actionable and may be sensitive.
+        # But when a person is watching the terminal, generic is actively
+        # unhelpful -- it turned a wrong paste, a stale leftover file and a
+        # missing setup step into the same dead end on three separate occasions
+        # while diagnosing this. Show the reason when there is someone there to
+        # read it.
         print("Protected processing paused. Secure storage requires setup or recovery.", file=sys.stderr)
+        if sys.stderr.isatty():
+            print(f"  {problem}", file=sys.stderr)
         raise SystemExit(2)
 
 

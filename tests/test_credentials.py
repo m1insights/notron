@@ -262,3 +262,62 @@ def test_key_set_reports_why_a_paste_was_refused(monkeypatch, capsys, _task3_sto
         cli.main(['key', 'set', 'tavily-api-key'])
     err = capsys.readouterr().err
     assert 'more than one line' in err
+
+
+class _FakeStderr:
+    """Captures what the CLI writes, and claims to be a terminal or not."""
+    def __init__(self, tty): self.text, self._tty = '', tty
+    def isatty(self): return self._tty
+    def write(self, text): self.text += text
+    def flush(self): pass
+
+
+def _locked_credentials():
+    from notron import credentials
+
+    class Locked:
+        def get(self, name): raise RuntimeError('keychain refused')
+        def put(self, name, value): pass
+        def delete(self, name): pass
+
+    credentials.configure(Locked())
+
+
+def test_a_person_at_the_terminal_sees_the_reason(monkeypatch):
+    """Generic in a log, specific at a terminal.
+
+    The generic line hid an actionable reason three times while building this
+    bridge -- a wrong paste, a leftover file, a missing setup step -- each of
+    which looked like the same dead end.
+    """
+    import sys
+    from notron import cli, credentials
+
+    _locked_credentials()
+    try:
+        captured = _FakeStderr(tty=True)
+        monkeypatch.setattr(sys, 'stderr', captured)
+        with pytest.raises(SystemExit):
+            cli.main(['key', 'list'])
+        assert 'Protected processing paused' in captured.text
+        assert 'Keychain unavailable' in captured.text, 'the reason must reach the person'
+    finally:
+        credentials.configure(None)
+
+
+def test_a_log_gets_only_the_generic_line(monkeypatch):
+    """Nothing specific lands in a launchd file or a notification, where it is
+    neither actionable nor necessarily private."""
+    import sys
+    from notron import cli, credentials
+
+    _locked_credentials()
+    try:
+        captured = _FakeStderr(tty=False)
+        monkeypatch.setattr(sys, 'stderr', captured)
+        with pytest.raises(SystemExit):
+            cli.main(['key', 'list'])
+        assert 'Protected processing paused' in captured.text
+        assert 'Keychain unavailable' not in captured.text
+    finally:
+        credentials.configure(None)

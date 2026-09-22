@@ -247,7 +247,20 @@ def _notes_is_never_the_real_one(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _policy_is_disposable(monkeypatch, tmp_path, _task3_storage, _operation_storage_is_disposable):
+# Every disposable-state fixture is a parameter rather than a neighbour, because
+# this fixture SAVES a policy and saving a policy walks retention, which reads
+# index.CACHE, filer.STATE, reflect.STATE, undo.STATE and attachments.CACHE and
+# builds an EncryptedStore on each one's parent. Definition order is not enough:
+# until the machine actually had migrated .enc files, those reads silently
+# no-op'd on absent files, so the leak was invisible. The moment the developer
+# migrated their real notes state, this ran before the redirects and read it.
+def _policy_is_disposable(monkeypatch, tmp_path, _task3_storage,
+                         _operation_storage_is_disposable,
+                         _data_dir_constants_are_disposable,
+                         _undo_state_is_disposable,
+                         _mentions_state_is_disposable,
+                         _rewrite_state_is_disposable,
+                         _attachments_storage_is_disposable):
     """Existing feature tests explicitly select their synthetic notes.
 
     Permission regression tests override STATE or save their own selection.
@@ -328,6 +341,34 @@ def outbound_transport(monkeypatch):
     from notron import credentials
     credentials._provider.put(credentials.SEARCH_KEY, b'synthetic-test-key')
     return brain, calls
+
+
+@pytest.fixture(autouse=True)
+def _data_dir_constants_are_disposable(monkeypatch, tmp_path):
+    """Every module that bound `paths.DATA_DIR` at import into its own constant.
+
+    This is the same bug class as `transport._identity`: `DATA_DIR` is read once
+    at import, so each module holds its own copy and needs its own redirect. Most
+    already have one (undo, mentions, attachments, operations, diagnostics). These
+    are the remainder, and they stopped being theoretical the moment this machine
+    had a storage key: `retention.apply_policy` walks `content_paths()` --
+    index.CACHE, undo.STATE, filer.STATE, reflect.STATE, attachments.CACHE -- and
+    builds an EncryptedStore on each one's parent. Two were redirected; three were
+    not, so an ordinary policy save reached the real Application Support directory.
+
+    The suite had been green only because the real directory happened to hold no
+    migration marker. Caught by the guard in `_app_state_is_disposable`, which is
+    exactly what that guard is for.
+    """
+    from notron import brain, care, filer, index, reflect
+
+    root = tmp_path / 'app-state-content'
+    monkeypatch.setattr(index, 'CACHE', root / 'index.json')
+    monkeypatch.setattr(filer, 'STATE', root / 'filer.json')
+    monkeypatch.setattr(reflect, 'STATE', root / 'reflect.json')
+    monkeypatch.setattr(care, 'MOOD_FILE', root / 'mood.json')
+    monkeypatch.setattr(brain, 'USAGE_LOG', root / 'usage.json')
+    monkeypatch.setattr(brain, 'PROVIDER_STATE', root / 'provider.json')
 
 
 @pytest.fixture(autouse=True)
