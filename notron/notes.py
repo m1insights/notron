@@ -73,8 +73,16 @@ end run
 _METADATA = f"""
 on run argv
   tell application "Notes"
-    if not (exists note id (item 1 of argv)) then return ""
-    set n to note id (item 1 of argv)
+    -- No separate `exists`: each question Notes answers about a note resolves
+    -- its id again, ~0.13 s apiece (measured 2026-09-23). Missing is -1728 or
+    -- -1700 depending on the question; anything else still raises.
+    try
+      set n to note id (item 1 of argv)
+      set nm to name of n
+    on error errMsg number errNum
+      if errNum is -1728 or errNum is -1700 then return ""
+      error errMsg number errNum
+    end try
     -- Bind the container to a variable FIRST. Notes refuses the inline form
     -- `name of container of n` on macOS 26.2 with -1700 / -1728 ("Can't get name
     -- of container of note id ..."), while `set c to container of n` followed by
@@ -82,7 +90,7 @@ on run argv
     -- 2026-09-22: the two-step form returned the folder name, the inline form
     -- raised. Do not fold these back into one expression.
     set c to container of n
-    return (id of n) & "{RS}" & (name of n) & "{RS}" & (name of c) & "{RS}" & (modification date of n as text)
+    return (id of n) & "{RS}" & nm & "{RS}" & (name of c) & "{RS}" & (modification date of n as text)
   end tell
 end run
 """
