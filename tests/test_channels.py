@@ -355,3 +355,22 @@ def test_a_dismissed_request_frees_the_note_and_never_runs(monkeypatch):
     w.check_channels()
     live = [r for r in requests.current().pending() if r.status == 'prepared']
     assert [r.envelope.text for r in live] == ["third question"]
+
+
+def test_a_channel_request_never_waits_on_nano():
+    """2026-09-23: Nano timed out at 30 s three times running while Super took
+    2.6 s, and each timeout cooled the provider down for the Super call too."""
+    _register()
+
+    class NoNano:
+        def ask_json(self, **kw):
+            pytest.fail(f"router asked the model ({kw.get('tier')}) for a channel request")
+
+    state = nodes.router(_channel_state(), brain=NoNano())
+    assert state.intent == "question" and not state.needs_web
+
+
+def test_undo_in_a_channel_is_still_decided_in_code():
+    _register()
+    state = nodes.router(_channel_state(request="undo"), brain=None)
+    assert state.intent == "undo"

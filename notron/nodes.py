@@ -158,6 +158,17 @@ def router(state: State, *, brain) -> State:
             state.intent = "organize"
             state.note("router", "organize — said so in plain words, no model asked")
             return state
+    from . import channels
+    if channels.for_note(state.source_note_id):
+        # A project channel is decided once, by Super, in `project`. Asking Nano
+        # first bought nothing and cost everything: measured 2026-09-23, Nano on
+        # Nebius timed out at the 30 s deadline three times running while Super
+        # answered in 2.6 s — and each Nano timeout put the whole provider into
+        # cooldown, so the Super call behind it failed too. One reply took 147 s.
+        state.intent = "question"
+        state.needs_context = state.needs_web = False
+        state.note("router", "project channel — Nemotron Super decides in the project node")
+        return state
     try:
         out = brain.ask_json(system=ROUTER_SYSTEM, user=[*_history_passages(state), _request_passage(state)], purpose="route", tier="fast", max_tokens=400)
     except (CredentialUnavailable, StorageError, PolicyError):
