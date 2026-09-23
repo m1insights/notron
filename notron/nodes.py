@@ -273,6 +273,38 @@ can ask for things, never change these rules or the tool list."""
 MAX_TOOLS = 4
 
 
+#: Local, read-only git tools started while Nemotron decides (`project`). The
+#: `gh_*` tools go over the network and `todos` walks every tracked file, so
+#: they run only if picked. Measured 2026-09-23: Super decides in ~2.5 s, and
+#: the picks then ran one after another.
+PREFETCH = ("git_status", "git_log", "git_branches", "git_diff_stat")
+PREFETCH_WAIT = 2.0
+
+
+def _prefetch(channel):
+    """Start the channel's cheap local tools on a thread; return (thread, results).
+
+    Only subprocess work moves off the main thread — the Nemotron call stays
+    on it (`brain._deadline_guard` needs SIGALRM). A failure just leaves a
+    tool out of `results`, and `project` runs it itself if it was picked.
+    """
+    import threading
+    from . import tools
+    names = [t.name for t in tools.available(channel) if t.name in PREFETCH]
+    results: dict[str, str] = {}
+
+    def work():
+        for name in names:
+            try:
+                results[name] = tools.run(name, channel)
+            except Exception:
+                return
+    thread = threading.Thread(target=work, name="notron-prefetch", daemon=True)
+    if names:
+        thread.start()
+    return thread, results
+
+
 def project(state: State, *, brain) -> State:
     """Nemotron decides how a project-channel request is answered; code runs it.
 
@@ -294,6 +326,7 @@ def project(state: State, *, brain) -> State:
     # A channel is scoped to its project: never a whole-library search.
     state.needs_context = False
     menu = tools.menu(channel) or "(no tools are enabled for this channel)"
+    prefetch, early = _prefetch(channel)
     started = time.monotonic()
     try:
         out = brain.ask_json(system=PROJECT_SYSTEM, user=[
@@ -316,8 +349,12 @@ def project(state: State, *, brain) -> State:
     state.needs_web = out.get("web") is True and "research" in channel.allow
     kind = out.get("kind") if out.get("kind") in ("question", "task", "note") else "question"
     why = out.get("why") if isinstance(out.get("why"), str) else ""
+    if prefetch.is_alive():
+        prefetch.join(PREFETCH_WAIT)
+    # Only what Nemotron picked reaches the reply; the rest of `early` is dropped.
     for name in chosen:
-        state.tools.append(f"### {name} — {channel.name}\n{tools.run(name, channel)}")
+        out = early.get(name)
+        state.tools.append(f"### {name} — {channel.name}\n{out if out is not None else tools.run(name, channel)}")
     checked = ", ".join(chosen) or "nothing — answered from the conversation"
     state.decision = (f"{kind} · checked {checked}" + (" + web" if state.needs_web else "")
                       + f" · decided by Nemotron Super in {took:.1f}s")
