@@ -164,6 +164,8 @@ class Executor:
         if role is not None:
             # A moved/renamed system note does not acquire ordinary-home powers.
             return note.folder == workspace.FOLDER and note.title == role and role != workspace.ABOUT
+        if note.id in snap.channels:
+            return self._channel_permitted(snap, note, mode)
         if note.folder == workspace.FOLDER:
             return False
         if mode in ('replace', 'restore'):
@@ -172,6 +174,24 @@ class Executor:
         if mode == 'mark':
             return snap.can_file(note.id) or policy.can_mark_source(note.id)
         return snap.can_file(note.id) or snap.can_reply(note.id, policy.request_id())
+
+    @staticmethod
+    def _channel_permitted(snap, note, mode) -> bool:
+        """A project channel takes her reply to the line just observed, nothing else.
+
+        Only an insert or append, only under the watcher's one-shot reply
+        capability for that exact note, and only while the note still has the
+        registered name in her folder — a renamed or moved channel is not a
+        channel, exactly as a moved system note is not a system note.
+        """
+        from . import channels
+        try:
+            channel = channels.for_note(note.id)
+        except channels.ChannelError:
+            return False
+        return bool(channel is not None and note.folder == workspace.FOLDER
+                    and note.title == channel.title and mode in ('insert', 'append')
+                    and snap.can_reply(note.id, policy.request_id()))
 
     @staticmethod
     def _content_sources(write: Write) -> tuple[str, ...]:

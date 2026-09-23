@@ -295,3 +295,25 @@ def test_an_unregistered_channel_entry_is_never_read(monkeypatch):
     channels._save([channels.Channel("Ghost", "ghost-id", "/tmp/x")])
     monkeypatch.setattr(watch.notes, "read_body", lambda nid: pytest.fail("read an ungranted note"))
     assert not watch.Watcher(brain=None, settle=0).check_channels()
+
+
+# ---------------------------------------------------------------- executor
+
+
+def test_the_executor_lets_a_channel_take_its_reply_and_nothing_more():
+    """First live run, 2026-09-23: the decision and the answer were right, and
+    the executor refused the write — her folder only admitted system notes."""
+    from notron import notes
+    from notron.executor import Executor
+    ch = _register()
+    note = notes.Note("chan-1", ch.title, workspace.FOLDER, "m")
+    ex = Executor(dry_run=True)
+    assert not ex._permitted(note, "insert")                       # no observed request
+    with policy.explicit_reply("chan-1"):
+        assert ex._permitted(note, "insert")
+        assert not ex._permitted(note, "replace")
+        assert not ex._permitted(note, "restore")
+        renamed = notes.Note("chan-1", "Something else", workspace.FOLDER, "m")
+        assert not ex._permitted(renamed, "insert")
+        moved = notes.Note("chan-1", ch.title, "Notes", "m")
+        assert not ex._permitted(moved, "insert")
