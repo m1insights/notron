@@ -94,6 +94,21 @@ def test_add_refuses_what_it_cannot_honour(kwargs, monkeypatch):
         channels.add("Synqology", **kwargs)
 
 
+def test_a_grant_that_cannot_be_saved_leaves_no_registry_entry(monkeypatch, tmp_path):
+    """First live run, 2026-09-23: secure storage was locked, the policy save
+    raised, and the registry had already named the new note."""
+    from notron import notes
+    monkeypatch.setattr(notes, "ensure_folder", lambda name: name)
+    monkeypatch.setattr(notes, "find_note", lambda folder, title: None)
+    monkeypatch.setattr(notes, "create_note", lambda folder, body: "new-id")
+    def locked(lib, **kw):
+        raise RuntimeError("Protected processing paused.")
+    monkeypatch.setattr(library, "save", locked)
+    with pytest.raises(RuntimeError):
+        channels.add("Synqology", repo=str(tmp_path))
+    assert channels.load() == []
+
+
 def test_remove_revokes_the_grant_but_keeps_the_note():
     _register()
     channels.remove("synqology")

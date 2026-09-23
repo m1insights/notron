@@ -153,9 +153,12 @@ def add(name: str, *, repo: str = "", github: str = "", allow: tuple[str, ...] =
             title, HELP.format(title=title, project=project) + "\n\n———\n"))
         state = "created"
     channel = _validate(Channel(name, note_id, repo, github, tuple(allow)))
-    _save([*existing, channel])
+    # The grant first, then the registry. If the grant cannot be saved (secure
+    # storage locked, say) the registry never names a note she may not read —
+    # the first live run did it the other way round and left exactly that.
     lib.channels.add(note_id)
     library.save(lib)
+    _save([*existing, channel])
     return channel, state
 
 
@@ -166,8 +169,10 @@ def remove(name: str) -> Channel:
     gone = next((c for c in existing if c.name.lower() == name.strip().lower()), None)
     if gone is None:
         raise ChannelError(f"No channel called {name}.")
-    _save([c for c in existing if c is not gone])
+    # Revoke first: a crash between the two leaves a registry entry with no
+    # grant, which is inert, never a grant with no way to remove it.
     lib = library.load()
     lib.channels.discard(gone.note_id)
     library.save(lib)
+    _save([c for c in existing if c is not gone])
     return gone

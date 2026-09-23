@@ -108,7 +108,10 @@ def cmd_key(args):
 
 def cmd_channel(args):
     """Project channels: a note per project that every new line in is for her."""
-    from . import channels, tools
+    from . import channels, credentials, tools
+    if args.action != 'list' and credentials._provider is None:
+        # Saving a grant walks retention, which needs secure storage unlocked.
+        credentials.startup()
     if args.action == 'list':
         found = channels.load()
         if not found:
