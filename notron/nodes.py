@@ -1,8 +1,11 @@
 """The nodes of NOTRON's graph. Each is a plain function State -> State.
 
-Node design follows one rule: the cheapest model that can do the job does it.
-Routing and guarding happen on every wake-up, so they run on Nemotron Nano;
-planning and writing are rare and quality-critical, so they run on Super.
+Node design follows one rule: the model that decides fastest and right does it.
+That was meant to be Nano for routing, but on Nebius it is neither: measured
+2026-09-23, the router call took a median 6.2 s on Nano against 3.0 s on Super,
+the scheduler 8.8 s (24 s worst) against 3.7 s, and Nano put "Friday" on a
+Thursday. So routing, scheduling, planning and writing all run on Super;
+Nano keeps the background checks where a slow answer costs nobody a wait.
 """
 
 from __future__ import annotations
@@ -193,7 +196,7 @@ def router(state: State, *, brain) -> State:
         state.note("router", "project channel — Nemotron Super decides in the project node")
         return state
     try:
-        out = brain.ask_json(system=ROUTER_SYSTEM, user=[*_history_passages(state), _request_passage(state)], purpose="route", tier="fast", max_tokens=400)
+        out = brain.ask_json(system=ROUTER_SYSTEM, user=[*_history_passages(state), _request_passage(state)], purpose="route", tier="smart", max_tokens=400)
     except (CredentialUnavailable, StorageError, PolicyError):
         raise
     except Exception as e:
@@ -597,7 +600,7 @@ Reply with JSON only:
 
 
 def scheduler(state: State, *, brain) -> State:
-    """Turns English into one structured Action. The only new model call, on Nano."""
+    """Turns English into one structured Action, on Super (see the module note)."""
     if state.intent not in ("remind", "schedule"):
         return state
     if state.actions:
@@ -639,7 +642,7 @@ def scheduler(state: State, *, brain) -> State:
             time_question = context.message
     try:
         out = brain.ask_json(system=SCHEDULER_SYSTEM, user=_scheduling_prompt(state), purpose="schedule",
-                             tier="fast", max_tokens=400)
+                             tier="smart", max_tokens=400)
     except (CredentialUnavailable, StorageError, PolicyError):
         raise
     except Exception as e:

@@ -76,9 +76,11 @@ def test_the_router_cannot_silently_ignore_something_typed_at_her():
     assert state.writes, "a message typed at her must always get a visible reply"
 
 
-def test_routing_runs_on_the_cheap_tier_and_writing_on_the_smart_one():
+def test_routing_waited_6_s_on_nano_where_super_answers_in_3():
+    """Measured 2026-09-23 on Nebius: router median 6.2 s on Nano, 3.0 s on Super."""
     state, brain = _run("question")
-    assert ("json", "fast") in brain.calls
+    assert ("json", "smart") in brain.calls
+    assert ("json", "fast") not in brain.calls
     assert ("text", "smart") in brain.calls
 
 
@@ -193,11 +195,13 @@ def test_a_reminder_request_produces_an_action_not_a_note_write():
     assert state.actions[0].kind == "reminder"
 
 
-def test_extraction_runs_on_the_cheap_tier():
+def test_nano_put_friday_on_a_thursday_and_took_24_s_doing_it():
+    """Measured 2026-09-23: scheduler median 8.8 s (24 s worst) on Nano, 3.7 s on
+    Super, and Nano dated "friday 3pm" on Thursday. Extraction runs on Super."""
     brain = SchedulingBrain()
     graph.run("remind me to call the pharmacy", brain=brain, dry_run=True)
-    assert ("json", "fast") in brain.calls
-    assert ("json", "smart") not in brain.calls
+    assert ("json", "smart") in brain.calls
+    assert ("json", "fast") not in brain.calls
 
 
 def test_the_reply_says_what_actually_happened_not_what_was_intended():
@@ -291,7 +295,7 @@ def test_a_tidy_up_lands_below_the_note_until_that_note_is_opted_in(monkeypatch)
                       reply_to=("Parking Garages", "Notes", 3), source_note_id="n1")
 
     assert [w.mode for w in state.writes] == ["insert"]
-    assert ("json", "fast") not in brain.calls, "the router read the words itself"
+    assert not [c for c in brain.calls if c[0] == "json"], "the router read the words itself"
     assert brain.calls.count(("text", "smart")) == 1, "cleaned once, not once per node"
 
 

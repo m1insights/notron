@@ -116,7 +116,7 @@ def test_undo_said_with_no_note_behind_it_still_goes_to_the_model():
     brain = FakeBrain()
     state = nodes.router(State(request="undo my last change"), brain=brain)
     assert state.intent == "question"
-    assert ("json", "fast") in brain.calls
+    assert ("json", "smart") in brain.calls
 
 
 def test_tidying_up_in_her_own_ask_note_is_an_ordinary_question():
