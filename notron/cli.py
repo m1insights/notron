@@ -212,27 +212,47 @@ def cmd_tasks(args):
 
 def cmd_review(args):
     """What is on hold, and the explicit way to let it go."""
-    from . import credentials, requests
+    from . import credentials, executor, operations, requests
     if credentials._provider is None:
         credentials.startup()
     store = requests.current()
     held = [r for r in store.pending() if r.status == 'needs_review' and r.envelope]
+    # A write whose outcome could not be proven holds its note: every later
+    # write there is refused until it is settled or let go. Measured 2026-09-23:
+    # one such write froze 📊 Log, another 📥 Ask Notron, for a day, and neither
+    # showed up here because neither was a request.
+    writes = executor.held_writes()
     if args.action == 'dismiss':
         refs = args.ids
         if not refs and not args.all:
             raise SystemExit("Which? notron review dismiss <id> …, or --all")
         chosen = held if args.all else [r for r in held if any(r.request_id.startswith(x) for x in refs)]
         gone = sum(store.dismiss(r.request_id) for r in chosen)
-        print(f"\n  Dismissed {gone}. Nothing was re-run; write a line again to ask again.\n")
+        dismissed = {r.request_id for r in chosen}
+        ops = operations.current()
+        released = sum(executor.release_held(oid) for _, oid, _ in writes
+                       if args.all or any(oid.startswith(x) for x in refs)
+                       or getattr(ops.get(oid), 'request_id', None) in dismissed)
+        print(f"\n  Dismissed {gone + released}. Nothing was re-run; write a line again to ask again.")
+        if released:
+            print("  Each note's copy from before is kept — `@notron undo` there still offers it.")
+        print()
         return
-    if not held:
+    if not held and not writes:
         print("\n  Nothing on hold.\n")
         return
-    print(f"\n  {len(held)} on hold — each also holds later lines in its note:\n")
-    for r in held:
-        where = r.envelope.reply_to[0] if r.envelope.reply_to else r.envelope.source
-        text = " ".join(r.envelope.text.split())[:60]
-        print(f"  {r.request_id[:8]}  {where[:24]:24}  {r.failure_code or '':20}  {text}")
+    if held:
+        print(f"\n  {len(held)} on hold — each also holds later lines in its note:\n")
+        for r in held:
+            where = r.envelope.reply_to[0] if r.envelope.reply_to else r.envelope.source
+            text = " ".join(r.envelope.text.split())[:60]
+            print(f"  {r.request_id[:8]}  {where[:24]:24}  {r.failure_code or '':20}  {text}")
+    if writes:
+        from . import notes
+        print(f"\n  {len(writes)} write(s) I could not confirm — each stops me writing to that note:\n")
+        for note_id, oid, code in writes:
+            note = notes.get_note(note_id)
+            print(f"  {oid[:14]:14}  {(note.title if note else 'a note')[:24]:24}  {code or ''}")
     print("\n  Let go of one: notron review dismiss <id>   ·   all: notron review dismiss --all\n")
 
 
@@ -736,7 +756,7 @@ def main(argv=None):
 
     rv = sub.add_parser('review', help='what is on hold, and dismissing it')
     rv.add_argument('action', nargs='?', choices=['list', 'dismiss'], default='list')
-    rv.add_argument('ids', nargs='*', help='request id prefixes, as `notron review` prints them')
+    rv.add_argument('ids', nargs='*', help='id prefixes, as `notron review` prints them')
     rv.add_argument('--all', action='store_true', help='dismiss everything on hold')
     rv.set_defaults(fn=cmd_review)
 

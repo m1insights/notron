@@ -21,6 +21,10 @@ class Snapshot:
     operation_id: str | None
 
 
+class Unresolved(ValueError):
+    """A staged backup is still waiting to be settled; no further write may stage one."""
+
+
 def _load() -> dict:
     from .securestore import read_json, write_json, IntegrityError
     from . import policy
@@ -85,6 +89,12 @@ def unresolved(note_id: str) -> bool:
     return bool(_entry(_load(), note_id)['pending'])
 
 
+def held() -> list[tuple[str, Snapshot]]:
+    """Every note holding a staged backup, with the backup itself (not for display)."""
+    return [(nid, Snapshot(**value['pending'])) for nid, value in _load().items()
+            if isinstance(value, dict) and value['pending']]
+
+
 def save(note_id: str, old_body: str, after_revision=None, operation_id=None) -> None:
     from . import policy
     from .executor import write_transaction
@@ -97,7 +107,7 @@ def save(note_id: str, old_body: str, after_revision=None, operation_id=None) ->
             pending = Snapshot(**entry['pending'])
             if (pending.operation_id, pending.before_html, pending.after_revision) == (operation_id, old_body, after_revision):
                 return
-            raise ValueError('Unresolved backup requires review before another write.')
+            raise Unresolved('Unresolved backup requires review before another write.')
         snapshot = asdict(Snapshot(str(uuid4()), old_body, after_revision, operation_id))
         entry['pending' if operation_id else 'current'] = snapshot
         data[note_id] = entry
