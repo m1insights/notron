@@ -385,3 +385,45 @@ def test_a_channel_reply_reads_only_about_me(monkeypatch):
     nodes.watcher(_channel_state(), brain=None)
     assert workspace.ABOUT in read
     assert workspace.MEMORY not in read and workspace.LESSONS not in read
+
+
+# ----------------------------------------------------------------- latency
+
+
+def _clock(monkeypatch, start=1000.0):
+    now = [start]
+    monkeypatch.setattr(watch.time, "time", lambda: now[0])
+    return now
+
+
+def test_a_siri_line_waits_three_seconds_not_twelve(monkeypatch):
+    """Measured 2026-09-23: a dictated channel line waited the full 12 s typing
+    settle, though Siri writes a line whole. A channel settles in 3 s."""
+    ch = _register()
+    body = markup.render(ch.title, channels.HELP.format(title=ch.title, project="x")
+                         + "\n\n———\n\nis CI green")
+    monkeypatch.setattr(watch.notes, "read_body", lambda nid: body)
+    now = _clock(monkeypatch)
+    w = watch.Watcher(brain=None)                       # default settle: 12 s
+    monkeypatch.setattr(w, "_answer", lambda q, **kw: True)
+    assert not w.check_channels()                       # first sight
+    now[0] += 2
+    assert not w.check_channels()
+    now[0] += watch.CHANNEL_SETTLE - 2
+    assert w.check_channels()
+
+
+def test_the_ask_note_still_waits_for_typing_to_settle(monkeypatch):
+    """People type into 📥 Ask Notron in pieces; 3 s there would answer half a thought."""
+    w = watch.Watcher(brain=None)
+    now = _clock(monkeypatch)
+    assert not w._settled("ask:1", "half a tho")
+    now[0] += watch.CHANNEL_SETTLE
+    assert not w._settled("ask:1", "half a tho")
+    now[0] += watch.SETTLE
+    assert w._settled("ask:1", "half a tho")
+
+
+def test_channels_are_looked_at_every_three_seconds():
+    """Measured 2026-09-23: up to 10 s passed before a channel line was even seen."""
+    assert watch.CHANNEL_POLL <= 3 and watch.Watcher(brain=None).channel_poll <= 3
