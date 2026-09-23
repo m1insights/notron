@@ -398,6 +398,23 @@ def test_a_write_that_landed_is_not_divergent_when_notes_re_encodes_it():
         assert write_landed(expected, reencoded), reencoded
 
 
+def test_a_reply_is_not_divergent_when_notes_adds_a_line_break_after_bold():
+    """Measured 2026-09-23 in the first live project channel: the reply landed
+    exactly, Notes had added `<br>` inside `<div><b>Notron:</b></div>`, and the
+    reply — then every later line in the note — was parked for review."""
+    from notron.executor import write_landed
+
+    expected = '<div><b>Notron:</b></div><div><i>CI is green.</i></div>'
+    stored = '<div><b>Notron:</b><br></div>\n<div><i>CI is green.</i><br></div>'
+    assert write_landed(expected, stored)
+
+
+def test_whitespace_tolerance_does_not_join_or_drop_words():
+    from notron.executor import write_landed
+    assert not write_landed('<div>the new answer</div>', '<div>thenew answer</div>')
+    assert not write_landed('<div>the new answer</div>', '<div>the answer</div>')
+
+
 def test_a_write_that_did_not_take_is_still_divergent():
     """The point of the check survives: if the content is absent the flattened
     text differs, and the outcome still needs review. This must not become a

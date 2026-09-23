@@ -77,7 +77,15 @@ def write_landed(expected: str, observed_body: str) -> bool:
     if revision(observed_body) == revision(expected):
         return True
     from . import markup
-    return markup.to_text(observed_body) == markup.to_text(expected)
+    # Whitespace too, and only whitespace. Measured 2026-09-23 in a project
+    # channel: Notes stored `<div><b>Notron:</b></div>` as
+    # `<div><b>Notron:</b><br></div>`, one extra line break in the flattened
+    # text, and a perfect reply was parked for review — which then held every
+    # later line in that note for review too. Every visible character must
+    # still be there, in order; only the spacing between them is Notes' own.
+    def flat(body):
+        return " ".join(markup.to_text(body).split())
+    return flat(observed_body) == flat(expected)
 
 
 def capture_write(title: str, *, folder: str = workspace.FOLDER, note_id: str | None = None,
