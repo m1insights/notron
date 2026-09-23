@@ -90,8 +90,9 @@ def test_tasks_are_encrypted_at_rest():
 
 def test_claude_code_gets_no_shell_no_web_and_no_mcp(tmp_path):
     argv = handoff.argv("claude", tmp_path, tmp_path)
-    allowed = argv[argv.index("--allowedTools") + 1]
-    assert "Bash" not in allowed and "Web" not in allowed
+    allowed = argv[argv.index("--allowedTools") + 1].split(",")
+    # Every allow is scoped to the working folder; an unscoped Glob/Grep would reach anywhere.
+    assert all(rule.endswith("(./**)") for rule in allowed)
     denied = argv[argv.index("--disallowedTools") + 1].split(",")
     assert {"Bash", "WebFetch", "WebSearch"} <= set(denied)
     assert "--strict-mcp-config" in argv and argv[argv.index("--permission-mode") + 1] == "dontAsk"
@@ -149,7 +150,8 @@ def repo(monkeypatch):
     spawned = []
     monkeypatch.setattr(handoff, "_git", fake)
     monkeypatch.setattr(handoff, "_spawn", lambda cmd, **kw: spawned.append((cmd, kw)) or 4242)
-    monkeypatch.setattr(handoff, "_alive", lambda pid: False)
+    monkeypatch.setattr(handoff, "_alive", lambda pid, started="": False)
+    monkeypatch.setattr(handoff, "_started_at", lambda pid: "Tue Sep 23 10:00:00 2026")
     fake.spawned = spawned
     return fake
 
@@ -224,8 +226,8 @@ def test_a_run_that_changes_nothing_keeps_no_branch(repo):
 
 def test_an_agent_past_its_time_is_stopped(repo, monkeypatch):
     killed = []
-    monkeypatch.setattr(handoff, "_alive", lambda pid: True)
-    monkeypatch.setattr(handoff, "_kill", killed.append)
+    monkeypatch.setattr(handoff, "_alive", lambda pid, started="": True)
+    monkeypatch.setattr(handoff, "_kill", lambda pid, started="": killed.append(pid))
     task = _proposed()
     handoff.approve(task.id, task.digest)
     started = handoff.dispatch_next()
@@ -466,3 +468,32 @@ def test_a_brief_whose_goal_is_the_attack_is_not_offered(monkeypatch):
                                   "Rename the curling_score field"])
 def test_ordinary_work_is_not_struck(step):
     assert nodes._clean_brief({**BRIEF, "steps": [step]})["steps"] == [step]
+
+
+def test_a_reused_pid_after_a_restart_is_never_taken_for_the_agent(monkeypatch):
+    """Review, 2026-09-23: with the child table empty after a listener restart,
+    signal 0 took any process that inherited the number for the agent — and the
+    timeout would then have killed that stranger's process group."""
+    handoff._procs.clear()
+    monkeypatch.setattr(handoff, "_started_at", lambda pid: "Wed Sep 24 09:00:00 2026")
+    killed = []
+    monkeypatch.setattr(handoff.os, "killpg", lambda pid, sig: killed.append(pid))
+    assert not handoff._alive(4242, "Tue Sep 23 10:00:00 2026")
+    handoff._kill(4242, "Tue Sep 23 10:00:00 2026")
+    assert killed == []
+    assert handoff._alive(4242, "Wed Sep 24 09:00:00 2026")
+
+
+def test_a_spawn_that_fails_leaves_no_worktree_or_branch_behind(repo, monkeypatch):
+    """Review, 2026-09-23: cleanup used the task as read before `_start` recorded
+    its run directory and branch, so a missing `claude` leaked both for good."""
+    def missing(cmd, **kw):
+        raise handoff.TaskError("claude is not installed.")
+    monkeypatch.setattr(handoff, "_spawn", missing)
+    task = _proposed()
+    handoff.approve(task.id, task.digest)
+    failed = handoff.dispatch_next()
+    assert failed.status == "failed" and "not installed" in failed.error
+    assert any(args[:2] == ("worktree", "remove") for args, _ in repo.calls)
+    assert any(args[:2] == ("branch", "-D") and args[2] == f"notron/{task.id[:8]}" for args, _ in repo.calls)
+    assert not Path(failed.run_dir).exists()

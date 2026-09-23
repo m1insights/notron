@@ -90,6 +90,7 @@ class Task:
     started: float | None = None
     finished: float | None = None
     pid: int | None = None
+    pid_started: str = ""            # the OS's start time for `pid`, so a reused pid is never ours
     run_dir: str = ""
     branch: str = ""
     base: str = ""
@@ -249,7 +250,7 @@ def cancel(task_id: str) -> Task:
         if task.status not in ACTIVE:
             return task
         if task.status == "running" and task.pid:
-            _kill(task.pid)
+            _kill(task.pid, task.pid_started)
         was_running = task.status == "running"
         task.status, task.finished, task.error = "cancelled", time.time(), "stopped by you"
     if was_running:
@@ -327,7 +328,10 @@ def argv(hand: str, run_dir: Path, cwd: Path, repo_top: str = "") -> list[str]:
                  if os.path.exists(SANDBOX_EXEC) else [])
         return [*fence, "claude", "-p", "--output-format", "json",
                 "--permission-mode", "dontAsk",
-                "--allowedTools", "Read(./**),Glob,Grep,Edit(./**),Write(./**)",
+                # No bare Glob/Grep: an unscoped allow would let a search reach any
+                # path. Reads inside the working folder need no rule; anything
+                # outside it needs a permission `dontAsk` always refuses.
+                "--allowedTools", "Read(./**),Edit(./**),Write(./**)",
                 "--disallowedTools", "Bash,WebFetch,WebSearch,Task,NotebookEdit",
                 "--strict-mcp-config", "--setting-sources", "project",
                 "--no-session-persistence", "--max-turns", str(MAX_TURNS),
@@ -356,18 +360,33 @@ def _spawn(cmd: list[str], *, cwd: Path, stdin: Path, stdout: Path, stderr: Path
 _procs: dict[int, subprocess.Popen] = {}
 
 
-def _alive(pid: int) -> bool:
+def _started_at(pid: int) -> str:
+    """The OS's record of when `pid` started ('' if none). Tests replace it."""
+    try:
+        proc = subprocess.run(["/bin/ps", "-o", "lstart=", "-p", str(pid)], capture_output=True,
+                              text=True, timeout=5, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return proc.stdout.strip()
+
+
+def _ours(pid: int, started: str) -> bool:
+    """Is `pid` still the agent this task started? After a listener restart the
+    child table is empty, and a bare signal-0 check would take any process that
+    inherited the number for ours — and its timeout would then kill it."""
     proc = _procs.get(pid)
     if proc is not None:
         return proc.poll() is None
-    try:
-        os.kill(pid, 0)
-        return True
-    except (ProcessLookupError, PermissionError):
-        return False
+    return bool(started) and _started_at(pid) == started
 
 
-def _kill(pid: int) -> None:
+def _alive(pid: int, started: str = "") -> bool:
+    return _ours(pid, started)
+
+
+def _kill(pid: int, started: str = "") -> None:
+    if not _ours(pid, started):
+        return
     try:
         os.killpg(pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
@@ -417,7 +436,10 @@ def dispatch_next() -> Task | None:
     try:
         return _start(task, ch)
     except (TaskError, OSError, subprocess.SubprocessError) as exc:
-        _cleanup(task, keep_branch=False)
+        # `_start` records the run directory and branch before it creates them;
+        # clean up from what it recorded, not the copy read before it began, or
+        # a failed spawn leaves a worktree and a branch hanging off the repo.
+        _cleanup(get(task.id), keep_branch=False)
         return _update(task.id, status="failed", started=time.time(), finished=time.time(),
                        error=str(exc)[:300] or type(exc).__name__)
 
@@ -437,7 +459,7 @@ def _start(task: Task, ch) -> Task:
     os.chmod(run_dir / "brief.txt", 0o600)
     pid = _spawn(argv(task.hand, run_dir, cwd, str(top)), cwd=cwd, stdin=run_dir / "brief.txt",
                  stdout=run_dir / "out.json", stderr=run_dir / "err.txt")
-    return _update(task.id, status="running", started=time.time(), pid=pid)
+    return _update(task.id, status="running", started=time.time(), pid=pid, pid_started=_started_at(pid))
 
 
 def poll(*, now: float | None = None) -> list[Task]:
@@ -445,10 +467,10 @@ def poll(*, now: float | None = None) -> list[Task]:
     now = time.time() if now is None else now
     done = []
     for task in [t for t in all_tasks() if t.status == "running"]:
-        if task.pid and _alive(task.pid):
+        if task.pid and _alive(task.pid, task.pid_started):
             if now - (task.started or now) < RUN_TIMEOUT:
                 continue
-            _kill(task.pid)
+            _kill(task.pid, task.pid_started)
             _update(task.id, error=f"stopped after {RUN_TIMEOUT // 60} minutes")
         done.append(_collect(get(task.id), now))
     return done

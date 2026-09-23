@@ -296,31 +296,31 @@ order, and on which model.
 Nodes decline work they do not own, so a "note to self" costs one Nano call and
 a plan costs one Nano plus one Super. Cost scales with what you actually asked for.
 
-### Which Nemotron tier, and why the answer surprised us
+### Which Nemotron tier, and why
 
-The usual intuition is *small model = fast, so route the easy calls down*. We
-measured it, and on this workload it is false.
+The usual intuition is *small model = fast, so route the easy calls down*. On
+Nebius, for this workload, the deciding factor turned out not to be speed but
+**steadiness**.
 
-Choosing the tier for the Brain Dump filer on **2026-09-01**, on the same prompt:
+Re-measured on **2026-09-23**, same routing prompt, from the listener:
 
-| Model | Latency | Output |
-|---|---|---|
-| Nemotron **Nano 30B** | **43 s** on a two-line prompt — **235 s** on five | padded with irrelevant context |
-| Nemotron **Super 120B** | **1.3 s** | exact |
+| Model | What we saw |
+|---|---|
+| Nemotron **Nano 30B** | 2.3 s when it answered — and three 30 s timeouts in a row, each of which put the whole provider into cooldown, so the Super call behind it failed too. One reply took 147 s. |
+| Nemotron **Super 120B** | ~2.6 s, every time |
 
-The nominally smaller, cheaper model was **30–180× slower** and less precise.
-So tier selection here is not a function of how hard the question looks. It is a
-function of **whether a person is waiting, and what a wrong answer costs**:
+(An earlier single measurement on 2026-09-01 — Nano 43 s, Super 1.3 s — did not
+reproduce, and is not a claim this project makes.)
 
-- **Nano 30B** — classification on paths nobody is watching, where code re-checks
-  the answer and a retry is free. The router. Most wake-ups stop here.
-- **Super 120B** — everything a person waits on and everything whose error is
-  expensive. Not the compromise tier here; the measured sweet spot.
+So tier selection here is a function of **whether a person is waiting, and what a
+wrong answer costs**:
+
+- **Super 120B** — every decision a person waits on: which tools a project
+  request needs, the brief for a coding agent, the review of what it did.
+  Every one of those replies says so, with its measured time.
+- **Nano 30B** — classification on paths nobody is watching, where code
+  re-checks the answer and a retry is free.
 - **Ultra 550B** — configured deep tier, optional, off the default path.
-
-*These figures come from a single measurement on one prompt. They are the reason
-the graph is shaped this way, not a benchmark claim — reproduce them on your own
-workload before you rely on them.*
 
 ### Two Nemotron tiers used against each other
 

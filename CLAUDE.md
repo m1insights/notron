@@ -102,6 +102,9 @@ nor tell whether one is pinned; that screen instructs and opens
 .venv/bin/python -m notron channel add Synqology --repo ~/Dev/apps/synqology [--github owner/repo]
 .venv/bin/python -m notron channel list    # project channels and the read-only tools each may use
 .venv/bin/python -m notron review          # what is on hold; `review dismiss <id>` lets it go
+.venv/bin/python -m notron channel set Synqology --allow read,research,run --hand claude  # let Nemotron hand approved work to your coding agent
+.venv/bin/python -m notron tasks           # hand-off tasks; `tasks show|approve|cancel <id>`, `--json` for the task board
+.venv/bin/python -m notron tasks fence     # show macOS refusing the agent your secrets (no model involved)
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -163,6 +166,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `reflect.py` | The self-improvement loop — lessons from answers that missed |
 | `channels.py` | Project channels: `Notron <Project>` notes, every new line a request (Siri can append one). Grants live in the registry, never the note |
 | `tools.py` | Fixed-argv, read-only git/gh tools a channel may use; the model names tools, never commands |
+| `handoff.py` | Nemotron-briefed tasks: digest-bound approval, a git worktree + `sandbox-exec` fence for Claude Code/Codex, branch-only results, Nemotron review. Never pushes |
 
 ## Invariants — do not break these
 
