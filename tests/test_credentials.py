@@ -321,3 +321,60 @@ def test_a_log_gets_only_the_generic_line(monkeypatch):
         assert 'Keychain unavailable' not in captured.text
     finally:
         credentials.configure(None)
+
+
+def test_an_idle_tick_asked_keychain_for_the_storage_key_89_times(monkeypatch, tmp_path):
+    """Measured 2026-09-23: every encrypted read spawned the Keychain helper,
+    89 processes and 2.15 s of a 3.6 s idle listener tick. The key is held
+    briefly; a rotation or removal is still seen within TTL."""
+    from notron import credentials
+    spawned = []
+    values = {credentials.STORAGE_KEY: bytes(range(32))}
+
+    def request(self, operation, name, value=None):
+        spawned.append((operation, name))
+        if operation == 'get':
+            return values.get(name)
+        if operation == 'put':
+            values[name] = value
+        else:
+            values.pop(name, None)
+
+    monkeypatch.setattr(credentials.KeychainStore, '_request', request)
+    clock = [1000.0]
+    monkeypatch.setattr(credentials.time, 'monotonic', lambda: clock[0])
+    store = credentials.KeychainStore(tmp_path / 'helper')
+    for _ in range(89):
+        assert store.get(credentials.STORAGE_KEY) == bytes(range(32))
+    assert spawned == [('get', credentials.STORAGE_KEY)]
+
+    # Removed in Keychain: seen once the hold lapses, and a miss is never held.
+    values.clear()
+    clock[0] += store.TTL
+    assert store.get(credentials.STORAGE_KEY) is None
+    assert store.get(credentials.STORAGE_KEY) is None
+    assert len(spawned) == 3
+
+    # A change made through the store is seen at once.
+    store.put(credentials.NEBIUS_KEY, b'first')
+    assert store.get(credentials.NEBIUS_KEY) == b'first'
+    store.put(credentials.NEBIUS_KEY, b'second')
+    assert store.get(credentials.NEBIUS_KEY) == b'second'
+    store.delete(credentials.NEBIUS_KEY)
+    assert store.get(credentials.NEBIUS_KEY) is None
+
+
+def test_a_failing_keychain_is_never_served_from_the_hold(monkeypatch, tmp_path):
+    from notron import credentials
+    calls = []
+
+    def request(self, operation, name, value=None):
+        calls.append(name)
+        raise credentials.CredentialUnavailable('Keychain unavailable')
+
+    monkeypatch.setattr(credentials.KeychainStore, '_request', request)
+    store = credentials.KeychainStore(tmp_path / 'helper')
+    for _ in range(2):
+        with pytest.raises(credentials.CredentialUnavailable):
+            store.get(credentials.STORAGE_KEY)
+    assert len(calls) == 2

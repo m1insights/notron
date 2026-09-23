@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import threading
+import time
 from typing import Protocol
 
 SERVICE = 'com.m1labs.notron'
@@ -34,8 +36,17 @@ class KeychainStore:
     or an environment override. P06 owns that integration and identity check.
     stdout/stderr are discarded; failures have fixed, payload-free messages.
     """
+    # Every encrypted read asks for the storage key, and each ask spawns the
+    # helper: measured 2026-09-23, 89 helper processes in one idle listener
+    # tick, 2.15 s of its 3.6 s. A key is held for TTL seconds, so removing or
+    # rotating it in Keychain still pauses processing within half a minute; a
+    # missing answer is never held, so a key set a moment ago is seen at once.
+    TTL = 30.0
+
     def __init__(self, helper: Path):
         self.helper = Path(helper)
+        self._held: dict[str, tuple[bytes, float]] = {}
+        self._lock = threading.Lock()
 
     def _request(self, operation: str, name: str, value: bytes | None = None):
         if name not in NAMES:
@@ -78,13 +89,35 @@ class KeychainStore:
                 process.wait()
 
     def get(self, name: str) -> bytes | None:
-        return self._request('get', name)
+        with self._lock:
+            held = self._held.get(name)
+            if held is not None and time.monotonic() - held[1] < self.TTL:
+                return held[0]
+        value = self._request('get', name)
+        with self._lock:
+            if value is None:
+                self._held.pop(name, None)
+            else:
+                self._held[name] = (value, time.monotonic())
+        return value
+
+    def forget(self) -> None:
+        with self._lock:
+            self._held.clear()
 
     def put(self, name: str, value: bytes) -> None:
-        self._request('put', name, value)
+        self.forget()
+        try:
+            self._request('put', name, value)
+        finally:
+            self.forget()
 
     def delete(self, name: str) -> None:
-        self._request('delete', name)
+        self.forget()
+        try:
+            self._request('delete', name)
+        finally:
+            self.forget()
 
 
 _provider: CredentialStore | None = None
