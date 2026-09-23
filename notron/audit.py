@@ -70,6 +70,14 @@ def drain(limit=BATCH_SIZE):
         for oid in primary:
             enqueue('Operation verified', operation_id=oid)
         records = [r for r in _records(store) if r.status in (operations.S.PREPARED, operations.S.APPLYING, operations.S.APPLIED) and r.payload_ref]
+        # A receipt whose Log write is waiting on review cannot be delivered by
+        # retrying it. Left at the head of the queue it was retried on every
+        # pass — ~5 s of Notes traffic each, measured 2026-09-23 — and nothing
+        # queued behind it ever reached 📊 Log. Skip it; it stays for review.
+        def blocked(record):
+            write = store.get(record.operation_id + ':write')
+            return write is not None and write.status == operations.S.NEEDS_REVIEW
+        records = [r for r in records if not blocked(r)]
         for record in records[:limit]:
             try:
                 oid = record.operation_id + ':write'

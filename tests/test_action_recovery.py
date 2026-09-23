@@ -361,3 +361,23 @@ def test_new_checkpoint_cannot_recreate_content_after_policy_purged_parent(recov
     with requests.execution(h.envelope), pytest.raises(ValueError):
         recovery.put('r1', 'r1:checkpoint:late', {'text': 'Call dentist'}, [h.ask_id])
     assert operations.current().get('r1:checkpoint:late') is None
+
+
+def test_a_receipt_waiting_on_review_does_not_block_the_audit_queue(monkeypatch):
+    """Measured 2026-09-23: one 📊 Log receipt needed review, sat at the head of
+    the queue, and was retried on every pass while twelve behind it waited."""
+    from types import SimpleNamespace as NS
+    from notron import audit
+    from notron.executor import Executor
+    stuck = audit.enqueue('Operation verified', operation_id='first')
+    audit.enqueue('Operation verified', operation_id='second')
+    store = operations.current()
+    real_get = store.get
+    monkeypatch.setattr(store, 'get', lambda oid: NS(status=operations.S.NEEDS_REVIEW)
+                        if oid == stuck + ':write' else real_get(oid))
+    monkeypatch.setattr(operations, 'current', lambda: store)
+    tried = []
+    monkeypatch.setattr(Executor, 'apply_write',
+                        lambda self, w: tried.append(w.operation_id) or NS(ok=False))
+    audit.drain(limit=1)
+    assert tried and all(not oid.startswith(stuck) for oid in tried)
