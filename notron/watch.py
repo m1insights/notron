@@ -111,6 +111,7 @@ class Watcher:
     _last_sweep: float = 0
     _last_dump: float = 0
     _last_channels: float = 0
+    _dump_on_hold: bool = False
     _intent_version: int = -1
 
     # A question that produced no write stays "unanswered" in the note, so the
@@ -558,9 +559,19 @@ class Watcher:
                 self.sweep_mentions()
             if store.paused or store.row()['stop_requested']:
                 return
-            if not store.paused and now - self._last_dump >= self.dump_poll:
+            if not store.paused and not self._dump_on_hold and now - self._last_dump >= self.dump_poll:
                 self._last_dump = now
-                self.check_dump()
+                from .worker_migration import FilingReviewRequired
+                try:
+                    self.check_dump()
+                except FilingReviewRequired:
+                    # Measured 2026-09-23: this one Brain Dump state raised on
+                    # every tick, and each raise reset the whole runtime, so the
+                    # listener spent its life restarting and a project channel
+                    # line waited more than seven minutes unanswered. Filing is
+                    # one optional surface; it waits for review on its own.
+                    self._dump_on_hold = True
+                    self._say("  Brain Dump filing is on hold until its old outcomes are reviewed")
             if not store.paused and not store.row()['stop_requested']:
                 audit.drain()
             store.update(state='ready', reason_code=None)

@@ -61,9 +61,13 @@ def migrate_filer():
     write_json(marker_path, {'version': 1, 'filer_review_required': uncertain})
 
 
+class FilingReviewRequired(StorageError):
+    """Brain Dump filing alone is on hold; nothing else is."""
+
+
 def require_filing_ready():
     marker = read_json(filer.STATE.with_name('worker-history.json'))
     if marker and marker.get('version') != 1:
         raise StorageError('Worker migration version requires recovery.')
     if marker.get('filer_review_required'):
-        raise StorageError('Legacy filing outcomes require review before automatic filing.')
+        raise FilingReviewRequired('Legacy filing outcomes require review before automatic filing.')

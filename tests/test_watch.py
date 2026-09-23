@@ -561,3 +561,27 @@ def test_a_permission_check_that_explodes_does_not_stop_the_listener_starting():
     w.on_event = said.append
     w._report_blind_spots(checker=boom)
     assert any("couldn't check permissions" in m for m in said)
+
+
+def test_a_brain_dump_on_hold_does_not_stop_everything_else(monkeypatch):
+    """2026-09-23: the filer's legacy-review state raised on every tick and reset
+    the runtime each time; a project channel line waited 7+ minutes."""
+    from notron import worker_migration
+    w = watch.Watcher(brain=None, dump_poll=0, sweep_every=10**9, channel_poll=10**9, on_event=lambda m: None)
+    from notron.health import HealthStore
+    w._runtime_ready = True
+    w._intent_version = HealthStore().row()['intent_version']
+    monkeypatch.setattr('notron.worker.require_owner', lambda: None)
+    monkeypatch.setattr('notron.managed_lease.require_effect', lambda *a: None)
+    monkeypatch.setattr(w, 'recover_pending', lambda **kw: False)
+    monkeypatch.setattr('notron.worker.drain_one', lambda: False)
+    monkeypatch.setattr(w, 'check_ask', lambda: None)
+    calls = []
+    def dump():
+        calls.append(1)
+        raise worker_migration.FilingReviewRequired('Legacy filing outcomes require review before automatic filing.')
+    monkeypatch.setattr(w, 'check_dump', dump)
+    w.tick()
+    assert w._runtime_ready, "a Brain Dump hold reset the whole listener"
+    w.tick()
+    assert calls == [1], "the held Brain Dump was retried every tick"
