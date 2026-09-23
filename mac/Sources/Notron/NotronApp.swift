@@ -76,6 +76,7 @@ struct NotronApp: App {
             }
             Text("Say \u{201C}Hey Siri, ask Notron\u{2026}\u{201D} anytime.")
             Divider()
+            OpenWindowButton(title: "Tasks\u{2026}", id: "tasks")
             OpenWindowButton(title: LibraryModel.exists ? "Your notes\u{2026}" : "Set up your notes\u{2026}", id: "library")
             OpenWindowButton(title: "Your account…", id: "account")
             OpenWindowButton(title: "Pin her notes\u{2026}", id: "pins")
@@ -85,6 +86,9 @@ struct NotronApp: App {
             MenuBarLabel(emoji: mood.emoji)
         }
         .menuBarExtraStyle(.menu)
+
+        Window("Tasks", id: "tasks") { TaskBoardView() }
+        .windowResizability(.contentMinSize)
 
         Window("Your account", id: "account") { AccountView() }
         .windowResizability(.contentSize)
