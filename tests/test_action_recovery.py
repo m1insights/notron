@@ -397,7 +397,7 @@ def test_a_cancelled_receipt_is_not_retried_on_every_pass(monkeypatch):
     audit.enqueue('Operation verified', operation_id='second')
     store = operations.current()
     real_get = store.get
-    monkeypatch.setattr(store, 'get', lambda oid: NS(status=operations.S.CANCELLED)
+    monkeypatch.setattr(store, 'get', lambda oid: NS(status=operations.S.CANCELLED, failure_code='write_failed')
                         if oid == refused + ':write' else real_get(oid))
     monkeypatch.setattr(operations, 'current', lambda: store)
     tried = []
@@ -429,3 +429,65 @@ def test_no_receipt_is_attempted_while_the_log_holds_an_unresolved_backup(monkey
     audit.drain()
     assert tried == []
     assert operations.current().get(queued).status == operations.S.PREPARED
+
+
+def _held_log(monkeypatch):
+    from notron import audit, library, policy, undo, workspace
+    monkeypatch.setattr(audit, '_settle_tried', {})
+    log_id = policy.current().system_notes[workspace.LOG]
+    lib = library.load()
+    lib.decided = set(lib.decided) | {log_id}
+    library.save(lib)
+    undo.save(log_id, '<div>📊 Log</div>', 'a' * 64, 'audit:earlier:write')
+    return log_id
+
+
+def test_a_frozen_log_is_settled_and_the_queued_receipts_drain(monkeypatch):
+    """Measured 2026-09-23: 📊 Log held one divergent receipt from 2026-09-22
+    20:45 and 83 receipts queued behind it for a day. Once that write is proven
+    to have landed, the queue moves again."""
+    from types import SimpleNamespace as NS
+    from notron import audit, executor, undo
+    from notron.executor import Executor
+    log_id = _held_log(monkeypatch)
+    settled = []
+    monkeypatch.setattr(executor, 'settle_held', lambda nid: settled.append(nid)
+                        or undo.promote(nid, 'audit:earlier:write') or True)
+    queued = audit.enqueue('Operation verified', operation_id='first')
+    tried = []
+    monkeypatch.setattr(Executor, 'apply_write',
+                        lambda self, w: tried.append(w.operation_id) or NS(ok=True))
+    audit.drain()
+    assert settled == [log_id]
+    assert tried == [queued + ':write']
+    assert operations.current().get(queued).status == operations.S.RECEIPTED
+
+
+def test_an_unprovable_held_log_write_is_rechecked_at_most_every_ten_minutes(monkeypatch):
+    from notron import audit, executor
+    _held_log(monkeypatch)
+    checks = []
+    monkeypatch.setattr(executor, 'settle_held', lambda nid: checks.append(nid) or False)
+    audit.enqueue('Operation verified', operation_id='first')
+    audit.drain()
+    audit.drain()
+    assert len(checks) == 1
+
+
+def test_a_receipt_refused_only_because_the_log_was_held_is_retried_once_it_is_free(monkeypatch):
+    """36 of the 83 receipts queued on 2026-09-23 had been refused while the Log
+    was held — nothing written. Refused for that reason, they are not final."""
+    from types import SimpleNamespace as NS
+    from notron import audit
+    from notron.executor import Executor
+    queued = audit.enqueue('Operation verified', operation_id='first')
+    store = operations.current()
+    store.prepare('write:' + queued + ':write', queued + ':write', 'b' * 64)
+    store.transition(queued + ':write', operations.S.PREPARED, operations.S.CANCELLED,
+                     failure_code='backup_held')
+    tried = []
+    monkeypatch.setattr(Executor, 'apply_write',
+                        lambda self, w: tried.append(w.operation_id) or NS(ok=True))
+    audit.drain()
+    assert tried == [queued + ':write']
+    assert store.get(queued).status == operations.S.RECEIPTED

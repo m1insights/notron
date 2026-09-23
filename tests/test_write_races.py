@@ -1025,3 +1025,135 @@ def test_a_source_renamed_private_stops_checkpoints_once_the_memo_ages_out(fake_
         now[0] += executor.MEMO_TTL + 1
         with pytest.raises(ValueError):
             recovery.put(envelope.request_id, envelope.request_id + ':checkpoint:b', {}, (src,))
+
+
+def _diverge_once(monkeypatch):
+    """The line-break bug of 2026-09-22: a write that landed read back as divergent."""
+    calls = []
+    real = executor.write_landed
+    monkeypatch.setattr(executor, 'write_landed',
+                        lambda expected, observed: bool(calls.append(1)) or (len(calls) > 1 and real(expected, observed)))
+
+
+def test_one_divergent_log_write_no_longer_freezes_the_log_for_good(monkeypatch, fake_note_store, safe_executor, make_write):
+    """Measured 2026-09-23: a 📊 Log receipt landed on 2026-09-22 20:45 but read
+    back as divergent. Its staged backup was never settled, and from then on the
+    executor refused every write to the Log — 83 receipts queued behind it, and
+    📥 Ask Notron frozen the same way. The reply it added is visibly there, so
+    the next write settles the old one and goes ahead."""
+    from notron import operations, undo
+    nid = fake_note_store.add('Log', '<div>Log</div><div>earlier receipt</div>')
+    first = make_write(note_id=nid, mode='append', markdown='2026-09-22 20:45 — Operation verified')
+    _diverge_once(monkeypatch)
+    assert not safe_executor.apply_write(first).ok
+    assert undo.unresolved(nid)
+    second = make_write(note_id=nid, mode='append', markdown='2026-09-23 09:00 — Operation verified')
+    assert safe_executor.apply_write(second).ok
+    assert operations.current().get(first.operation_id).status == operations.S.APPLIED
+    assert not undo.unresolved(nid)
+    assert '09:00' in fake_note_store.body(nid)
+
+
+def test_a_divergent_write_that_did_not_land_still_holds_its_note(fake_note_store, safe_executor, make_write):
+    from notron import operations, undo
+    nid = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    first = make_write(note_id=nid, mode='append', markdown='an answer that never arrived')
+    fake_note_store.after_write = lambda target: fake_note_store.set_body(target, '<div>Ideas</div><div>original</div>')
+    assert not safe_executor.apply_write(first).ok
+    fake_note_store.after_write = None
+    second = make_write(note_id=nid, mode='append', markdown='a later answer')
+    assert not safe_executor.apply_write(second).ok
+    assert operations.current().get(first.operation_id).status == operations.S.NEEDS_REVIEW
+    assert operations.current().get(second.operation_id).failure_code == 'backup_held'
+    assert undo.unresolved(nid)
+
+
+def test_text_that_was_already_in_the_note_is_not_proof_the_write_landed(fake_note_store, safe_executor, make_write):
+    from notron import undo
+    before = '<div>Ideas</div><div>2026-09-22 20:45 — Operation verified</div>'
+    nid = fake_note_store.add('Ideas', before)
+    first = make_write(note_id=nid, mode='append', markdown='2026-09-22 20:45 — Operation verified')
+    fake_note_store.after_write = lambda target: fake_note_store.set_body(target, before)
+    assert not safe_executor.apply_write(first).ok
+    fake_note_store.after_write = None
+    assert not safe_executor.apply_write(make_write(note_id=nid, mode='append', markdown='next entry here')).ok
+    assert undo.unresolved(nid)
+
+
+def test_a_divergent_replace_is_never_settled_by_itself(monkeypatch, fake_note_store, safe_executor, make_write):
+    from notron import undo
+    nid = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    _diverge_once(monkeypatch)
+    assert not safe_executor.apply_write(make_write(note_id=nid, markdown='cleaned whole note')).ok
+    assert not safe_executor.apply_write(make_write(note_id=nid, mode='append', markdown='a later answer')).ok
+    assert undo.unresolved(nid)
+
+
+def test_settling_keeps_the_pre_write_body_as_the_undo_copy(monkeypatch, fake_note_store, safe_executor, make_write):
+    from notron import undo
+    before = '<div>Log</div><div>earlier receipt</div>'
+    nid = fake_note_store.add('Log', before)
+    _diverge_once(monkeypatch)
+    safe_executor.apply_write(make_write(note_id=nid, mode='append', markdown='the receipt that diverged'))
+    assert executor.settle_held(nid)
+    assert undo.peek(nid).before_html == before
+
+
+def test_review_dismiss_releases_a_held_write_and_keeps_its_backup(monkeypatch, fake_note_store, safe_executor, make_write):
+    from notron import operations, undo
+    before = '<div>Ideas</div><div>original</div>'
+    nid = fake_note_store.add('Ideas', before)
+    first = make_write(note_id=nid, mode='append', markdown='an answer that never arrived')
+    fake_note_store.after_write = lambda target: fake_note_store.set_body(target, before)
+    safe_executor.apply_write(first)
+    fake_note_store.after_write = None
+    assert [oid for _, oid, _ in executor.held_writes()] == [first.operation_id]
+    assert executor.release_held(first.operation_id)
+    assert operations.current().get(first.operation_id).status == operations.S.CANCELLED
+    assert not undo.unresolved(nid)
+    assert undo.peek(nid).before_html == before
+    assert safe_executor.apply_write(make_write(note_id=nid, mode='append', markdown='a later answer')).ok
+
+
+def test_review_names_a_held_write_and_dismiss_lets_it_go(monkeypatch, capsys, fake_note_store, safe_executor, make_write):
+    """On 2026-09-23 `notron review` said "Nothing on hold" while 📊 Log and
+    📥 Ask Notron were both frozen: a held write is not a request."""
+    from types import SimpleNamespace as NS
+    from notron import cli, undo
+    before = '<div>Ask</div><div>question</div>'
+    nid = fake_note_store.add('Ask', before)
+    first = make_write(note_id=nid, mode='append', markdown='an answer that never arrived')
+    fake_note_store.after_write = lambda target: fake_note_store.set_body(target, before)
+    safe_executor.apply_write(first)
+    cli.cmd_review(NS(action='list', ids=[], all=False))
+    assert first.operation_id[:14] in capsys.readouterr().out
+    cli.cmd_review(NS(action='dismiss', ids=[first.operation_id[:10]], all=False))
+    assert 'Dismissed 1' in capsys.readouterr().out
+    assert not undo.unresolved(nid)
+
+
+def test_a_write_that_timed_out_but_landed_is_settled_too(monkeypatch, fake_note_store, safe_executor, make_write):
+    from notron import operations, undo
+    nid = fake_note_store.add('Log', '<div>Log</div>')
+    first = make_write(note_id=nid, mode='append', markdown='a receipt that timed out')
+    original = fake_note_store.write_body
+    def applied_then_timeout(target, body):
+        original(target, body)
+        raise TimeoutError('synthetic uncertain timeout')
+    monkeypatch.setattr(notes, 'write_body', applied_then_timeout)
+    safe_executor.apply_write(first)
+    assert operations.current().get(first.operation_id).failure_code == 'unknown_outcome'
+    assert executor.settle_held(nid)
+    assert not undo.unresolved(nid)
+
+
+def test_a_held_write_whose_content_was_purged_stays_held(monkeypatch, fake_note_store, safe_executor, make_write):
+    from notron import recovery, undo
+    nid = fake_note_store.add('Log', '<div>Log</div>')
+    _diverge_once(monkeypatch)
+    safe_executor.apply_write(make_write(note_id=nid, mode='append', markdown='a receipt that diverged'))
+    def purged(oid):
+        raise ValueError('Recovery content unavailable; review required.')
+    monkeypatch.setattr(recovery, 'get', purged)
+    assert not executor.settle_held(nid)
+    assert undo.unresolved(nid)

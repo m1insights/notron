@@ -107,16 +107,110 @@ def write_landed(expected: str, observed_body: str) -> bool:
     """
     if revision(observed_body) == revision(expected):
         return True
-    from . import markup
     # Whitespace too, and only whitespace. Measured 2026-09-23 in a project
     # channel: Notes stored `<div><b>Notron:</b></div>` as
     # `<div><b>Notron:</b><br></div>`, one extra line break in the flattened
     # text, and a perfect reply was parked for review — which then held every
     # later line in that note for review too. Every visible character must
     # still be there, in order; only the spacing between them is Notes' own.
-    def flat(body):
-        return " ".join(markup.to_text(body).split())
-    return flat(observed_body) == flat(expected)
+    return _flat(observed_body) == _flat(expected)
+
+
+def _flat(body: str) -> str:
+    from . import markup
+    return " ".join(markup.to_text(body).split())
+
+
+# Settling needs the text a write added to be distinctive, or its reappearance
+# proves nothing: "Done." could have been typed by the user.
+MIN_PROOF_CHARS = 12
+_SETTLE_MODES = ('append', 'insert')
+
+
+def settle_held(note_id: str, live_body: str | None = None) -> bool:
+    """Settle a staged backup whose write never settled. True when none is held now.
+
+    Measured 2026-09-23: a 📊 Log receipt and a 📥 Ask Notron reply both landed
+    on 2026-09-22 20:45 but read back as divergent (the line-break bug
+    `write_landed` now tolerates). Nothing ever settled their backups, and a
+    held backup refuses every later write to its note — so for a day the Log
+    took no receipts and Ask took no replies.
+
+    The proof is narrow on purpose. Only an append or insert qualifies, and the
+    text it added must now occur in the note MORE often than in the body saved
+    before the write: only that write can have put it there, and later user
+    edits elsewhere in the note do not disturb the proof. Settling promotes the
+    backup, so the pre-write body stays the note's undo copy; a restore still
+    needs the exact post-write revision or a recovery copy. A whole-note
+    replace, a mark or a restore is never settled here — `notron review` is
+    the explicit way out.
+    """
+    from . import operations, recovery
+    with write_transaction():
+        pending = dict(undo.held()).get(note_id)
+        if pending is None:
+            return True
+        store = operations.current()
+        op = store.get(pending.operation_id)
+        if op is None:
+            return False
+        if op.status in (operations.S.APPLIED, operations.S.RECEIPTED):
+            undo.promote(note_id, op.operation_id)  # a crash between the two steps
+            return True
+        if (op.status != operations.S.NEEDS_REVIEW
+                or op.failure_code not in ('post_write_divergence', 'unknown_outcome')
+                or not policy.current().can_read(note_id)):
+            return False
+        try:
+            write = recovery.get(op.operation_id)['write']
+        except (ValueError, KeyError, TypeError):
+            return False
+        if write.get('mode') not in _SETTLE_MODES:
+            return False
+        from . import markup
+        added = _flat(markup.to_html(write.get('markdown') or ''))
+        if len(added) < MIN_PROOF_CHARS:
+            return False
+        live = notes.read_body(note_id) if live_body is None else live_body
+        if _flat(live).count(added) <= _flat(pending.before_html).count(added):
+            return False
+        store.transition(op.operation_id, operations.S.NEEDS_REVIEW, operations.S.APPLIED,
+                         external_id=note_id, observed_revision=revision(live))
+        undo.promote(note_id, op.operation_id)
+        return True
+
+
+def held_writes() -> list[tuple[str, str, str | None]]:
+    """(note ID, operation ID, failure code) for every write still holding its note."""
+    from . import operations
+    store = operations.current()
+    out = []
+    for note_id, pending in undo.held():
+        op = store.get(pending.operation_id)
+        out.append((note_id, pending.operation_id, op.failure_code if op else None))
+    return out
+
+
+def release_held(operation_id: str) -> bool:
+    """The user's explicit "leave it" for a held write (`notron review dismiss`).
+
+    Nothing is re-run and nothing is written to Notes. The operation is closed
+    and its backup is kept as the note's undo copy rather than thrown away —
+    the write may have landed, and that body is the only record of before.
+    """
+    from . import operations
+    with write_transaction():
+        note_id = next((nid for nid, pending in undo.held()
+                        if pending.operation_id == operation_id), None)
+        if note_id is None:
+            return False
+        store = operations.current()
+        op = store.get(operation_id)
+        if op and op.status == operations.S.NEEDS_REVIEW:
+            store.transition(operation_id, operations.S.NEEDS_REVIEW, operations.S.CANCELLED,
+                             failure_code=op.failure_code)
+        undo.promote(note_id, operation_id)
+        return True
 
 
 def capture_write(title: str, *, folder: str = workspace.FOLDER, note_id: str | None = None,
@@ -470,11 +564,16 @@ class Executor:
             return result(True, 'dry run — nothing written')
         try:
             if note and write.mode != 'restore' and not write.undo_reply:
+                if undo.unresolved(note.id):
+                    settle_held(note.id, old)  # from the body just read: no Notes call
                 undo.save(note.id, old, revision(new), write.operation_id)
-        except Exception:
+        except Exception as exc:
             if note:
                 undo.discard(note.id, write.operation_id)
-            return refuse('required backup failed; nothing written', 'write_failed')
+            # Held, not failed: the same write may go ahead once review settles
+            # the earlier one, and `audit.drain` retries a receipt on this code.
+            return refuse('required backup failed; nothing written',
+                          'backup_held' if isinstance(exc, undo.Unresolved) else 'write_failed')
         attempted = False
         try:
             # Commit APPLYING before the external effect, then make final checks.

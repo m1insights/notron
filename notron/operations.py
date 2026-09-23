@@ -48,7 +48,7 @@ _EDGES = {
 FAILURE_CODES = {'source_changed', 'source_missing', 'ambiguous_occurrence',
                  'interrupted', 'write_failed', 'policy_changed', 'unknown_outcome',
                  'payload_missing', 'revision_conflict', 'post_write_divergence',
-                 'clarification_required', 'unbound_target'}
+                 'clarification_required', 'unbound_target', 'backup_held'}
 
 
 def now() -> str:
