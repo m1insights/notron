@@ -38,7 +38,12 @@ SWEEP_EVERY = 20       # seconds between sweeps for #notron mentions (a survey i
 SETTLE = 12            # how long your typing must be still before she answers
 MIN_CHARS = 2
 
-CHANNEL_POLL = 10      # seconds between looks at project channels (one read each)
+# A project channel line usually arrives whole — Siri dictates it in one go —
+# so it waits 3 s, not the 12 s a typed Ask-note turn needs. Measured
+# 2026-09-23: poll + settle were 22 of a ~110 s channel reply. A half-typed line
+# answered early costs one more line; a Siri line waiting 12 s costs every time.
+CHANNEL_POLL = 3       # seconds between looks at project channels (one read each)
+CHANNEL_SETTLE = 3
 DUMP_POLL = 60         # seconds between looks at the Brain Dump (one cheap read)
 
 HERE_CHARS = 40_000    # how much of the note she was tagged in the model sees
@@ -100,6 +105,7 @@ class Watcher:
     dump_poll: float = DUMP_POLL
     dump_settle: float = DUMP_SETTLE
     channel_poll: float = CHANNEL_POLL
+    channel_settle: float = CHANNEL_SETTLE
     on_event: object = None
     scanner: mentions.Scanner = field(default_factory=mentions.Scanner)
 
@@ -306,7 +312,7 @@ class Watcher:
                 key = f"chan:{envelope.request_id}"
                 if not self._worth_trying(key):
                     continue
-                if not self._settled(key, q.text):
+                if not self._settled(key, q.text, settle=min(self.settle, self.channel_settle)):
                     continue
                 wrote = self._answer(q.text, title=ch.title, folder=workspace.FOLDER,
                                      after=q.after, source=q.text, note_id=ch.note_id, envelope=envelope)

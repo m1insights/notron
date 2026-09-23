@@ -517,6 +517,8 @@ def test_audit_failure_does_not_erase_verified_primary_success(fake_note_store, 
     fake_note_store.after_write = diverge_log
     result = executor.Executor().apply_write(make_write(note_id=nid))
     assert result.ok and 'cleaned' in fake_note_store.body(nid)
+    from notron import audit
+    audit.drain()  # the listener's next tick; receipts never ride the reply
     assert fake_note_store.body(log) == '<div>remote log edit</div>'
 
 
@@ -528,6 +530,8 @@ def test_blocked_write_keeps_generic_audit_without_mutating_target(fake_note_sto
     fake_note_store.set_body(nid, '<div>user edit</div>')
     assert not executor.Executor().apply_write(write).ok
     assert fake_note_store.body(nid) == '<div>user edit</div>'
+    from notron import audit
+    audit.drain()  # the listener's next tick; receipts never ride the reply
     assert 'BLOCKED' in fake_note_store.body(log)
 
 
@@ -708,6 +712,8 @@ def test_success_audit_payload_omits_note_derived_title(fake_note_store, make_wr
     log = fake_note_store.add(workspace.LOG, '<div>Log</div>', workspace.FOLDER)
     lib = library.load(); lib.system_notes[workspace.LOG] = log; library.save(lib)
     assert executor.Executor().apply_write(make_write(note_id=target)).ok
+    from notron import audit
+    audit.drain()  # the listener's next tick; receipts never ride the reply
     ledger = operations.current()
     audit = next(op for op in ledger.pending() if op.target_id == log)
     assert b'Source title' not in ledger.payload(audit.operation_id)
@@ -939,3 +945,83 @@ def test_recovery_copy_historical_commands_remain_inert_in_scanner_after_restart
     fake_note_store.rows[created[0]][0] = replace(fake_note_store.get_note(created[0]), modified='changed-after-restart')
     assert restarted.scan() == []
     assert created[0] not in restarted.pending
+
+
+# ------------------------------------------------ per-request metadata memo
+# Measured 2026-09-23: 22 of 46 Apple Notes calls in one channel reply were the
+# same two notes re-checked at every checkpoint and write step, ~1 s each. The
+# memo lets checkpoints reuse one request's reads; the checks right before the
+# write always read Notes again, so a revoked source still never reaches it.
+
+
+def test_checkpoints_reuse_one_requests_note_reads(fake_note_store, monkeypatch):
+    from notron import recovery, requests
+    src = fake_note_store.add('About', '<div>About</div>')
+    envelope = requests.create('q', source='cli')
+    requests.current().capture(envelope)
+    calls = []
+    real = fake_note_store.get_note
+    monkeypatch.setattr(notes, 'get_note', lambda nid: calls.append(nid) or real(nid))
+    with executor.metadata_memo():
+        for step in range(5):
+            recovery.put(envelope.request_id, f'{envelope.request_id}:checkpoint:{step}', {'s': step}, (src,))
+    assert calls == [src]
+    calls.clear()
+    recovery.put(envelope.request_id, envelope.request_id + ':checkpoint:after', {}, (src,))
+    assert calls == [src]                     # no memo outside a request
+
+
+def test_an_ignore_flip_mid_request_still_stops_the_write(fake_note_store, make_write, monkeypatch):
+    """Memo warm, then the user ignores a source: policy is always re-read."""
+    target = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    with executor.metadata_memo():
+        assert executor.Executor._content_readable((src, target), reuse=True)
+        lib = library.load(); lib.homes.discard(src); lib.decided.discard(src); lib.ignore.add(src); library.save(lib)
+        assert not executor.Executor._content_readable((src, target), reuse=True)
+        result = executor.Executor(audit=False).apply_write(
+            make_write(note_id=target, mode='append', markdown='more', content_sources=(src,)))
+    assert not result.ok and fake_note_store.writes == []
+
+
+def test_a_source_deleted_after_the_memo_filled_never_reaches_a_write(fake_note_store, make_write, monkeypatch):
+    """The memo still says the note exists; the final pre-write check must not believe it."""
+    from notron import recovery
+    target = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    write = make_write(note_id=target, mode='append', markdown='more', content_sources=(src,))
+
+    def delete_source(name, operation_id):
+        if name == 'before_applying':
+            del fake_note_store.rows[src]
+    monkeypatch.setattr(recovery, 'boundary', delete_source)
+    with executor.metadata_memo():
+        assert executor.Executor._content_readable((src, target), reuse=True)
+        result = executor.Executor(audit=False).apply_write(write)
+    assert not result.ok and fake_note_store.writes == []
+
+
+def test_fresh_reads_refresh_the_memo(fake_note_store):
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    with executor.metadata_memo():
+        assert executor.Executor._content_readable((src,), reuse=True)
+        del fake_note_store.rows[src]
+        assert not executor.Executor._content_readable((src,))
+        assert not executor.Executor._content_readable((src,), reuse=True)
+
+
+def test_a_source_renamed_private_stops_checkpoints_once_the_memo_ages_out(fake_note_store, monkeypatch):
+    """Review 2026-09-23: without an age limit, a note renamed to a private title
+    mid-request kept its content flowing into checkpoints for the whole request."""
+    from notron import recovery, requests
+    src = fake_note_store.add('Plans', '<div>Plans</div>')
+    envelope = requests.create('q', source='cli')
+    requests.current().capture(envelope)
+    now = [100.0]
+    monkeypatch.setattr(executor.time, 'monotonic', lambda: now[0])
+    with executor.metadata_memo():
+        recovery.put(envelope.request_id, envelope.request_id + ':checkpoint:a', {}, (src,))
+        fake_note_store.move(src, '🔒 Passwords', 'Notes')
+        now[0] += executor.MEMO_TTL + 1
+        with pytest.raises(ValueError):
+            recovery.put(envelope.request_id, envelope.request_id + ':checkpoint:b', {}, (src,))

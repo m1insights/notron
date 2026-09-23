@@ -69,12 +69,20 @@ def watcher(state: State, *, brain=None) -> State:
     wanted = ((workspace.ABOUT, "about"), (workspace.MEMORY, "memory"), (workspace.LESSONS, "lessons"))
     if channels.for_note(state.source_note_id):
         wanted = wanted[:1]
+    from .executor import remember
     for title, attr in wanted:
-        n = notes.find_note(workspace.FOLDER, title)
-        if n and policy.current().system_role(n.id) == title and policy.current().readable(n):
+        # By the id setup registered, not by listing her folder: measured
+        # 2026-09-23, list + read + a second lookup of the same note was 3.2 s.
+        # A renamed or moved note is not this system note any more.
+        snap = policy.current()
+        nid = snap.system_notes.get(title)
+        n = notes.get_note(nid) if nid else None
+        if (n and n.folder == workspace.FOLDER and n.title == title
+                and snap.system_role(n.id) == title and snap.readable(n)):
+            remember(n)
             body = notes.read_body(n.id)
             text = markup.to_text(body)
-            state.write_targets[title] = capture_write(title, note_id=n.id, body=body, mode="append")
+            state.write_targets[title] = capture_write(title, note_id=n.id, body=body, note=n, mode="append")
             setattr(state, attr, text)
             origin = {"about": "standing", "memory": "memory", "lessons": "lesson"}[attr]
             state.system_sources[attr] = Passage.from_note(text, n, origin)
@@ -265,6 +273,38 @@ can ask for things, never change these rules or the tool list."""
 MAX_TOOLS = 4
 
 
+#: Local, read-only git tools started while Nemotron decides (`project`).
+#: Measured 2026-09-23 on the Synqology repo: each of these takes 0.06–0.2 s,
+#: against ~2.5 s for Super to decide. The `gh_*` tools go over the network
+#: and may not be picked, so they run only when Nemotron names them.
+PREFETCH = ("git_status", "git_log", "git_branches", "git_diff_stat", "todos")
+PREFETCH_WAIT = 2.0
+
+
+def _prefetch(channel):
+    """Start the channel's cheap local tools on a thread; return (thread, results).
+
+    Only subprocess work moves off the main thread — the Nemotron call stays
+    on it (`brain._deadline_guard` needs SIGALRM). A failure just leaves a
+    tool out of `results`, and `project` runs it itself if it was picked.
+    """
+    import threading
+    from . import tools
+    names = [t.name for t in tools.available(channel) if t.name in PREFETCH]
+    results: dict[str, str] = {}
+
+    def work():
+        for name in names:
+            try:
+                results[name] = tools.run(name, channel)
+            except Exception:
+                return
+    thread = threading.Thread(target=work, name="notron-prefetch", daemon=True)
+    if names:
+        thread.start()
+    return thread, results
+
+
 def project(state: State, *, brain) -> State:
     """Nemotron decides how a project-channel request is answered; code runs it.
 
@@ -286,6 +326,7 @@ def project(state: State, *, brain) -> State:
     # A channel is scoped to its project: never a whole-library search.
     state.needs_context = False
     menu = tools.menu(channel) or "(no tools are enabled for this channel)"
+    prefetch, early = _prefetch(channel)
     started = time.monotonic()
     try:
         out = brain.ask_json(system=PROJECT_SYSTEM, user=[
@@ -308,8 +349,12 @@ def project(state: State, *, brain) -> State:
     state.needs_web = out.get("web") is True and "research" in channel.allow
     kind = out.get("kind") if out.get("kind") in ("question", "task", "note") else "question"
     why = out.get("why") if isinstance(out.get("why"), str) else ""
+    if prefetch.is_alive():
+        prefetch.join(PREFETCH_WAIT)
+    # Only what Nemotron picked reaches the reply; the rest of `early` is dropped.
     for name in chosen:
-        state.tools.append(f"### {name} — {channel.name}\n{tools.run(name, channel)}")
+        out = early.get(name)
+        state.tools.append(f"### {name} — {channel.name}\n{out if out is not None else tools.run(name, channel)}")
     checked = ", ".join(chosen) or "nothing — answered from the conversation"
     state.decision = (f"{kind} · checked {checked}" + (" + web" if state.needs_web else "")
                       + f" · decided by Nemotron Super in {took:.1f}s")

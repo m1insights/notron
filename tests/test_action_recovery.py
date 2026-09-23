@@ -233,6 +233,7 @@ def test_applied_action_recovers_missing_audit_without_reapplying(recovery_harne
     assert len(h.rows) == 1
     monkeypatch.setattr(audit, 'enqueue', enqueue)
     h.run_once()
+    audit.drain()  # the listener's next tick; receipts never ride the reply
     log_id = f'{workspace.FOLDER}/{workspace.LOG}'
     from hashlib import sha256
     audit_id = 'audit:' + sha256('r1:action:0'.encode()).hexdigest()

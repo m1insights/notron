@@ -201,6 +201,7 @@ def test_graph_sources_reach_real_brain_with_provenance(outbound_policy, outboun
     def find(folder, title):
         return notes.Note(title, title, folder, '') if title in roles else None
     monkeypatch.setattr(notes, 'find_note', find)
+    monkeypatch.setattr(notes, 'get_note', lambda nid: find(workspace.FOLDER, nid))
     monkeypatch.setattr(notes, 'read_body', lambda _: f'<div>Preference password: {SECRET}</div>')
     brain, calls = outbound_transport
     calls.replies.extend(['{"intent":"question","needs_context":false,"needs_web":true}', 'synthetic answer'])

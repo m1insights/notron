@@ -107,6 +107,15 @@ def run_request(envelope, *, brain, dry_run: bool = False,
     Existing completed/uncertain requests are never silently replayed. The
     envelope carries provenance, but does not grant an explicit reply capability.
     """
+    from .executor import metadata_memo
+    with metadata_memo():
+        return _run_request(envelope, brain=brain, dry_run=dry_run, on_node=on_node,
+                            trigger=trigger, carried=carried,
+                            conversation_context=conversation_context)
+
+
+def _run_request(envelope, *, brain, dry_run, on_node, trigger, carried,
+                 conversation_context) -> State:
     from . import policy, retention, requests, recovery
     policy.require_ready()
     retention.reconcile()

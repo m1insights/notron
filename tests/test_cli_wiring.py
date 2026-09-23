@@ -132,3 +132,18 @@ def test_the_fake_still_matches_the_real_signature():
 
     assert (list(inspect.signature(fake_build).parameters)
             == list(inspect.signature(index.build).parameters))
+
+
+def test_a_one_shot_command_delivers_its_own_log_receipt(monkeypatch):
+    """Review 2026-09-23: writes only queue receipts now, and with no listener
+    running nothing would deliver a CLI command's receipt."""
+    from notron import cli
+    delivered = []
+    monkeypatch.setattr(cli, '_deliver_receipts', lambda: delivered.append(1))
+    monkeypatch.setattr(cli, 'cmd_ask', lambda args: None)
+    for argv in (['ask', 'hello'], ['ask', 'hello', '--dry-run']):
+        try:
+            cli.main(argv)
+        except SystemExit:
+            pass
+    assert delivered == [1]                 # the real run, not the dry run

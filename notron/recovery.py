@@ -22,7 +22,9 @@ def reference(operation_id: str) -> str:
 def put(request_id, operation_id, value, sources=()):
     from .executor import Executor
     sources = tuple(sorted(set(sources)))
-    if not Executor._content_readable(sources):
+    # A checkpoint may trust this request's earlier read of the same notes;
+    # every effect re-reads them fresh before it happens (`executor._MEMO`).
+    if not Executor._content_readable(sources, reuse=True):
         raise ValueError('Recovery content source is no longer readable.')
     envelope = requests.active_request()
     active = bool(envelope and envelope.request_id == request_id)

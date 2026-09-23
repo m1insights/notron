@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace, field
 from contextlib import contextmanager
+from contextvars import ContextVar
 import fcntl
 import json
 import os
 import threading
+import time
 from hashlib import sha256
 from datetime import datetime
 
@@ -24,6 +26,35 @@ from .securestore import StorageError
 _LOCAL_LOCK = threading.RLock()
 _LOCK_DEPTH = threading.local()
 MAX_REASON_CHARS = 400
+
+# Note metadata read once in this request, keyed by note id (None = missing).
+# Measured 2026-09-23: 22 of 46 Apple Notes calls in one channel reply, ~1 s
+# each, were the same two contributing notes re-checked at every checkpoint.
+# Only `reuse=True` callers read from it, and none of them is the last check
+# before an effect: every write and EventKit save re-reads Notes right before
+# it happens. Policy is never memoized — an ignore flip is always seen.
+# An entry is trusted for MEMO_TTL seconds only, so a note deleted or renamed
+# to a private title mid-request stops its checkpoints within that window (the
+# write itself is always refused fresh; the next reconcile purges the rest).
+_MEMO: ContextVar[dict | None] = ContextVar('notron_metadata_memo', default=None)
+MEMO_TTL = 10.0
+
+
+def remember(note) -> None:
+    """Offer a just-read note to this request's memo (no-op outside one)."""
+    memo = _MEMO.get()
+    if memo is not None and note is not None:
+        memo[note.id] = (note, time.monotonic())
+
+
+@contextmanager
+def metadata_memo():
+    """Scope a metadata memo to one request (`graph.run_request`)."""
+    token = _MEMO.set({})
+    try:
+        yield
+    finally:
+        _MEMO.reset(token)
 
 
 def _failure_reason(exc: Exception) -> str:
@@ -89,15 +120,17 @@ def write_landed(expected: str, observed_body: str) -> bool:
 
 
 def capture_write(title: str, *, folder: str = workspace.FOLDER, note_id: str | None = None,
-                  body: str | None = None, **kwargs) -> Write:
+                  body: str | None = None, note: notes.Note | None = None, **kwargs) -> Write:
     """Bind an explicit ID and revision BEFORE generating a proposed change.
 
-    Supplying body uses the exact already-read model input. A missing/ambiguous
-    target stays unbound and cannot silently create a replacement.
+    Supplying body uses the exact already-read model input; supplying `note`
+    uses the metadata read alongside it. A missing/ambiguous target stays
+    unbound and cannot silently create a replacement.
     """
     if note_id is None and folder == workspace.FOLDER:
         note_id = policy.current().system_notes.get(title)
-    note = notes.get_note(note_id) if note_id else notes.unique_note(folder, title)
+    if note is None or note.id != note_id:
+        note = notes.get_note(note_id) if note_id else notes.unique_note(folder, title)
     if note and policy.current().readable(note):
         body = notes.read_body(note.id) if body is None else body
         if kwargs.get('mode') == 'append' and 'anchor' not in kwargs:
@@ -215,8 +248,24 @@ class Executor:
         return tuple(sorted(nid for nid in sources if nid))
 
     @staticmethod
-    def _content_readable(sources: tuple[str, ...]) -> bool:
-        current = [notes.get_note(nid) for nid in sources]
+    def _content_readable(sources: tuple[str, ...], *, reuse: bool = False) -> bool:
+        """All contributing notes exist and policy lets her read them.
+
+        `reuse` accepts this request's earlier metadata read (see `_MEMO`); only
+        checkpoints and pre-checks that a fresh check follows may pass it.
+        """
+        memo = _MEMO.get()
+        current = []
+        for nid in sources:
+            if reuse and memo is not None and nid in memo:
+                note, at = memo[nid]
+                if time.monotonic() - at <= MEMO_TTL:
+                    current.append(note)
+                    continue
+            note = notes.get_note(nid)
+            if memo is not None:
+                memo[nid] = (note, time.monotonic())
+            current.append(note)
         # Read current policy after the metadata reads; those reads may overlap
         # a policy save. All contributing Notes sources must remain readable.
         snap = policy.current()
@@ -344,7 +393,8 @@ class Executor:
                 return result(False, 'explicit recovery-copy confirmation and saved snapshot are required')
         if creation and not permitted(note):
             return result(False, 'creation target exists or policy denied access')
-        if not self._content_readable(content_sources) or not self._sources_current(write):
+        # A pre-check: the read below and the one right before the write are fresh.
+        if not self._content_readable(content_sources, reuse=True) or not self._sources_current(write):
             return result(False, 'source missing, changed or ambiguous; nothing copied')
         old = notes.read_body(note.id) if note else ''
         # A target read can overlap revocation before this operation exists.
@@ -461,6 +511,7 @@ class Executor:
                     store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
                                      failure_code='policy_changed')
                 return result(False, 'note policy changed; nothing written')
+            # The final check before the write: never from the memo.
             if not self._content_readable(content_sources):
                 if store.get(write.operation_id).status == operations.S.APPLYING:
                     store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
@@ -785,7 +836,9 @@ class Executor:
             return
         try:
             from . import audit
+            # Queue only. Delivering here was a full 📊 Log append (~3.6 s,
+            # measured 2026-09-23) inside every reply; the listener's next tick
+            # drains it. Receipts are best effort either way (Invariant 4).
             audit.enqueue(line, operation_id=operation_id)
-            audit.drain(limit=1)
         except Exception:
             pass  # Primary APPLIED state never depends on an audit adapter.

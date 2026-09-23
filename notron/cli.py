@@ -541,6 +541,21 @@ def cmd_graph(args):
     print(f"\n{graph.diagram()}\n")
 
 
+#: One-shot commands that can write. A write only queues its 📊 Log receipt
+#: (the listener's tick delivers it); without a listener nothing would, so these
+#: deliver their own on the way out. Best effort, like every receipt.
+WRITES = frozenset({'ask', 'plan', 'morning', 'file', 'care', 'reflect'})
+
+
+def _deliver_receipts():
+    try:
+        from . import audit, credentials
+        if credentials._provider is not None:
+            audit.drain()
+    except Exception:
+        pass
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="notron", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -667,6 +682,8 @@ def main(argv=None):
     args = p.parse_args(argv)
     try:
         args.fn(args)
+        if args.cmd in WRITES and not getattr(args, 'dry_run', False):
+            _deliver_receipts()
     except (CredentialUnavailable, StorageError) as problem:
         # Generic by default: this line can land in a log, a launchd file or a
         # notification, where the detail is not actionable and may be sensitive.
