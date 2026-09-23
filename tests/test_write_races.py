@@ -1008,3 +1008,20 @@ def test_fresh_reads_refresh_the_memo(fake_note_store):
         del fake_note_store.rows[src]
         assert not executor.Executor._content_readable((src,))
         assert not executor.Executor._content_readable((src,), reuse=True)
+
+
+def test_a_source_renamed_private_stops_checkpoints_once_the_memo_ages_out(fake_note_store, monkeypatch):
+    """Review 2026-09-23: without an age limit, a note renamed to a private title
+    mid-request kept its content flowing into checkpoints for the whole request."""
+    from notron import recovery, requests
+    src = fake_note_store.add('Plans', '<div>Plans</div>')
+    envelope = requests.create('q', source='cli')
+    requests.current().capture(envelope)
+    now = [100.0]
+    monkeypatch.setattr(executor.time, 'monotonic', lambda: now[0])
+    with executor.metadata_memo():
+        recovery.put(envelope.request_id, envelope.request_id + ':checkpoint:a', {}, (src,))
+        fake_note_store.move(src, '🔒 Passwords', 'Notes')
+        now[0] += executor.MEMO_TTL + 1
+        with pytest.raises(ValueError):
+            recovery.put(envelope.request_id, envelope.request_id + ':checkpoint:b', {}, (src,))

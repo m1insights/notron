@@ -76,7 +76,10 @@ def _env() -> dict:
     keep = ("PATH", "HOME", "USER", "LANG", "TMPDIR")
     env = {k: os.environ[k] for k in keep if k in os.environ}
     env.update(GIT_PAGER="cat", PAGER="cat", GH_PAGER="cat", NO_COLOR="1",
-               GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0")
+               GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0",
+               # `git status` otherwise takes index.lock, and now runs early on
+               # every channel line (nodes.PREFETCH) — never block the user's git.
+               GIT_OPTIONAL_LOCKS="0")
     return env
 
 

@@ -14,6 +14,7 @@ import fcntl
 import json
 import os
 import threading
+import time
 from hashlib import sha256
 from datetime import datetime
 
@@ -32,14 +33,18 @@ MAX_REASON_CHARS = 400
 # Only `reuse=True` callers read from it, and none of them is the last check
 # before an effect: every write and EventKit save re-reads Notes right before
 # it happens. Policy is never memoized — an ignore flip is always seen.
+# An entry is trusted for MEMO_TTL seconds only, so a note deleted or renamed
+# to a private title mid-request stops its checkpoints within that window (the
+# write itself is always refused fresh; the next reconcile purges the rest).
 _MEMO: ContextVar[dict | None] = ContextVar('notron_metadata_memo', default=None)
+MEMO_TTL = 10.0
 
 
 def remember(note) -> None:
     """Offer a just-read note to this request's memo (no-op outside one)."""
     memo = _MEMO.get()
     if memo is not None and note is not None:
-        memo[note.id] = note
+        memo[note.id] = (note, time.monotonic())
 
 
 @contextmanager
@@ -253,11 +258,13 @@ class Executor:
         current = []
         for nid in sources:
             if reuse and memo is not None and nid in memo:
-                current.append(memo[nid])
-                continue
+                note, at = memo[nid]
+                if time.monotonic() - at <= MEMO_TTL:
+                    current.append(note)
+                    continue
             note = notes.get_note(nid)
             if memo is not None:
-                memo[nid] = note
+                memo[nid] = (note, time.monotonic())
             current.append(note)
         # Read current policy after the metadata reads; those reads may overlap
         # a policy save. All contributing Notes sources must remain readable.
