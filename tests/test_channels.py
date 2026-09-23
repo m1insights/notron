@@ -380,11 +380,12 @@ def test_a_channel_reply_reads_only_about_me(monkeypatch):
     _register()
     from notron import notes
     read = []
-    real = notes.find_note
-    monkeypatch.setattr(notes, "find_note", lambda folder, title: read.append(title) or real(folder, title))
+    real = notes.get_note
+    monkeypatch.setattr(notes, "get_note", lambda nid: read.append(nid) or real(nid))
     nodes.watcher(_channel_state(), brain=None)
-    assert workspace.ABOUT in read
-    assert workspace.MEMORY not in read and workspace.LESSONS not in read
+    ids = policy.current().system_notes
+    assert ids[workspace.ABOUT] in read
+    assert ids.get(workspace.MEMORY, "-") not in read and ids.get(workspace.LESSONS, "-") not in read
 
 
 # ----------------------------------------------------------------- latency
@@ -427,3 +428,30 @@ def test_the_ask_note_still_waits_for_typing_to_settle(monkeypatch):
 def test_channels_are_looked_at_every_three_seconds():
     """Measured 2026-09-23: up to 10 s passed before a channel line was even seen."""
     assert watch.CHANNEL_POLL <= 3 and watch.Watcher(brain=None).channel_poll <= 3
+
+
+def test_about_me_is_read_by_its_registered_id_not_a_folder_listing(monkeypatch):
+    """Measured 2026-09-23: the watcher node took 3.2 s — a folder listing to find
+    About Me, a body read, then a second metadata lookup of the same note."""
+    from notron import notes
+    _register()
+    monkeypatch.setattr(notes, "list_notes", lambda folder: pytest.fail("listed her folder"))
+    looked = []
+    real = notes.get_note
+    monkeypatch.setattr(notes, "get_note", lambda nid: looked.append(nid) or real(nid))
+    state = nodes.watcher(_channel_state(), brain=None)
+    about = policy.current().system_notes[workspace.ABOUT]
+    assert looked.count(about) == 1          # not looked up twice
+    assert state.write_targets[workspace.ABOUT].note_id == about
+    assert "about" in state.system_sources
+
+
+def test_a_renamed_about_me_is_not_read_as_about_me(monkeypatch):
+    from notron import notes
+    _register()
+    about = policy.current().system_notes[workspace.ABOUT]
+    monkeypatch.setattr(notes, "get_note",
+                        lambda nid: notes.Note(nid, "Shopping", workspace.FOLDER, "m") if nid == about else None)
+    monkeypatch.setattr(notes, "read_body", lambda nid: pytest.fail("read a note that is no longer About Me"))
+    state = nodes.watcher(_channel_state(), brain=None)
+    assert state.about == "" and "about" not in state.system_sources

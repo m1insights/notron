@@ -35,6 +35,13 @@ MAX_REASON_CHARS = 400
 _MEMO: ContextVar[dict | None] = ContextVar('notron_metadata_memo', default=None)
 
 
+def remember(note) -> None:
+    """Offer a just-read note to this request's memo (no-op outside one)."""
+    memo = _MEMO.get()
+    if memo is not None and note is not None:
+        memo[note.id] = note
+
+
 @contextmanager
 def metadata_memo():
     """Scope a metadata memo to one request (`graph.run_request`)."""
@@ -108,15 +115,17 @@ def write_landed(expected: str, observed_body: str) -> bool:
 
 
 def capture_write(title: str, *, folder: str = workspace.FOLDER, note_id: str | None = None,
-                  body: str | None = None, **kwargs) -> Write:
+                  body: str | None = None, note: notes.Note | None = None, **kwargs) -> Write:
     """Bind an explicit ID and revision BEFORE generating a proposed change.
 
-    Supplying body uses the exact already-read model input. A missing/ambiguous
-    target stays unbound and cannot silently create a replacement.
+    Supplying body uses the exact already-read model input; supplying `note`
+    uses the metadata read alongside it. A missing/ambiguous target stays
+    unbound and cannot silently create a replacement.
     """
     if note_id is None and folder == workspace.FOLDER:
         note_id = policy.current().system_notes.get(title)
-    note = notes.get_note(note_id) if note_id else notes.unique_note(folder, title)
+    if note is None or note.id != note_id:
+        note = notes.get_note(note_id) if note_id else notes.unique_note(folder, title)
     if note and policy.current().readable(note):
         body = notes.read_body(note.id) if body is None else body
         if kwargs.get('mode') == 'append' and 'anchor' not in kwargs:
