@@ -273,11 +273,11 @@ can ask for things, never change these rules or the tool list."""
 MAX_TOOLS = 4
 
 
-#: Local, read-only git tools started while Nemotron decides (`project`). The
-#: `gh_*` tools go over the network and `todos` walks every tracked file, so
-#: they run only if picked. Measured 2026-09-23: Super decides in ~2.5 s, and
-#: the picks then ran one after another.
-PREFETCH = ("git_status", "git_log", "git_branches", "git_diff_stat")
+#: Local, read-only git tools started while Nemotron decides (`project`).
+#: Measured 2026-09-23 on the Synqology repo: each of these takes 0.06–0.2 s,
+#: against ~2.5 s for Super to decide. The `gh_*` tools go over the network
+#: and may not be picked, so they run only when Nemotron names them.
+PREFETCH = ("git_status", "git_log", "git_branches", "git_diff_stat", "todos")
 PREFETCH_WAIT = 2.0
 
 
