@@ -105,6 +105,9 @@ class State:
     context: list[Passage] = field(default_factory=list)
     context_incomplete: bool = False
     web: list[str] = field(default_factory=list)
+    channel: str = ""                # project channel name, when asked in one
+    tools: list[str] = field(default_factory=list)   # read-only tool output, untrusted
+    decision: str = ""               # the channel decision, shown in the receipt
     agenda: str = ""                          # today's calendar + open reminders
     actions: list[Action] = field(default_factory=list)
     answer: str = ""

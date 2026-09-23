@@ -32,11 +32,15 @@ class PolicySnapshot:
     start_from: datetime | None = None
     allow_new_notes: bool = False
     system_notes: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    #: Project channel notes the user registered with `notron channel add`.
+    #: Every new line in one is addressed to her, so reading it is the grant.
+    channels: frozenset[str] = frozenset()
 
     def can_read(self, note_id: str) -> bool:
         return bool(self.status == 'ready' and note_id and note_id not in self.ignore
                     and (note_id in self.homes or note_id in self.decided
-                         or note_id in self.system_notes.values() or self.allow_new_notes))
+                         or note_id in self.system_notes.values() or note_id in self.channels
+                         or self.allow_new_notes))
 
     def can_file(self, note_id: str) -> bool:
         return self.can_read(note_id) and note_id in self.homes
@@ -50,7 +54,8 @@ class PolicySnapshot:
         from . import privacy
         if not self.can_read(note.id) or privacy.is_vault(note.title) or privacy.is_private(note.title):
             return False
-        if note.id in self.homes | self.decided or note.id in self.system_notes.values():
+        if (note.id in self.homes | self.decided | self.channels
+                or note.id in self.system_notes.values()):
             return True
         # Unknown dates cannot defeat a configured cutoff.
         return self.start_from is None or (note.modified_at is not None
@@ -87,6 +92,10 @@ def decode_policy(raw) -> PolicySnapshot:
                    for k, v in system.items())
             or len(set(system.values())) != len(system)):
         raise ValueError('invalid system note IDs')
+    channels = raw.get('channels', [])
+    if (not isinstance(channels, list) or any(not isinstance(v, str) or not v for v in channels)
+            or set(channels) & set(system.values())):
+        raise ValueError('invalid channel note IDs')
     # An empty file written by setup carries system IDs, but no user selection.
     ready = bool(chosen or raw['homes'] or raw['ignore'] or raw['decided'])
     return PolicySnapshot(
@@ -95,7 +104,7 @@ def decode_policy(raw) -> PolicySnapshot:
         decided=frozenset(raw['decided']), chosen_at=chosen,
         start_from=parse_start(start) if start else None,
         allow_new_notes=raw.get('allow_new_notes', False),
-        system_notes=MappingProxyType(dict(system)))
+        system_notes=MappingProxyType(dict(system)), channels=frozenset(channels))
 
 
 def load_policy(path: Path) -> PolicySnapshot:

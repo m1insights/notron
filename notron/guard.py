@@ -146,10 +146,26 @@ def check(*, folder: str, title: str, old_body: str, new_body: str, mode: str,
     if mode != "restore" and privacy.contains_secret(markup.to_text(added)):
         return Verdict(False, "the text contains something that looks like a password or key")
 
-    if mode == "replace" and title in workspace.SHARED:
+    if mode == "replace" and (title in workspace.SHARED or _is_channel(folder, title)):
         return Verdict(False, f"{title} is shared with the user; append only.")
 
     return ALLOW
+
+
+def _is_channel(folder: str, title: str) -> bool:
+    """A project channel is shared exactly like 📥 Ask Notron: she adds, never rewrites.
+
+    Fails closed — an unreadable registry treats every `Notron …` note in her
+    folder as a channel, because the cost of wrongly refusing a rewrite there is
+    nothing, and the cost of wrongly allowing one is the user's own lines.
+    """
+    from . import channels
+    if folder != workspace.FOLDER:
+        return False
+    try:
+        return any(c.title == title for c in channels.load())
+    except channels.ChannelError:
+        return title.startswith(channels.title_for(""))
 
 
 def _hour(match) -> int | None:

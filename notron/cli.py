@@ -106,6 +106,43 @@ def cmd_key(args):
     print(f"Stored {args.name}.")
 
 
+def cmd_channel(args):
+    """Project channels: a note per project that every new line in is for her."""
+    from . import channels, tools
+    if args.action == 'list':
+        found = channels.load()
+        if not found:
+            print("\n  No channels yet. Try: notron channel add Synqology --repo ~/Dev/apps/synqology\n")
+            return
+        print()
+        for c in found:
+            where = ", ".join(x for x in (c.repo, c.github and f"github {c.github}") if x) or "no project linked"
+            print(f"  {c.title:28} {where}  [{', '.join(c.allow)}]")
+            print(f"  {'':28} tools: {', '.join(t.name for t in tools.available(c)) or 'none'}")
+        print()
+        return
+    if not args.name:
+        raise SystemExit(f"'{args.action}' needs a channel name, e.g. notron channel {args.action} Synqology")
+    if args.action == 'remove':
+        gone = channels.remove(args.name)
+        print(f"\n  Removed {gone.title}. The note stays in Notes; she no longer answers there.\n")
+        return
+    _add_channel(args)
+
+
+@maintenance
+def _add_channel(args):
+    from . import channels
+    allow = tuple(a.strip() for a in args.allow.split(',') if a.strip())
+    try:
+        ch, state = channels.add(" ".join(args.name), repo=args.repo or "", github=args.github or "", allow=allow)
+    except channels.ChannelError as problem:
+        _setup_failure(problem)
+    print(f"\n  {state:8} {ch.title}  (in {workspace.FOLDER})")
+    print(f"\n  Say: “Hey Siri, add is CI green to my {ch.title} note.”")
+    print("  Or type any line into it. She answers underneath, while `notron listen` runs.\n")
+
+
 @maintenance
 def cmd_setup(args):
     print(f"\nSetting up {workspace.FOLDER} in Apple Notes\n")
@@ -568,6 +605,15 @@ def main(argv=None):
     pe.set_defaults(fn=cmd_permissions)
     sub.add_parser("agenda", help="what's in your calendar and what's still open"
                    ).set_defaults(fn=cmd_agenda)
+
+    ch = sub.add_parser('channel', help='project channels: a note per project you can talk to, or tell Siri')
+    ch.add_argument('action', choices=['add', 'list', 'remove'])
+    ch.add_argument('name', nargs='*', help='the project name; the note is called "Notron <name>"')
+    ch.add_argument('--repo', help='the local repository folder')
+    ch.add_argument('--github', help='the GitHub repository, owner/name')
+    ch.add_argument('--allow', default='read,research',
+                    help='what she may use there: read (repo + GitHub, read-only), research (web)')
+    ch.set_defaults(fn=cmd_channel)
 
     from .credentials import PROVISIONABLE
     keys = sub.add_parser('key', help='store, list or remove the API keys Notron uses')

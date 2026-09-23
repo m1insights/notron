@@ -40,6 +40,7 @@ class Library:
     chosen_at: str = ""
     allow_new_notes: bool = False
     system_notes: dict[str, str] = field(default_factory=dict)
+    channels: set[str] = field(default_factory=set)
     status: str = "unconfigured"
 
     @property
@@ -55,7 +56,8 @@ class Library:
         return dict(version=1, homes=sorted(self.homes), ignore=sorted(self.ignore),
                     decided=sorted(self.decided), chosen_at=self.chosen_at,
                     start_from=self.start_from.strftime('%Y-%m-%d') if self.start_from else None,
-                    allow_new_notes=self.allow_new_notes, system_notes=dict(self.system_notes))
+                    allow_new_notes=self.allow_new_notes, system_notes=dict(self.system_notes),
+                    channels=sorted(self.channels))
 
     def hides(self, note_id: str, modified: str) -> bool:
         return not self.snapshot().readable(notes.Note(note_id, '', '', modified))
@@ -85,7 +87,7 @@ def load() -> Library:
     return Library(homes=set(snap.homes), ignore=set(snap.ignore), decided=set(snap.decided),
                    start_from=snap.start_from, chosen_at=snap.chosen_at,
                    allow_new_notes=snap.allow_new_notes, system_notes=dict(snap.system_notes),
-                   status=snap.status)
+                   channels=set(snap.channels), status=snap.status)
 
 
 def save(lib: Library, *, reset: bool = False) -> None:

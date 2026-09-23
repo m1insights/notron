@@ -38,6 +38,7 @@ SWEEP_EVERY = 20       # seconds between sweeps for #notron mentions (a survey i
 SETTLE = 12            # how long your typing must be still before she answers
 MIN_CHARS = 2
 
+CHANNEL_POLL = 10      # seconds between looks at project channels (one read each)
 DUMP_POLL = 60         # seconds between looks at the Brain Dump (one cheap read)
 
 HERE_CHARS = 40_000    # how much of the note she was tagged in the model sees
@@ -98,6 +99,7 @@ class Watcher:
     settle: float = SETTLE
     dump_poll: float = DUMP_POLL
     dump_settle: float = DUMP_SETTLE
+    channel_poll: float = CHANNEL_POLL
     on_event: object = None
     scanner: mentions.Scanner = field(default_factory=mentions.Scanner)
 
@@ -108,6 +110,7 @@ class Watcher:
     _runtime_ready: bool = False
     _last_sweep: float = 0
     _last_dump: float = 0
+    _last_channels: float = 0
     _intent_version: int = -1
 
     # A question that produced no write stays "unanswered" in the note, so the
@@ -264,6 +267,54 @@ class Watcher:
                 self._pending.pop(stale, None)
             return              # one at a time; the note has moved underneath us
 
+    def check_channels(self) -> bool:
+        """Answer one settled line in a project channel. True if she answered.
+
+        A channel reads exactly like 📥 Ask Notron — no tag, every new run of
+        lines is a request — because a line Siri dictated into it carries no
+        tag and must still be heard. What it may touch is the registry's
+        business (`channels.py`), never the note's.
+        """
+        from . import channels
+        policy.require_ready()
+        from . import retention
+        retention.require_ready()
+        snap = policy.current()
+        for ch in channels.load():
+            if ch.note_id not in snap.channels or not snap.can_read(ch.note_id):
+                continue
+            try:
+                body = notes.read_body(ch.note_id)
+            except NotesBusy:
+                raise
+            except AppleScriptError:
+                self._say(f"  {ch.title} not found — remove it with `notron channel remove {ch.name}`")
+                continue
+            asks = [q for q in conversation.unanswered(body, ignore=(ch.title, *ASK_FURNITURE))
+                    if len(q.text) >= MIN_CHARS]
+            store = requests.current()
+            envelopes = store.observe(ch.note_id, body, asks, source='ask',
+                                      title=ch.title, folder=workspace.FOLDER)
+            for q, envelope in zip(asks, envelopes):
+                record = store.get(envelope.request_id)
+                from . import recovery
+                if record.status != 'prepared' and not recovery.available(record):
+                    if record.status in {'running', 'needs_review'}:
+                        self._say('  request needs review before it can run again')
+                    continue
+                key = f"chan:{envelope.request_id}"
+                if not self._worth_trying(key):
+                    continue
+                if not self._settled(key, q.text):
+                    continue
+                wrote = self._answer(q.text, title=ch.title, folder=workspace.FOLDER,
+                                     after=q.after, source=q.text, note_id=ch.note_id, envelope=envelope)
+                self._attempted(key, wrote)
+                for stale in [k for k in self._pending if k.startswith("chan:")]:
+                    self._pending.pop(stale, None)
+                return True
+        return False
+
     def sweep_mentions(self) -> None:
         from . import retention
         live = retention.reconcile()
@@ -276,6 +327,9 @@ class Watcher:
                 record = requests.current().get(key[4:])
                 return record is not None and record.envelope is not None and record.envelope.note_id in live
             if key.startswith('ask:'): return self._ask_id is not None
+            if key.startswith('chan:'):
+                record = requests.current().get(key[5:])
+                return record is not None and record.envelope is not None and record.envelope.note_id in live
             if key == 'dump': return self._dump_id is not None
             return False
         self._pending = {key: value for key, value in self._pending.items() if retain(key)}
@@ -493,6 +547,12 @@ class Watcher:
             if store.paused or store.row()['stop_requested']:
                 return
             now = time.time()
+            if now - self._last_channels >= self.channel_poll:
+                self._last_channels = now
+                if self.check_channels():
+                    return
+            if store.paused or store.row()['stop_requested']:
+                return
             if now - self._last_sweep >= self.sweep_every:
                 self._last_sweep = now
                 self.sweep_mentions()

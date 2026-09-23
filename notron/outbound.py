@@ -13,7 +13,7 @@ from .policy import PolicyError, PolicySnapshot
 
 Purpose = Literal['route', 'write', 'schedule', 'organize', 'reflect', 'embed', 'search']
 Origin = Literal['user_request', 'note', 'standing', 'memory', 'lesson', 'web',
-                 'history', 'agenda', 'model', 'diagnostic']
+                 'history', 'agenda', 'model', 'diagnostic', 'tool']
 NOTE_ORIGINS = {'note', 'standing', 'memory', 'lesson', 'history'}
 SYSTEM_ROLES = {'standing': workspace.ABOUT, 'memory': workspace.MEMORY,
                 'lesson': workspace.LESSONS}

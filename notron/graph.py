@@ -4,7 +4,7 @@ Not an agent in a while-loop. A declared network of specialised nodes with
 explicit edges, so it is obvious — to you and to a reviewer — exactly what runs,
 in what order, and on which model tier.
 
-    watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► organizer ─► undoer ─► writer ─► executor
+    watcher ─► router ─► project ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► organizer ─► undoer ─► writer ─► executor
                   │          │             │           │         │           │           │        │         │          │        │          │
                   └──────────┴─────────────┴───────────┘         └───────────┴───────────┴────────┴─────────┴──────────┴────────┴──────────┘
                   (each skipped unless the router asked for it)
@@ -35,6 +35,7 @@ class Edge:
 NODES: dict[str, Node] = {
     "watcher": nodes.watcher,
     "router": nodes.router,
+    "project": nodes.project,
     "retriever": nodes.retriever,
     "researcher": nodes.researcher,
     "agenda": nodes.agenda,
@@ -50,7 +51,8 @@ NODES: dict[str, Node] = {
 
 EDGES = (
     Edge("watcher", "router"),
-    Edge("router", "retriever"),
+    Edge("router", "project"),
+    Edge("project", "retriever"),
     Edge("retriever", "researcher"),
     Edge("researcher", "agenda"),
     Edge("agenda", "planner"),
@@ -63,7 +65,7 @@ EDGES = (
     Edge("writer", "executor"),
 )
 
-ORDER = ("watcher", "router", "retriever", "researcher", "agenda",
+ORDER = ("watcher", "router", "project", "retriever", "researcher", "agenda",
          "planner", "scheduler", "doer", "filer", "organizer", "undoer",
          "writer", "executor")
 
