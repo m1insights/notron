@@ -143,6 +143,14 @@ def test_every_tool_is_a_read():
         assert "--force" not in t.argv
 
 
+def test_git_tools_see_only_the_channels_own_folder():
+    """Synqology lives in the developer's whole ~/Dev monorepo. Without a
+    pathspec, "what changed this week" would report every other project."""
+    for t in tools.CATALOGUE:
+        if t.argv[0] == "git" and t.argv[1] in ("status", "log", "diff", "grep"):
+            assert t.argv[-2:] == ("--", "."), t.name
+
+
 def test_a_tool_the_channel_did_not_grant_does_not_run(monkeypatch):
     monkeypatch.setattr(tools, "_exec", lambda argv, cwd: pytest.fail("ran an ungranted tool"))
     no_github = channels.Channel("Local", "c", repo="/tmp/x")

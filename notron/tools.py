@@ -7,6 +7,10 @@ its output is untrusted data on the way back — a commit message or an issue
 title is text anyone could have written, and it is handed to the writer as
 evidence, never as an instruction.
 
+Every git tool ends in `-- .`, so a project that lives inside a bigger
+repository (Synqology sits in the developer's whole `~/Dev` monorepo) sees its
+own folder's history, not every other project's.
+
 Nothing here writes. There is no `git commit`, `push`, `checkout`, `gh pr
 merge` or `gh issue comment` in this file, and a test holds the line.
 """
@@ -34,13 +38,13 @@ class Tool:
 
 CATALOGUE: tuple[Tool, ...] = (
     Tool("git_status", "repo", "current branch, ahead/behind, uncommitted files",
-         ("git", "status", "--short", "--branch")),
+         ("git", "status", "--short", "--branch", "--", ".")),
     Tool("git_log", "repo", "commits from the last 14 days, newest first",
-         ("git", "log", "--since=14.days", "-n", "40", "--date=short", "--pretty=format:%h %ad %an: %s")),
+         ("git", "log", "--since=14.days", "-n", "40", "--date=short", "--pretty=format:%h %ad %an: %s", "--", ".")),
     Tool("git_branches", "repo", "local branches by most recent commit",
          ("git", "branch", "--sort=-committerdate", "--format=%(refname:short) · %(committerdate:relative) · %(subject)")),
     Tool("git_diff_stat", "repo", "size of uncommitted changes, per file",
-         ("git", "diff", "--stat", "HEAD")),
+         ("git", "diff", "--stat", "HEAD", "--", ".")),
     Tool("todos", "repo", "TODO / FIXME comments in tracked files",
          ("git", "grep", "-n", "-I", "-E", "TODO|FIXME", "--", ".")),
     Tool("gh_prs", "github", "open pull requests",
