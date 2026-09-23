@@ -301,3 +301,25 @@ def test_the_planner_is_told_not_to_plan_over_a_real_appointment():
     system = nodes.PLANNER_SYSTEM.lower()
     assert "calendar" in system
     assert "already" in system
+
+
+def test_nodes_that_change_nothing_are_not_checkpointed(monkeypatch):
+    """Measured 2026-09-23: checkpoints after nodes that declined were 56 Notes
+    metadata reads and 86 s of a 134 s reply. An identical state is not saved
+    again; nodes with effects outside the state always are."""
+    from notron import recovery
+    saved = []
+    monkeypatch.setattr(recovery, "checkpoint", lambda state, name: saved.append(name) or True)
+
+    def declines(state, **kw):
+        return state
+
+    def routes(state, **kw):
+        state.intent = "question"
+        return state
+
+    fake = {name: declines for name in graph.ORDER}
+    fake["router"] = routes
+    monkeypatch.setattr(graph, "NODES", fake)
+    graph.run("when is my shoot?", brain=None, dry_run=False)
+    assert saved == ["watcher", "router", "doer", "filer", "organizer", "undoer", "executor"]

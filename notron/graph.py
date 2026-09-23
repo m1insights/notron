@@ -144,6 +144,7 @@ def run_request(envelope, *, brain, dry_run: bool = False,
         name, state = resumed
         state.resumed = True
         start = ORDER.index(name) + 1
+    saved = None
     try:
         with requests.execution(envelope):
             for name in ORDER[start:]:
@@ -155,9 +156,18 @@ def run_request(envelope, *, brain, dry_run: bool = False,
                 if any(r.startswith('✗') for r in state.results):
                     break
                 if not dry_run:
-                    if not recovery.checkpoint(state, name):
-                        state.results.append('✗ source permission changed; recovery payload not retained')
-                        break
+                    # A node that declined changed nothing, and re-checkpointing an
+                    # identical state re-verifies every contributing note in Notes —
+                    # measured 2026-09-23, 56 metadata reads and 86 s of a 134 s
+                    # channel reply were checkpoints after nodes that did nothing.
+                    # Resuming from the previous checkpoint re-runs only no-ops.
+                    # Nodes with effects outside the state always checkpoint.
+                    digest = _digest(state)
+                    if digest != saved or name in EFFECTFUL:
+                        if not recovery.checkpoint(state, name):
+                            state.results.append('✗ source permission changed; recovery payload not retained')
+                            break
+                        saved = digest
                 if on_node:
                     on_node(name, state)
                 if state.intent == 'ignore' and name == 'router':
@@ -170,6 +180,18 @@ def run_request(envelope, *, brain, dry_run: bool = False,
     if not dry_run:
         store.finish(envelope.request_id, needs_review=any(r.startswith('✗') for r in state.results))
     return state
+
+
+#: Nodes that act outside the State (Calendar, Reminders, Notes) — never skipped.
+EFFECTFUL = frozenset({"doer", "filer", "organizer", "undoer", "executor"})
+
+
+def _digest(state: State) -> str:
+    import hashlib, json
+    from dataclasses import asdict
+    value = asdict(state)
+    value.pop('envelope', None)
+    return hashlib.sha256(json.dumps(value, sort_keys=True, default=str).encode()).hexdigest()
 
 
 def diagram() -> str:
