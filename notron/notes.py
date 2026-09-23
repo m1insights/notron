@@ -87,6 +87,21 @@ on run argv
 end run
 """
 
+# One property of one note: a single `note id` resolution (~0.2 s), where
+# `_METADATA` pays for four.
+_MODIFIED = """
+on run argv
+  tell application "Notes"
+    try
+      return (modification date of note id (item 1 of argv)) as text
+    on error
+      -- A missing note answers -1700 here, not -1728 (measured 2026-09-23).
+      return ""
+    end try
+  end tell
+end run
+"""
+
 _SET_BODY = """
 on run argv
   tell application "Notes" to set body of note id (item 1 of argv) to (item 2 of argv)
@@ -343,6 +358,12 @@ def get_notes(note_ids) -> dict[str, Note | None]:
         return {nid: get_note(nid) for nid in ids}
     listed = {n.id: n for n in list_all_notes()}
     return {nid: listed[nid] if nid in listed else get_note(nid) for nid in ids}
+
+
+def modified_at(note_id: str) -> datetime | None:
+    """When Notes last saw this note change, by its own clock (whole seconds)."""
+    raw = run(_MODIFIED, note_id)
+    return Note(note_id, "", "", raw).modified_at if raw else None
 
 
 def unique_note(folder: str, title: str) -> Note | None:

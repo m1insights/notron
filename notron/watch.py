@@ -44,6 +44,7 @@ MIN_CHARS = 2
 # answered early costs one more line; a Siri line waiting 12 s costs every time.
 CHANNEL_POLL = 3       # seconds between looks at project channels (one read each)
 CHANNEL_SETTLE = 3
+MIN_PAUSE = 0.25      # never spin: a due line is looked at again this soon at most
 DUMP_POLL = 60         # seconds between looks at the Brain Dump (one cheap read)
 
 HERE_CHARS = 40_000    # how much of the note she was tagged in the model sees
@@ -210,14 +211,49 @@ class Watcher:
             if count + 1 >= self.MAX_TRIES:
                 self._say(f"  giving [{key}] a rest — trying again in {self.COOLDOWN // 60} min")
 
-    def _settled(self, key: str, text: str, *, settle: float | None = None) -> bool:
-        """True once this exact text has sat unchanged long enough to be finished."""
+    def _settled(self, key: str, text: str, *, settle: float | None = None,
+                 quiet=None) -> bool:
+        """True once this exact text has sat unchanged long enough to be finished.
+
+        `quiet`, if given, is asked on first sight how long the note has been
+        still by Notes' own clock. A line that is already older than the settle
+        window is finished now: measured 2026-09-23, a dictated channel line
+        otherwise waited a whole second look, ~6 s, after arriving whole.
+        """
+        wait = self.settle if settle is None else settle
         was = self._pending.get(key)
         if was is None or was[0] != text:
             self._pending[key] = (text, time.time())
             self._say(f"  saw [{key}]: {text[:60]}")
-            return False
-        return time.time() - was[1] >= (self.settle if settle is None else settle)
+            still = quiet() if quiet is not None else None
+            return still is not None and still >= wait
+        return time.time() - was[1] >= wait
+
+    def _quiet_for(self, note_id: str):
+        """How long a note has gone unchanged, for `_settled`; None if unknown.
+
+        Asked after its body was read, so an edit in between only makes the
+        note look busier. Notes stamps whole seconds, so one is taken off; a
+        clock that disagrees (a future stamp) reads as not quiet at all.
+        """
+        from datetime import datetime
+        try:
+            at = notes.modified_at(note_id)
+        except NotesBusy:
+            raise
+        except Exception:
+            return None
+        if at is None:
+            return None
+        still = (datetime.now() - at).total_seconds() - 1
+        return still if still >= 0 else None
+
+    def next_wake(self, now: float) -> float | None:
+        """When the earliest line now settling will have sat long enough."""
+        due = [at + (self.channel_settle if key.startswith("chan:") else self.settle)
+               for key, (_, at) in self._pending.items()
+               if key.startswith(("chan:", "ask:"))]
+        return min(due) if due else None
 
     # ------------------------------------------------------------- the two jobs
 
@@ -264,7 +300,7 @@ class Watcher:
             key = f"ask:{envelope.request_id}"
             if not self._worth_trying(key):
                 continue
-            if not self._settled(key, q.text):
+            if not self._settled(key, q.text, quiet=lambda: self._quiet_for(self._ask_id)):
                 continue
             wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
                                  after=q.after, source=q.text, note_id=self._ask_id, envelope=envelope)
@@ -313,7 +349,8 @@ class Watcher:
                 key = f"chan:{envelope.request_id}"
                 if not self._worth_trying(key):
                     continue
-                if not self._settled(key, q.text, settle=min(self.settle, self.channel_settle)):
+                if not self._settled(key, q.text, settle=min(self.settle, self.channel_settle),
+                                     quiet=lambda nid=ch.note_id: self._quiet_for(nid)):
                     continue
                 wrote = self._answer(q.text, title=ch.title, folder=workspace.FOLDER,
                                      after=q.after, source=q.text, note_id=ch.note_id, envelope=envelope)
@@ -632,6 +669,16 @@ class Watcher:
             worker.failure(exc)
             self._say(f"  (paused: {type(exc).__name__}) — retrying")
 
+    def pause(self, now: float) -> float:
+        """How long to sleep after a tick: the usual poll, or less when a line
+        seen settling becomes due sooner. Measured 2026-09-23: a channel line
+        seen on one tick was answered only on the tick after next, ~6.4 s
+        later, though it was due 3 s after first sight."""
+        due = self.next_wake(now)
+        if due is None:
+            return self.ask_poll
+        return min(self.ask_poll, max(MIN_PAUSE, due - now))
+
     def run_forever(self) -> None:
         from .health import HealthStore, Heartbeat, WorkerLock, STALE_AFTER
         store = HealthStore()
@@ -646,7 +693,7 @@ class Watcher:
                     now = (time.time(), time.monotonic())
                     self.tick(resumed=slept(previous, now, STALE_AFTER))
                     previous = now
-                    time.sleep(self.ask_poll)
+                    time.sleep(self.pause(time.time()))
             from .transport import configured
             managed=configured()
             if managed is not None:managed.stop()
