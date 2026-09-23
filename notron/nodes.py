@@ -1543,6 +1543,14 @@ def _text(value, limit: int = 300) -> str:
     return " ".join(str(value).split())[:limit] if isinstance(value, (str, int, float)) else ""
 
 
+#: What no step of a brief may ask for, whatever the model wrote. Nemotron is
+#: told to put these in out_of_scope; this is the code that does not need to be
+#: told. Narrow on purpose — "fix the token refresh bug" is a real task — so it
+#: names secret places and the ways data leaves the machine, not topics.
+STRUCK = re.compile(r"(\.ssh\b|id_rsa|id_ed25519|\.aws/|\.netrc|\.config/gh|keychain|\bcurl\b|\bwget\b|"
+                    r"\bgit push\b|\bexfiltrat|pastebin|\bnc -|webhook\.site|upload\w* .{0,40}\bto https?://)", re.I)
+
+
 def _clean_brief(out) -> dict:
     """The model's brief, reduced to the fields and sizes code allows. {} if unusable."""
     if not isinstance(out, dict):
@@ -1554,6 +1562,12 @@ def _clean_brief(out) -> dict:
     brief = {"goal": _text(out.get("goal")), "steps": items("steps", 6),
              "files": items("files", 8, 160), "done_when": _text(out.get("done_when")),
              "out_of_scope": items("out_of_scope", 5)}
+    if STRUCK.search(brief["goal"]):
+        return {}
+    struck = [s for s in brief["steps"] if STRUCK.search(s)]
+    brief["steps"] = [s for s in brief["steps"] if s not in struck]
+    brief["files"] = [f for f in brief["files"] if not STRUCK.search(f)]
+    brief["out_of_scope"] += [f"{s} (struck by Notron's code)" for s in struck]
     return brief if brief["goal"] and brief["steps"] else {}
 
 
