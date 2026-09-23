@@ -374,3 +374,14 @@ def test_undo_in_a_channel_is_still_decided_in_code():
     _register()
     state = nodes.router(_channel_state(request="undo"), brain=None)
     assert state.intent == "undo"
+
+
+def test_a_channel_reply_reads_only_about_me(monkeypatch):
+    _register()
+    from notron import notes
+    read = []
+    real = notes.find_note
+    monkeypatch.setattr(notes, "find_note", lambda folder, title: read.append(title) or real(folder, title))
+    nodes.watcher(_channel_state(), brain=None)
+    assert workspace.ABOUT in read
+    assert workspace.MEMORY not in read and workspace.LESSONS not in read

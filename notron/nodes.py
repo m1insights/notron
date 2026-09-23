@@ -58,9 +58,18 @@ CONFIRM_WORDS = re.compile(r"(?i)^\s*(?:yes|yep|yeah|sure|go ahead|do it)\.?\s*$
 # ---------------------------------------------------------------- Watcher
 
 def watcher(state: State, *, brain=None) -> State:
-    """No model. Reads the user's standing instructions and long-term memory."""
-    for title, attr in ((workspace.ABOUT, "about"), (workspace.MEMORY, "memory"),
-                        (workspace.LESSONS, "lessons")):
+    """No model. Reads the user's standing instructions and long-term memory.
+
+    A project channel reads only 📌 About Me. Memory and Lessons are about the
+    user's life, not the project, and every note that contributes to a reply is
+    re-verified in Notes at each checkpoint and again at the write — ~1 s per
+    note per check, measured 2026-09-23. Two fewer sources halves that bill.
+    """
+    from . import channels
+    wanted = ((workspace.ABOUT, "about"), (workspace.MEMORY, "memory"), (workspace.LESSONS, "lessons"))
+    if channels.for_note(state.source_note_id):
+        wanted = wanted[:1]
+    for title, attr in wanted:
         n = notes.find_note(workspace.FOLDER, title)
         if n and policy.current().system_role(n.id) == title and policy.current().readable(n):
             body = notes.read_body(n.id)

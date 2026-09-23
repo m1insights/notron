@@ -182,8 +182,10 @@ def run_request(envelope, *, brain, dry_run: bool = False,
     return state
 
 
-#: Nodes that act outside the State (Calendar, Reminders, Notes) — never skipped.
-EFFECTFUL = frozenset({"doer", "filer", "organizer", "undoer", "executor"})
+#: Always checkpointed. Every other node that acts outside the State (doer,
+#: filer, organizer, undoer) records what it did in `results`, so an effect
+#: always changes the digest; one that declined has nothing to save.
+EFFECTFUL = frozenset({"executor"})
 
 
 def _digest(state: State) -> str:

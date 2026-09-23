@@ -322,4 +322,20 @@ def test_nodes_that_change_nothing_are_not_checkpointed(monkeypatch):
     fake["router"] = routes
     monkeypatch.setattr(graph, "NODES", fake)
     graph.run("when is my shoot?", brain=None, dry_run=False)
-    assert saved == ["watcher", "router", "doer", "filer", "organizer", "undoer", "executor"]
+    assert saved == ["watcher", "router", "executor"]
+
+
+def test_a_node_that_acts_is_always_checkpointed(monkeypatch):
+    from notron import recovery
+    saved = []
+    monkeypatch.setattr(recovery, "checkpoint", lambda state, name: saved.append(name) or True)
+    def declines(state, **kw):
+        return state
+    def books(state, **kw):
+        state.results.append("✓ reminder — booked")
+        return state
+    fake = {name: declines for name in graph.ORDER}
+    fake["doer"] = books
+    monkeypatch.setattr(graph, "NODES", fake)
+    graph.run("remind me", brain=None, dry_run=False)
+    assert "doer" in saved
