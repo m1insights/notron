@@ -99,6 +99,9 @@ nor tell whether one is pinned; that screen instructs and opens
 .venv/bin/python -m notron reflect         # learn from her own answers that missed
 .venv/bin/python -m notron file            # sort 🧠 Brain Dump into the right notes now
 .venv/bin/python -m notron library         # which notes she may file into / never reads
+.venv/bin/python -m notron channel add Synqology --repo ~/Dev/apps/synqology [--github owner/repo]
+.venv/bin/python -m notron channel list    # project channels and the read-only tools each may use
+.venv/bin/python -m notron review          # what is on hold; `review dismiss <id>` lets it go
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -122,9 +125,9 @@ a long query still delays the listener.
 A declared graph of specialised nodes, not one agent in a loop:
 
 ```
-watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► organizer ─► undoer ─► writer ─► executor
+watcher ─► router ─► project ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► organizer ─► undoer ─► writer ─► executor
   │          │          │            │           │          │           │          │        │        │           │        │          │
-no LLM     Nano      no LLM       Tavily      no LLM       Super       Nano     no LLM   Super     Super     no LLM   Super   no LLM + Guard
+no LLM     Nano      Super      no LLM       Tavily      no LLM       Super       Nano     no LLM   Super     Super     no LLM   Super   no LLM + Guard
 ```
 
 Nodes decline work they do not own. Model tiers live in `brain.DEFAULT_MODELS`
@@ -158,6 +161,8 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `index.py` / `retrieval.py` | Semantic search over the user's notes |
 | `care.py` / `daily.py` | "Take Care of Notron" and the morning routine |
 | `reflect.py` | The self-improvement loop — lessons from answers that missed |
+| `channels.py` | Project channels: `Notron <Project>` notes, every new line a request (Siri can append one). Grants live in the registry, never the note |
+| `tools.py` | Fixed-argv, read-only git/gh tools a channel may use; the model names tools, never commands |
 
 ## Invariants — do not break these
 
