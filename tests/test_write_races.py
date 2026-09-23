@@ -945,3 +945,66 @@ def test_recovery_copy_historical_commands_remain_inert_in_scanner_after_restart
     fake_note_store.rows[created[0]][0] = replace(fake_note_store.get_note(created[0]), modified='changed-after-restart')
     assert restarted.scan() == []
     assert created[0] not in restarted.pending
+
+
+# ------------------------------------------------ per-request metadata memo
+# Measured 2026-09-23: 22 of 46 Apple Notes calls in one channel reply were the
+# same two notes re-checked at every checkpoint and write step, ~1 s each. The
+# memo lets checkpoints reuse one request's reads; the checks right before the
+# write always read Notes again, so a revoked source still never reaches it.
+
+
+def test_checkpoints_reuse_one_requests_note_reads(fake_note_store, monkeypatch):
+    from notron import recovery, requests
+    src = fake_note_store.add('About', '<div>About</div>')
+    envelope = requests.create('q', source='cli')
+    requests.current().capture(envelope)
+    calls = []
+    real = fake_note_store.get_note
+    monkeypatch.setattr(notes, 'get_note', lambda nid: calls.append(nid) or real(nid))
+    with executor.metadata_memo():
+        for step in range(5):
+            recovery.put(envelope.request_id, f'{envelope.request_id}:checkpoint:{step}', {'s': step}, (src,))
+    assert calls == [src]
+    calls.clear()
+    recovery.put(envelope.request_id, envelope.request_id + ':checkpoint:after', {}, (src,))
+    assert calls == [src]                     # no memo outside a request
+
+
+def test_an_ignore_flip_mid_request_still_stops_the_write(fake_note_store, make_write, monkeypatch):
+    """Memo warm, then the user ignores a source: policy is always re-read."""
+    target = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    with executor.metadata_memo():
+        assert executor.Executor._content_readable((src, target), reuse=True)
+        lib = library.load(); lib.homes.discard(src); lib.decided.discard(src); lib.ignore.add(src); library.save(lib)
+        assert not executor.Executor._content_readable((src, target), reuse=True)
+        result = executor.Executor(audit=False).apply_write(
+            make_write(note_id=target, mode='append', markdown='more', content_sources=(src,)))
+    assert not result.ok and fake_note_store.writes == []
+
+
+def test_a_source_deleted_after_the_memo_filled_never_reaches_a_write(fake_note_store, make_write, monkeypatch):
+    """The memo still says the note exists; the final pre-write check must not believe it."""
+    from notron import recovery
+    target = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    write = make_write(note_id=target, mode='append', markdown='more', content_sources=(src,))
+
+    def delete_source(name, operation_id):
+        if name == 'before_applying':
+            del fake_note_store.rows[src]
+    monkeypatch.setattr(recovery, 'boundary', delete_source)
+    with executor.metadata_memo():
+        assert executor.Executor._content_readable((src, target), reuse=True)
+        result = executor.Executor(audit=False).apply_write(write)
+    assert not result.ok and fake_note_store.writes == []
+
+
+def test_fresh_reads_refresh_the_memo(fake_note_store):
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    with executor.metadata_memo():
+        assert executor.Executor._content_readable((src,), reuse=True)
+        del fake_note_store.rows[src]
+        assert not executor.Executor._content_readable((src,))
+        assert not executor.Executor._content_readable((src,), reuse=True)

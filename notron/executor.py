@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace, field
 from contextlib import contextmanager
+from contextvars import ContextVar
 import fcntl
 import json
 import os
@@ -24,6 +25,24 @@ from .securestore import StorageError
 _LOCAL_LOCK = threading.RLock()
 _LOCK_DEPTH = threading.local()
 MAX_REASON_CHARS = 400
+
+# Note metadata read once in this request, keyed by note id (None = missing).
+# Measured 2026-09-23: 22 of 46 Apple Notes calls in one channel reply, ~1 s
+# each, were the same two contributing notes re-checked at every checkpoint.
+# Only `reuse=True` callers read from it, and none of them is the last check
+# before an effect: every write and EventKit save re-reads Notes right before
+# it happens. Policy is never memoized — an ignore flip is always seen.
+_MEMO: ContextVar[dict | None] = ContextVar('notron_metadata_memo', default=None)
+
+
+@contextmanager
+def metadata_memo():
+    """Scope a metadata memo to one request (`graph.run_request`)."""
+    token = _MEMO.set({})
+    try:
+        yield
+    finally:
+        _MEMO.reset(token)
 
 
 def _failure_reason(exc: Exception) -> str:
@@ -215,8 +234,22 @@ class Executor:
         return tuple(sorted(nid for nid in sources if nid))
 
     @staticmethod
-    def _content_readable(sources: tuple[str, ...]) -> bool:
-        current = [notes.get_note(nid) for nid in sources]
+    def _content_readable(sources: tuple[str, ...], *, reuse: bool = False) -> bool:
+        """All contributing notes exist and policy lets her read them.
+
+        `reuse` accepts this request's earlier metadata read (see `_MEMO`); only
+        checkpoints and pre-checks that a fresh check follows may pass it.
+        """
+        memo = _MEMO.get()
+        current = []
+        for nid in sources:
+            if reuse and memo is not None and nid in memo:
+                current.append(memo[nid])
+                continue
+            note = notes.get_note(nid)
+            if memo is not None:
+                memo[nid] = note
+            current.append(note)
         # Read current policy after the metadata reads; those reads may overlap
         # a policy save. All contributing Notes sources must remain readable.
         snap = policy.current()
@@ -344,7 +377,8 @@ class Executor:
                 return result(False, 'explicit recovery-copy confirmation and saved snapshot are required')
         if creation and not permitted(note):
             return result(False, 'creation target exists or policy denied access')
-        if not self._content_readable(content_sources) or not self._sources_current(write):
+        # A pre-check: the read below and the one right before the write are fresh.
+        if not self._content_readable(content_sources, reuse=True) or not self._sources_current(write):
             return result(False, 'source missing, changed or ambiguous; nothing copied')
         old = notes.read_body(note.id) if note else ''
         # A target read can overlap revocation before this operation exists.
@@ -461,6 +495,7 @@ class Executor:
                     store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
                                      failure_code='policy_changed')
                 return result(False, 'note policy changed; nothing written')
+            # The final check before the write: never from the memo.
             if not self._content_readable(content_sources):
                 if store.get(write.operation_id).status == operations.S.APPLYING:
                     store.transition(write.operation_id, operations.S.APPLYING, operations.S.NEEDS_REVIEW,
