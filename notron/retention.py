@@ -1,6 +1,8 @@
 """Fail-closed cache readiness and conservative removal of stale note content."""
 from __future__ import annotations
 
+import time
+
 from pathlib import Path
 
 from . import credentials, policy
@@ -78,13 +80,32 @@ def apply_policy() -> None:
         write_json(marker, {'policy': signature})
 
 
+#: The metadata listing the last reconcile took: (monotonic time, id -> Note).
+#: `index.search` reconciles and then checks every hit against Notes; the
+#: listing it just took answers those checks (measured 2026-09-23: 8 lookups,
+#: 6.4 s, in one reply). Only a listing at most LISTED_FRESH seconds old counts.
+_LISTED: tuple[float, dict] | None = None
+LISTED_FRESH = 5.0
+
+
+def listed(since: float) -> dict | None:
+    """The listing a reconcile took after `since`, while still fresh enough to
+    stand in for Notes; otherwise None and the caller asks Notes itself."""
+    if _LISTED is None or _LISTED[0] < since or time.monotonic() - _LISTED[0] > LISTED_FRESH:
+        return None
+    return _LISTED[1]
+
+
 def reconcile() -> set[str]:
     """A successful metadata-only Apple inventory is required to infer deletion."""
     from . import index, undo, filer, reflect, notes, mentions
     require_ready()
     policy.require_ready()
     snapshot = policy.current()
-    live = {n.id for n in notes.list_all_notes() if snapshot.readable(n)}
+    listed = notes.list_all_notes()
+    live = {n.id for n in listed if snapshot.readable(n)}
+    global _LISTED
+    _LISTED = (time.monotonic(), {n.id: n for n in listed})
     from . import attachments
     attachments.purge(live)
     removed = False

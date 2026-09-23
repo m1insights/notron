@@ -232,7 +232,9 @@ def build(brain, *, on_progress=None, force: bool = False, extract: bool = False
 def search(query: list[Passage], brain, *, limit: int = 8, read_budget: int = QUERY_READ_BUDGET) -> list[Chunk]:
     import numpy as np
 
+    import time
     from . import retention
+    started = time.monotonic()
     retention.reconcile()
     prepare_outbound("embed", query)
     data = _load()
@@ -254,6 +256,7 @@ def search(query: list[Passage], brain, *, limit: int = 8, read_budget: int = QU
     seen = set()
     out = SearchResults()
     reads = 0
+    listing = retention.listed(started) or {}
     for i in best:
         row = rows[int(i)]
         nid = row['note_id']
@@ -266,7 +269,7 @@ def search(query: list[Passage], brain, *, limit: int = 8, read_budget: int = QU
             break
         reads += 1
         try:
-            live = notes.get_note(nid)
+            live = listing[nid] if nid in listing else notes.get_note(nid)
             if live is None or not policy.current().readable(live):
                 out.incomplete = True
                 continue

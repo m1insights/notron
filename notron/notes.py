@@ -323,6 +323,28 @@ def get_note(note_id: str) -> Note | None:
     return None if note.folder in SKIP_FOLDERS else note
 
 
+#: From this many notes up, one metadata listing beats a lookup per note.
+#: Measured 2026-09-23 on 254 notes: `get_note` 0.7–0.9 s each (Notes resolves
+#: `note id` once per property it is asked for), `list_all_notes` 1.6 s for
+#: all of them, field for field identical. A reply drawing on 8 notes checked
+#: them 24 times before writing — 18.8 s of a 48 s answer.
+BULK_FROM = 3
+
+
+def get_notes(note_ids) -> dict[str, Note | None]:
+    """`get_note` for several ids at once: fresh, metadata only, same answers.
+
+    A note the listing does not show (Recently Deleted, or a folder the listing
+    cannot reach) is asked for by id, so nothing differs from asking one by one
+    except the number of requests.
+    """
+    ids = list(dict.fromkeys(nid for nid in note_ids if nid))
+    if len(ids) < BULK_FROM:
+        return {nid: get_note(nid) for nid in ids}
+    listed = {n.id: n for n in list_all_notes()}
+    return {nid: listed[nid] if nid in listed else get_note(nid) for nid in ids}
+
+
 def unique_note(folder: str, title: str) -> Note | None:
     """Title lookup is only a capture convenience; ambiguous titles never bind."""
     matches = [n for n in list_notes(folder) if n.title == title]

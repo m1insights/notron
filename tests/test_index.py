@@ -133,3 +133,29 @@ def test_a_file_read_since_the_last_index_is_picked_up(_notes_is_never_the_real_
     brain = CountingBrain()
     index.build(brain)
     assert any("Bay 4" in t for t in brain.embedded)
+
+
+def test_search_checked_8_hits_one_lookup_each_after_listing_every_note(_notes_is_never_the_real_one, monkeypatch):
+    """Measured 2026-09-23: search reconciled (a full metadata listing), then
+    asked Notes about each hit again, one by one — 8 lookups, 6.4 s. The
+    listing its own reconcile just took answers them."""
+    app = _notes_is_never_the_real_one
+    index.build(CountingBrain())
+    looked_up = []
+    monkeypatch.setattr(attachments.notes, 'get_note', lambda nid: looked_up.append(nid))
+    hits = index.search([Passage('parking', 'user_request')], CountingBrain())
+    assert {c.note_id for c in hits} >= {"Notes/Parking Garages", "Notes/Supps"}
+    assert looked_up == []
+
+
+def test_search_never_trusts_a_listing_it_did_not_take(_notes_is_never_the_real_one, monkeypatch):
+    """A listing left by some earlier reconcile is not this search's check."""
+    from notron import retention
+    index.build(CountingBrain())
+    app = _notes_is_never_the_real_one
+    retention.reconcile()                       # an earlier listing, still "fresh"
+    monkeypatch.setattr(retention, 'reconcile', lambda: None)
+    app.folders[0][1].remove("Supps")           # deleted since that listing
+    hits = index.search([Passage('parking', 'user_request')], CountingBrain())
+    assert "Notes/Supps" not in {c.note_id for c in hits}
+    assert "Notes/Parking Garages" in {c.note_id for c in hits}

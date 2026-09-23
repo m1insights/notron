@@ -255,17 +255,19 @@ class Executor:
         checkpoints and pre-checks that a fresh check follows may pass it.
         """
         memo = _MEMO.get()
-        current = []
+        current, stale = [], []
         for nid in sources:
             if reuse and memo is not None and nid in memo:
                 note, at = memo[nid]
                 if time.monotonic() - at <= MEMO_TTL:
                     current.append(note)
                     continue
-            note = notes.get_note(nid)
+            stale.append(nid)
+        fresh = notes.get_notes(stale) if stale else {}
+        for nid in stale:
             if memo is not None:
-                memo[nid] = (note, time.monotonic())
-            current.append(note)
+                memo[nid] = (fresh.get(nid), time.monotonic())
+            current.append(fresh.get(nid))
         # Read current policy after the metadata reads; those reads may overlap
         # a policy save. All contributing Notes sources must remain readable.
         snap = policy.current()

@@ -1025,3 +1025,50 @@ def test_a_source_renamed_private_stops_checkpoints_once_the_memo_ages_out(fake_
         now[0] += executor.MEMO_TTL + 1
         with pytest.raises(ValueError):
             recovery.put(envelope.request_id, envelope.request_id + ':checkpoint:b', {}, (src,))
+
+
+def test_a_reply_drawing_on_8_notes_looked_each_up_3_times_before_writing(fake_note_store, make_write, monkeypatch):
+    """Measured 2026-09-23: 24 single-note lookups, 18.8 s of a 48 s answer.
+    Many sources now cost one listing per check, with the same answers."""
+    from notron import notes as notes_mod
+    target = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    sources = tuple(fake_note_store.add(f'Source {i}', f'<div>Source {i}</div>') for i in range(8))
+    single, listings = [], []
+    real_get, real_list = notes_mod.get_note, notes_mod.list_all_notes
+    monkeypatch.setattr(notes_mod, 'get_note', lambda nid: single.append(nid) or real_get(nid))
+    monkeypatch.setattr(notes_mod, 'list_all_notes', lambda: listings.append(1) or real_list())
+    with executor.metadata_memo():  # as inside graph.run_request
+        result = executor.Executor(audit=False).apply_write(
+            make_write(note_id=target, mode='append', markdown='more', content_sources=sources))
+    assert result.ok
+    assert not set(single) & set(sources)
+    assert 1 <= len(listings) <= 3
+
+
+def test_a_source_missing_from_the_listing_is_still_asked_for_by_id(fake_note_store, monkeypatch):
+    """Recently Deleted and unreachable folders are not listed; a lookup by id
+    still decides, exactly as before."""
+    from notron import notes as notes_mod
+    ids = [fake_note_store.add(f'N{i}', f'<div>N{i}</div>') for i in range(4)]
+    hidden = ids[0]
+    real_list = notes_mod.list_all_notes
+    monkeypatch.setattr(notes_mod, 'list_all_notes', lambda: [n for n in real_list() if n.id != hidden])
+    got = notes_mod.get_notes(ids + ['gone'])
+    assert got[hidden] is not None and got[hidden].id == hidden
+    assert got['gone'] is None
+    assert all(got[i] is not None for i in ids)
+
+
+def test_bulk_checks_still_refuse_a_source_ignored_mid_write(fake_note_store, make_write, monkeypatch):
+    from notron import recovery
+    target = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    sources = tuple(fake_note_store.add(f'Source {i}', f'<div>Source {i}</div>') for i in range(5))
+
+    def ignore_one(name, operation_id):
+        if name == 'before_applying':
+            lib = library.load(); lib.homes.discard(sources[2]); lib.decided.discard(sources[2])
+            lib.ignore.add(sources[2]); library.save(lib)
+    monkeypatch.setattr(recovery, 'boundary', ignore_one)
+    result = executor.Executor(audit=False).apply_write(
+        make_write(note_id=target, mode='append', markdown='more', content_sources=sources))
+    assert not result.ok and fake_note_store.writes == []
