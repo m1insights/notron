@@ -317,3 +317,12 @@ def test_the_executor_lets_a_channel_take_its_reply_and_nothing_more():
         assert not ex._permitted(renamed, "insert")
         moved = notes.Note("chan-1", ch.title, "Notes", "m")
         assert not ex._permitted(moved, "insert")
+
+
+def test_channel_remove_from_the_command_line_takes_a_multi_word_name(capsys):
+    """First live use: `notron channel remove Synqology` crashed — argparse
+    hands the name over as a list."""
+    from notron import cli
+    _register(name="Synq Ops")
+    cli.cmd_channel(type("A", (), dict(action="remove", name=["Synq", "Ops"]))())
+    assert channels.load() == []

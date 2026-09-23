@@ -127,7 +127,7 @@ def cmd_channel(args):
     if not args.name:
         raise SystemExit(f"'{args.action}' needs a channel name, e.g. notron channel {args.action} Synqology")
     if args.action == 'remove':
-        gone = channels.remove(args.name)
+        gone = channels.remove(" ".join(args.name))
         print(f"\n  Removed {gone.title}. The note stays in Notes; she no longer answers there.\n")
         return
     _add_channel(args)
