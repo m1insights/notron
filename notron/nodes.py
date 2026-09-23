@@ -283,7 +283,7 @@ MAX_TOOLS = 4
 #: Measured 2026-09-23 on the Synqology repo: each of these takes 0.06–0.2 s,
 #: against ~2.5 s for Super to decide. The `gh_*` tools go over the network
 #: and may not be picked, so they run only when Nemotron names them.
-PREFETCH = ("git_status", "git_log", "git_branches", "git_diff_stat", "todos")
+PREFETCH = ("git_status", "git_log", "git_branches", "git_diff_stat", "git_files", "todos")
 PREFETCH_WAIT = 2.0
 
 

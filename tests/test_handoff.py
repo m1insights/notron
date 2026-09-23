@@ -101,7 +101,8 @@ def test_claude_code_gets_no_shell_no_web_and_no_mcp(tmp_path):
 
 def test_codex_runs_in_its_own_sandbox(tmp_path):
     argv = handoff.argv("codex", tmp_path, tmp_path)
-    assert argv[:2] == ["codex", "exec"] and argv[argv.index("--sandbox") + 1] == "workspace-write"
+    assert Path(argv[0]).name == "codex" and argv[1] == "exec"
+    assert argv[argv.index("--sandbox") + 1] == "workspace-write"
 
 
 def test_nothing_in_the_hand_off_can_push_or_merge():
@@ -497,3 +498,29 @@ def test_a_spawn_that_fails_leaves_no_worktree_or_branch_behind(repo, monkeypatc
     assert any(args[:2] == ("worktree", "remove") for args, _ in repo.calls)
     assert any(args[:2] == ("branch", "-D") and args[2] == f"notron/{task.id[:8]}" for args, _ in repo.calls)
     assert not Path(failed.run_dir).exists()
+
+
+def test_the_background_listener_can_find_the_agent(monkeypatch, tmp_path):
+    """2026-09-23, first live run from launchd: PATH was /usr/bin:/bin:/usr/sbin:/sbin,
+    `claude` lives in ~/.local/bin, and the run came back empty after 25 s."""
+    home = tmp_path / "home"
+    (home / ".local/bin").mkdir(parents=True)
+    agent = home / ".local/bin/claude"
+    agent.write_text("#!/bin/sh\n")
+    agent.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
+    argv = handoff.argv("claude", tmp_path, tmp_path)
+    assert str(agent) in argv
+    assert str(home / ".local/bin") in handoff._env()["PATH"].split(":")
+
+
+def test_a_run_with_no_result_says_what_the_agent_said(repo):
+    task = _proposed()
+    handoff.approve(task.id, task.digest)
+    started = handoff.dispatch_next()
+    repo.changed = []
+    (Path(started.run_dir) / "err.txt").write_text("Not logged in · Please run /login")
+    (done,) = handoff.poll()
+    assert done.status == "failed" and "Not logged in" in done.error
+    assert "Not logged in" in nodes._report(done, {})

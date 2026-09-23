@@ -145,7 +145,7 @@ def test_an_unreadable_registry_fails_closed_for_rewrites():
 
 # ------------------------------------------------------------------- tools
 
-READ_ONLY_VERBS = {("git", "status"), ("git", "log"), ("git", "branch"), ("git", "diff"), ("git", "grep"),
+READ_ONLY_VERBS = {("git", "ls-files"), ("git", "status"), ("git", "log"), ("git", "branch"), ("git", "diff"), ("git", "grep"),
                    ("gh", "pr", "list"), ("gh", "issue", "list"), ("gh", "run", "list")}
 
 

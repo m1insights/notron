@@ -45,6 +45,8 @@ CATALOGUE: tuple[Tool, ...] = (
          ("git", "branch", "--sort=-committerdate", "--format=%(refname:short) · %(committerdate:relative) · %(subject)")),
     Tool("git_diff_stat", "repo", "size of uncommitted changes, per file",
          ("git", "diff", "--stat", "HEAD", "--", ".")),
+    Tool("git_files", "repo", "the project's files (tracked), to know where things live",
+         ("git", "ls-files", "--", ".")),
     Tool("todos", "repo", "TODO / FIXME comments in tracked files",
          ("git", "grep", "-n", "-I", "-E", "TODO|FIXME", "--", ".")),
     Tool("gh_prs", "github", "open pull requests",

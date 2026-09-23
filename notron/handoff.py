@@ -277,11 +277,25 @@ def next_report() -> Task | None:
 
 # ---------------------------------------------------------------- the agent
 
+#: Where the agents install themselves. launchd starts the listener with only
+#: /usr/bin:/bin:/usr/sbin:/sbin, so on 2026-09-23 the first live run from the
+#: background listener could not find `claude` in ~/.local/bin and came back
+#: "stopped without a result" after 25 s, with nothing to say why.
+AGENT_DIRS = ("~/.local/bin", "/opt/homebrew/bin", "/usr/local/bin")
+
+
+def _search_path() -> str:
+    extra = [os.path.expanduser(d) for d in AGENT_DIRS]
+    have = os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin").split(":")
+    return ":".join(dict.fromkeys([*have, *extra]))
+
+
 def _env() -> dict:
     # Same rule as `tools._env`: nothing ambient. The agent authenticates with
     # its own login (Keychain / its own config under HOME), never a token of ours.
-    keep = ("PATH", "HOME", "USER", "LANG", "TMPDIR", "TERM")
+    keep = ("HOME", "USER", "LANG", "TMPDIR", "TERM")
     env = {k: os.environ[k] for k in keep if k in os.environ}
+    env["PATH"] = _search_path()
     env.update(GIT_TERMINAL_PROMPT="0", NO_COLOR="1", GIT_OPTIONAL_LOCKS="0")
     return env
 
@@ -323,10 +337,12 @@ def sandbox_profile(run_dir: Path, repo_top: str = "") -> str:
 
 def argv(hand: str, run_dir: Path, cwd: Path, repo_top: str = "") -> list[str]:
     """The fixed command for each agent. The brief arrives on stdin, never argv."""
+    # An absolute path: `sandbox-exec` looks the program up itself, with its own PATH.
+    exe = shutil.which(hand, path=_search_path()) or hand
     if hand == "claude":
         fence = ([SANDBOX_EXEC, "-p", sandbox_profile(run_dir, repo_top)]
                  if os.path.exists(SANDBOX_EXEC) else [])
-        return [*fence, "claude", "-p", "--output-format", "json",
+        return [*fence, exe, "-p", "--output-format", "json",
                 "--permission-mode", "dontAsk",
                 # No bare Glob/Grep: an unscoped allow would let a search reach any
                 # path. Reads inside the working folder need no rule; anything
@@ -338,7 +354,7 @@ def argv(hand: str, run_dir: Path, cwd: Path, repo_top: str = "") -> list[str]:
                 "--append-system-prompt", RULES]
     if hand == "codex":
         # Codex applies its own macOS sandbox; a second one around it cannot nest.
-        return ["codex", "exec", "--sandbox", "workspace-write", "--skip-git-repo-check",
+        return [exe, "exec", "--sandbox", "workspace-write", "--skip-git-repo-check",
                 "--cd", str(cwd), "--json", "-o", str(run_dir / "last.txt"), "-"]
     raise TaskError(f"Unknown coding agent {hand}.")
 
@@ -488,6 +504,11 @@ def _parse(task: Task, run_dir: Path) -> tuple[str, list[str], bool]:
             raise ValueError
     except ValueError:
         # No result object: the agent crashed, was stopped, or never logged in.
+        # Its own last words are the only explanation there is — keep them.
+        err = (run_dir / "err.txt").read_text(errors="replace") if (run_dir / "err.txt").exists() else ""
+        said = " ".join((err or out).split())[-300:]
+        if said and not task.error:
+            _update(task.id, error=f"{task.hand_name} said: {said}")
         return "", [], True
     denials = []
     for d in data.get("permission_denials") or []:
