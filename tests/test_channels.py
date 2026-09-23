@@ -326,3 +326,32 @@ def test_channel_remove_from_the_command_line_takes_a_multi_word_name(capsys):
     _register(name="Synq Ops")
     cli.cmd_channel(type("A", (), dict(action="remove", name=["Synq", "Ops"]))())
     assert channels.load() == []
+
+
+# ------------------------------------------------------------------ review
+
+
+def test_a_dismissed_request_frees_the_note_and_never_runs(monkeypatch):
+    """2026-09-23: one interrupted run held a project channel on hold for good —
+    every later line in it was parked too, and there was no way out."""
+    from notron import requests
+    ch = _register()
+    base = channels.HELP.format(title=ch.title, project="x") + "\n\n———\n\n"
+    body = markup.render(ch.title, base + "first question")
+    monkeypatch.setattr(watch.notes, "read_body", lambda nid: body)
+    w = watch.Watcher(brain=None, settle=100)
+    w.check_channels()
+    first = requests.current().pending()[0]
+    with requests.current().operations.transaction() as db:
+        db.execute("UPDATE requests SET status='needs_review' WHERE request_id=?", (first.request_id,))
+    from notron import conversation
+    answered = base + "first question\n\n" + conversation.turn("An answer that landed.") + "\n"
+    body = markup.render(ch.title, answered + "second question")
+    w.check_channels()
+    assert all(r.status == 'needs_review' for r in requests.current().pending())   # held, by design
+    for r in requests.current().pending():
+        assert requests.current().dismiss(r.request_id)
+    body = markup.render(ch.title, answered + "second question\n\n\n\nthird question")
+    w.check_channels()
+    live = [r for r in requests.current().pending() if r.status == 'prepared']
+    assert [r.envelope.text for r in live] == ["third question"]

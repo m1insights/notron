@@ -188,6 +188,20 @@ class RequestStore:
                 ids.extend(matches)
         return ids
 
+    def dismiss(self, request_id: str) -> bool:
+        """The user's explicit "leave it": a request on hold will never run.
+
+        A request waiting on review holds every later line in its note on hold
+        too (an uncertain turn cannot be told apart from a new one), which is the
+        right default and, with no way out, a note that goes silent for good.
+        Measured 2026-09-23: one interrupted run did that to a project channel.
+        Dismissing never re-runs anything; to ask again, the user writes it again.
+        A running request is left alone — it may be live in another process.
+        """
+        with self.operations.transaction() as db:
+            return db.execute("UPDATE requests SET status='cancelled',failure_code='user_dismissed',updated_at=? "
+                              "WHERE request_id=? AND status='needs_review'", (now(), request_id)).rowcount == 1
+
     def claim(self, request_id: str) -> bool:
         with self.operations.transaction() as db:
             row = db.execute('SELECT * FROM requests WHERE request_id=?', (request_id,)).fetchone()

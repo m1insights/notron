@@ -146,6 +146,32 @@ def _add_channel(args):
     print("  Or type any line into it. She answers underneath, while `notron listen` runs.\n")
 
 
+def cmd_review(args):
+    """What is on hold, and the explicit way to let it go."""
+    from . import credentials, requests
+    if credentials._provider is None:
+        credentials.startup()
+    store = requests.current()
+    held = [r for r in store.pending() if r.status == 'needs_review' and r.envelope]
+    if args.action == 'dismiss':
+        refs = args.ids
+        if not refs and not args.all:
+            raise SystemExit("Which? notron review dismiss <id> …, or --all")
+        chosen = held if args.all else [r for r in held if any(r.request_id.startswith(x) for x in refs)]
+        gone = sum(store.dismiss(r.request_id) for r in chosen)
+        print(f"\n  Dismissed {gone}. Nothing was re-run; write a line again to ask again.\n")
+        return
+    if not held:
+        print("\n  Nothing on hold.\n")
+        return
+    print(f"\n  {len(held)} on hold — each also holds later lines in its note:\n")
+    for r in held:
+        where = r.envelope.reply_to[0] if r.envelope.reply_to else r.envelope.source
+        text = " ".join(r.envelope.text.split())[:60]
+        print(f"  {r.request_id[:8]}  {where[:24]:24}  {r.failure_code or '':20}  {text}")
+    print("\n  Let go of one: notron review dismiss <id>   ·   all: notron review dismiss --all\n")
+
+
 @maintenance
 def cmd_setup(args):
     print(f"\nSetting up {workspace.FOLDER} in Apple Notes\n")
@@ -617,6 +643,12 @@ def main(argv=None):
     ch.add_argument('--allow', default='read,research',
                     help='what she may use there: read (repo + GitHub, read-only), research (web)')
     ch.set_defaults(fn=cmd_channel)
+
+    rv = sub.add_parser('review', help='what is on hold, and dismissing it')
+    rv.add_argument('action', nargs='?', choices=['list', 'dismiss'], default='list')
+    rv.add_argument('ids', nargs='*', help='request id prefixes, as `notron review` prints them')
+    rv.add_argument('--all', action='store_true', help='dismiss everything on hold')
+    rv.set_defaults(fn=cmd_review)
 
     from .credentials import PROVISIONABLE
     keys = sub.add_parser('key', help='store, list or remove the API keys Notron uses')
