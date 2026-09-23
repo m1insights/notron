@@ -74,10 +74,24 @@ def drain(limit=BATCH_SIZE):
         # retrying it. Left at the head of the queue it was retried on every
         # pass — ~5 s of Notes traffic each, measured 2026-09-23 — and nothing
         # queued behind it ever reached 📊 Log. Skip it; it stays for review.
+        # A refused (cancelled) write is just as final — the executor never
+        # applies that operation again — and five of them at the head cost
+        # ~23 s a pass, twice a listener tick, measured the same day. Skipped,
+        # that receipt is a gap in the Log (best effort) and ages out in prune.
         def blocked(record):
             write = store.get(record.operation_id + ':write')
-            return write is not None and write.status == operations.S.NEEDS_REVIEW
+            return write is not None and write.status in (operations.S.NEEDS_REVIEW,
+                                                          operations.S.CANCELLED)
         records = [r for r in records if not blocked(r)]
+        # One Log write that diverged leaves its backup unresolved, and the
+        # executor then refuses every later Log write — each after ~4.5 s of
+        # Notes reads. Measured 2026-09-23: ten such refusals a listener tick,
+        # ~60 s, so a channel line waited a minute to be seen. Nothing can land
+        # until review settles it; the receipts wait in the queue for free.
+        from . import policy, undo
+        log_id = policy.current().system_notes.get(workspace.LOG)
+        if log_id and undo.unresolved(log_id):
+            records = []
         for record in records[:limit]:
             try:
                 oid = record.operation_id + ':write'

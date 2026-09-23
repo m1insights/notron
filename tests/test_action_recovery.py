@@ -382,3 +382,50 @@ def test_a_receipt_waiting_on_review_does_not_block_the_audit_queue(monkeypatch)
                         lambda self, w: tried.append(w.operation_id) or NS(ok=False))
     audit.drain(limit=1)
     assert tried and all(not oid.startswith(stuck) for oid in tried)
+
+
+def test_a_cancelled_receipt_is_not_retried_on_every_pass(monkeypatch):
+    """Measured 2026-09-23: five 📊 Log receipts were refused (their anchor was
+    a line that never landed). A refused write is final — the executor will
+    never apply that operation again — yet each listener pass retried all five,
+    ~23 s of Notes traffic twice a tick, and a channel line waited ~50 s to be
+    seen while 77 receipts behind them never reached the Log."""
+    from types import SimpleNamespace as NS
+    from notron import audit
+    from notron.executor import Executor
+    refused = audit.enqueue('Operation verified', operation_id='first')
+    audit.enqueue('Operation verified', operation_id='second')
+    store = operations.current()
+    real_get = store.get
+    monkeypatch.setattr(store, 'get', lambda oid: NS(status=operations.S.CANCELLED)
+                        if oid == refused + ':write' else real_get(oid))
+    monkeypatch.setattr(operations, 'current', lambda: store)
+    tried = []
+    monkeypatch.setattr(Executor, 'apply_write',
+                        lambda self, w: tried.append(w.operation_id) or NS(ok=False))
+    audit.drain(limit=1)
+    assert tried and all(not oid.startswith(refused) for oid in tried)
+
+
+def test_no_receipt_is_attempted_while_the_log_holds_an_unresolved_backup(monkeypatch):
+    """Measured 2026-09-23: one 📊 Log write diverged on 2026-09-22 and left its
+    backup unresolved. From then on the executor refused every Log write
+    ("unresolved backup requires review") — but only after ~4.5 s of Notes reads
+    each — so every listener pass spent ~60 s refusing ten receipts and a
+    channel line waited that long to be seen. Nothing can land until review
+    clears it, so nothing is tried: the receipts stay queued, at no cost."""
+    from types import SimpleNamespace as NS
+    from notron import audit, library, policy, undo, workspace
+    from notron.executor import Executor
+    log_id = policy.current().system_notes[workspace.LOG]
+    lib = library.load()
+    lib.decided = set(lib.decided) | {log_id}
+    library.save(lib)
+    undo.save(log_id, '<div>📊 Log</div>', 'a' * 64, 'audit:earlier:write')
+    queued = audit.enqueue('Operation verified', operation_id='first')
+    tried = []
+    monkeypatch.setattr(Executor, 'apply_write',
+                        lambda self, w: tried.append(w.operation_id) or NS(ok=False))
+    audit.drain()
+    assert tried == []
+    assert operations.current().get(queued).status == operations.S.PREPARED

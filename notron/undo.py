@@ -76,6 +76,15 @@ def peek(note_id: str) -> Snapshot | None:
     return replace(snapshot, after_revision=None) if entry['pending'] else snapshot
 
 
+def unresolved(note_id: str) -> bool:
+    """Does this note hold a staged backup whose write never settled?
+
+    While it does, `save` refuses every further write to the note, so a caller
+    that can only wait may ask this first and skip the Notes reads.
+    """
+    return bool(_entry(_load(), note_id)['pending'])
+
+
 def save(note_id: str, old_body: str, after_revision=None, operation_id=None) -> None:
     from . import policy
     from .executor import write_transaction
