@@ -117,6 +117,7 @@ class Watcher:
     _last_sweep: float = 0
     _last_dump: float = 0
     _last_channels: float = 0
+    _last_tasks: float = 0
     _dump_on_hold: bool = False
     _intent_version: int = -1
 
@@ -321,6 +322,47 @@ class Watcher:
                     self._pending.pop(stale, None)
                 return True
         return False
+
+    def check_tasks(self) -> bool:
+        """Move hand-off work along: collect, start one, report one. True if she wrote.
+
+        The coding agent runs in its own process and never holds the Notes lock
+        or this loop: a run of minutes costs the listener one cheap look per
+        pass. Only the report is a Notes write, and it goes through the graph —
+        Nemotron's review, the Guard, the executor — like any other reply.
+        """
+        from . import channels, handoff
+        for task in handoff.poll():
+            self._say(f"  task {task.id[:8]} {task.status} — {len(task.changed)} files changed")
+        started = handoff.dispatch_next()
+        if started is not None:
+            self._say(f"  task {started.id[:8]} {started.status}: {started.hand_name} — {started.goal[:60]}")
+        task = handoff.next_report()
+        if task is None:
+            return False
+        ch = next((c for c in channels.load() if c.name == task.channel and c.note_id == task.note_id), None)
+        if ch is None or ch.note_id not in policy.current().channels:
+            # The channel is gone; its note is not hers to write in any more.
+            handoff.reported(task.id)
+            return False
+        key = f"task:{task.id}"
+        if not self._worth_trying(key):
+            return False
+        record = requests.current().get(f"task-report:{task.id}")
+        if record is not None and record.status == 'completed':
+            # Posted before a crash stopped it being marked: never post it twice.
+            handoff.reported(task.id)
+            return False
+        with policy.explicit_reply(ch.note_id):
+            state = graph.run(f"task-report {task.id}", brain=self.brain, trigger="task",
+                              source_note_id=ch.note_id, reply_to=(ch.title, workspace.FOLDER, 0),
+                              request_id=f"task-report:{task.id}")
+        for line in state.trace:
+            self._say(f"  {line}")
+        if state.receipt_complete:
+            handoff.reported(task.id)
+        self._attempted(key, state.receipt_complete)
+        return True
 
     def sweep_mentions(self) -> None:
         from . import retention
@@ -557,6 +599,10 @@ class Watcher:
             if now - self._last_channels >= self.channel_poll:
                 self._last_channels = now
                 if self.check_channels():
+                    return
+            if now - self._last_tasks >= self.channel_poll:
+                self._last_tasks = now
+                if self.check_tasks():
                     return
             if store.paused or store.row()['stop_requested']:
                 return

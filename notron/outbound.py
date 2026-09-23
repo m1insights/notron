@@ -11,7 +11,7 @@ from typing import Literal, Sequence, get_args
 from . import policy, privacy, workspace
 from .policy import PolicyError, PolicySnapshot
 
-Purpose = Literal['route', 'write', 'schedule', 'organize', 'reflect', 'embed', 'search']
+Purpose = Literal['route', 'write', 'schedule', 'organize', 'reflect', 'embed', 'search', 'delegate']
 Origin = Literal['user_request', 'note', 'standing', 'memory', 'lesson', 'web',
                  'history', 'agenda', 'model', 'diagnostic', 'tool']
 NOTE_ORIGINS = {'note', 'standing', 'memory', 'lesson', 'history'}

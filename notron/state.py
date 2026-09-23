@@ -108,6 +108,8 @@ class State:
     channel: str = ""                # project channel name, when asked in one
     tools: list[str] = field(default_factory=list)   # read-only tool output, untrusted
     decision: str = ""               # the channel decision, shown in the receipt
+    task_id: str = ""                # the hand-off task this request proposed, approved or reports
+    proposal: dict = field(default_factory=dict)  # recorded by the executor once the brief is shown
     agenda: str = ""                          # today's calendar + open reminders
     actions: list[Action] = field(default_factory=list)
     answer: str = ""

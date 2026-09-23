@@ -120,7 +120,8 @@ def cmd_channel(args):
         print()
         for c in found:
             where = ", ".join(x for x in (c.repo, c.github and f"github {c.github}") if x) or "no project linked"
-            print(f"  {c.title:28} {where}  [{', '.join(c.allow)}]")
+            hand = f" · hands work to {c.hand}" if "run" in c.allow else ""
+            print(f"  {c.title:28} {where}  [{', '.join(c.allow)}]{hand}")
             print(f"  {'':28} tools: {', '.join(t.name for t in tools.available(c)) or 'none'}")
         print()
         return
@@ -130,20 +131,83 @@ def cmd_channel(args):
         gone = channels.remove(" ".join(args.name))
         print(f"\n  Removed {gone.title}. The note stays in Notes; she no longer answers there.\n")
         return
+    if args.action == 'set':
+        allow = tuple(a.strip() for a in args.allow.split(',') if a.strip()) if args.allow else None
+        try:
+            ch = channels.update(" ".join(args.name), github=args.github, allow=allow, hand=args.hand)
+        except channels.ChannelError as problem:
+            _setup_failure(problem)
+        print(f"\n  {ch.title}: [{', '.join(ch.allow)}]" + (f" · hands work to {ch.hand}" if ch.hand else "") + "\n")
+        return
     _add_channel(args)
 
 
 @maintenance
 def _add_channel(args):
     from . import channels
-    allow = tuple(a.strip() for a in args.allow.split(',') if a.strip())
+    allow = tuple(a.strip() for a in (args.allow or 'read,research').split(',') if a.strip())
     try:
-        ch, state = channels.add(" ".join(args.name), repo=args.repo or "", github=args.github or "", allow=allow)
+        ch, state = channels.add(" ".join(args.name), repo=args.repo or "", github=args.github or "",
+                                 allow=allow, hand=args.hand or "")
     except channels.ChannelError as problem:
         _setup_failure(problem)
     print(f"\n  {state:8} {ch.title}  (in {workspace.FOLDER})")
     print(f"\n  Say: “Hey Siri, add is CI green to my {ch.title} note.”")
     print("  Or type any line into it. She answers underneath, while `notron listen` runs.\n")
+
+
+def cmd_tasks(args):
+    """Hand-off tasks: what Nemotron briefed, what ran, what came back."""
+    import json as _json
+    import time as _time
+    from . import credentials, handoff
+    if args.action == 'fence':
+        print("\n  What a coding agent's process is refused by macOS itself (no model asked):\n")
+        for where, result in handoff.fence_check():
+            print(f"  {where:24} {result}")
+        print()
+        return
+    if credentials._provider is None:
+        credentials.startup()
+    try:
+        if args.action in ('approve', 'cancel', 'show'):
+            if not args.id:
+                raise SystemExit(f"Which task? notron tasks {args.action} <id>")
+            task = handoff.get(args.id)
+            if args.action == 'approve':
+                # The digest the board showed, when it passes one; otherwise the one on record.
+                task = handoff.approve(task.id, args.digest or task.digest)
+            elif args.action == 'cancel':
+                task = handoff.cancel(task.id)
+            if args.json:
+                print(_json.dumps(task.view()))
+                return
+            print(f"\n  {task.id[:8]}  {task.status:9} {task.channel} · {task.hand_name}")
+            print(f"  goal: {task.goal}")
+            for i, step in enumerate(task.brief.get('steps', []), 1):
+                print(f"    {i}. {step}")
+            if task.branch and task.changed:
+                print(f"  branch: {task.branch} · {task.diffstat}")
+            if task.review:
+                print(f"  review: {task.review.get('verdict', '?')} — {task.review.get('summary', '')}")
+            if task.error:
+                print(f"  note: {task.error}")
+            print()
+            return
+        tasks = handoff.all_tasks()[:args.limit]
+    except handoff.TaskError as problem:
+        raise SystemExit(str(problem))
+    if args.json:
+        print(_json.dumps([t.view() for t in tasks]))
+        return
+    if not tasks:
+        print("\n  No tasks yet. Ask for a change in a channel that allows `run`.\n")
+        return
+    print()
+    for t in tasks:
+        age = int((_time.time() - t.created) / 60)
+        print(f"  {t.id[:8]}  {t.status:9} {t.channel:14} {age:>4}m ago  {t.goal[:60]}")
+    print()
 
 
 def cmd_review(args):
@@ -651,13 +715,24 @@ def main(argv=None):
                    ).set_defaults(fn=cmd_agenda)
 
     ch = sub.add_parser('channel', help='project channels: a note per project you can talk to, or tell Siri')
-    ch.add_argument('action', choices=['add', 'list', 'remove'])
+    ch.add_argument('action', choices=['add', 'list', 'set', 'remove'])
     ch.add_argument('name', nargs='*', help='the project name; the note is called "Notron <name>"')
     ch.add_argument('--repo', help='the local repository folder')
     ch.add_argument('--github', help='the GitHub repository, owner/name')
-    ch.add_argument('--allow', default='read,research',
-                    help='what she may use there: read (repo + GitHub, read-only), research (web)')
+    ch.add_argument('--allow', default=None,
+                    help='what she may use there: read (repo + GitHub, read-only), research (web), '
+                         'run (hand an approved brief to a coding agent). Default read,research')
+    ch.add_argument('--hand', choices=['claude', 'codex'], default=None,
+                    help='the coding agent `run` hands work to: your own Claude Code or Codex install')
     ch.set_defaults(fn=cmd_channel)
+
+    tk = sub.add_parser('tasks', help='hand-off tasks: briefed by Nemotron, run by your coding agent')
+    tk.add_argument('action', nargs='?', choices=['list', 'show', 'approve', 'cancel', 'fence'], default='list')
+    tk.add_argument('id', nargs='?', help='task id (the first 6+ characters are enough)')
+    tk.add_argument('--digest', help='approve only if the brief still has this digest (the task board passes it)')
+    tk.add_argument('--json', action='store_true')
+    tk.add_argument('--limit', type=int, default=20)
+    tk.set_defaults(fn=cmd_tasks)
 
     rv = sub.add_parser('review', help='what is on hold, and dismissing it')
     rv.add_argument('action', nargs='?', choices=['list', 'dismiss'], default='list')
