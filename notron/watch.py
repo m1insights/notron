@@ -588,16 +588,31 @@ class Watcher:
                 self._say('A worker already owns the queue.')
                 return
             with Heartbeat(store) as heartbeat:
-                previous = time.time()
-                self._last_sweep = self._last_dump = previous
+                previous = (time.time(), time.monotonic())
+                self._last_sweep = self._last_dump = previous[0]
                 while not heartbeat.failed.is_set() and not store.row()['stop_requested']:
-                    now = time.time()
-                    self.tick(resumed=now < previous or now - previous > STALE_AFTER)
+                    now = (time.time(), time.monotonic())
+                    self.tick(resumed=slept(previous, now, STALE_AFTER))
                     previous = now
                     time.sleep(self.ask_poll)
             from .transport import configured
             managed=configured()
             if managed is not None:managed.stop()
+
+
+def slept(previous: tuple[float, float], now: tuple[float, float], threshold: float) -> bool:
+    """Did the Mac sleep (or the clock jump) between two (wall, monotonic) readings?
+
+    Not "did the last tick take long". That was the old test, and a busy tick is
+    not a sleep: measured 2026-09-23, ticks of 30–74 s (Notes is ~1 s a lookup)
+    were each read as a wake-up, which reset the runtime and cleared the settle
+    timers — so no line ever settled and the background listener answered
+    nothing for over seven minutes while the same code answered in the
+    foreground. macOS's monotonic clock stops while asleep and the wall clock
+    does not, so the gap between their advances is the time spent asleep.
+    """
+    wall, mono = now[0] - previous[0], now[1] - previous[1]
+    return wall < 0 or wall - mono > threshold
 
 
 WATCH_LABEL = "io.m1labs.notron.listen"

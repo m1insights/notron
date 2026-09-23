@@ -585,3 +585,11 @@ def test_a_brain_dump_on_hold_does_not_stop_everything_else(monkeypatch):
     assert w._runtime_ready, "a Brain Dump hold reset the whole listener"
     w.tick()
     assert calls == [1], "the held Brain Dump was retried every tick"
+
+
+def test_a_slow_tick_is_not_a_sleep():
+    """2026-09-23: 30-74 s ticks were read as wake-ups; the settle timers were
+    cleared every time and the background listener never answered."""
+    assert not watch.slept((1000.0, 50.0), (1074.0, 124.0), 30)      # busy, awake
+    assert watch.slept((1000.0, 50.0), (4600.0, 55.0), 30)           # an hour asleep
+    assert watch.slept((1000.0, 50.0), (900.0, 55.0), 30)            # clock went backwards
