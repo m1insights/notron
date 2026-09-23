@@ -785,7 +785,9 @@ class Executor:
             return
         try:
             from . import audit
+            # Queue only. Delivering here was a full 📊 Log append (~3.6 s,
+            # measured 2026-09-23) inside every reply; the listener's next tick
+            # drains it. Receipts are best effort either way (Invariant 4).
             audit.enqueue(line, operation_id=operation_id)
-            audit.drain(limit=1)
         except Exception:
             pass  # Primary APPLIED state never depends on an audit adapter.

@@ -517,6 +517,8 @@ def test_audit_failure_does_not_erase_verified_primary_success(fake_note_store, 
     fake_note_store.after_write = diverge_log
     result = executor.Executor().apply_write(make_write(note_id=nid))
     assert result.ok and 'cleaned' in fake_note_store.body(nid)
+    from notron import audit
+    audit.drain()  # the listener's next tick; receipts never ride the reply
     assert fake_note_store.body(log) == '<div>remote log edit</div>'
 
 
@@ -528,6 +530,8 @@ def test_blocked_write_keeps_generic_audit_without_mutating_target(fake_note_sto
     fake_note_store.set_body(nid, '<div>user edit</div>')
     assert not executor.Executor().apply_write(write).ok
     assert fake_note_store.body(nid) == '<div>user edit</div>'
+    from notron import audit
+    audit.drain()  # the listener's next tick; receipts never ride the reply
     assert 'BLOCKED' in fake_note_store.body(log)
 
 
@@ -708,6 +712,8 @@ def test_success_audit_payload_omits_note_derived_title(fake_note_store, make_wr
     log = fake_note_store.add(workspace.LOG, '<div>Log</div>', workspace.FOLDER)
     lib = library.load(); lib.system_notes[workspace.LOG] = log; library.save(lib)
     assert executor.Executor().apply_write(make_write(note_id=target)).ok
+    from notron import audit
+    audit.drain()  # the listener's next tick; receipts never ride the reply
     ledger = operations.current()
     audit = next(op for op in ledger.pending() if op.target_id == log)
     assert b'Source title' not in ledger.payload(audit.operation_id)

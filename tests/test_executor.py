@@ -431,3 +431,19 @@ def test_a_write_that_did_not_take_is_still_divergent():
 def test_an_entirely_unrelated_note_is_divergent():
     from notron.executor import write_landed
     assert not write_landed('<div>intended</div>', '')
+
+
+def test_a_reply_does_not_wait_for_its_log_receipt(monkeypatch):
+    """Measured 2026-09-23: the 📊 Log append ran inline, ~3.6 s of every channel
+    reply. Receipts are best effort (Invariant 4); the listener's next tick
+    delivers them, and the receipt is queued before the write reports done."""
+    from notron import audit
+    live = in_note(monkeypatch)
+    drained, queued = [], []
+    monkeypatch.setattr(audit, 'drain', lambda *a, **k: drained.append(1))
+    real = audit.enqueue
+    monkeypatch.setattr(audit, 'enqueue', lambda *a, **k: queued.append(real(*a, **k)) or queued[-1])
+    result = ex_mod.Executor().insert(workspace.ASK, 'answer', after=1, anchor='original question')
+    assert result.ok and 'answer' in live['body']
+    assert drained == [] and len(queued) == 1
+    assert audit.pending_count() == 1
