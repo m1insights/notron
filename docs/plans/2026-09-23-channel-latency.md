@@ -155,6 +155,38 @@ only). Design options for that session to weigh:
 
 Recommend 2 unless 1 is clean. A second write costs another ~5 s of Notes time.
 
+### Task 6 — run the likely tools while Nemotron decides (~1–2 s, ~2 h)
+
+Today `nodes.project` runs in series: Super decides (~2.5 s), then the chosen
+tools run (`tools.run`, ~0.1–1 s each, `gh_*` slower because they go over the
+network). The tools are read-only and fixed-argv, so starting them early is safe.
+
+Change, inside `nodes.project`:
+- Before the Super call, start a background thread that runs the channel's
+  **cheap local tools** (`git_status`, `git_log`, `git_branches`,
+  `git_diff_stat`) via `tools.run`. Measure `todos` (`git grep`) and the `gh_*`
+  tools on the real Synqology folder and include them only if each takes under ~1 s.
+- The Super call stays on the **main thread**. `brain._deadline_guard` uses
+  `SIGALRM` and refuses to run off the main thread, so only the subprocess work
+  moves to the thread.
+- After Super decides, use prefetched output **only for the tools Super picked**.
+  Run any picked tool that wasn't prefetched as today. Discard everything else:
+  unpicked output must never reach the writer's prompt. Otherwise the decision
+  stops meaning anything, and the prompt grows.
+- If the prefetch thread fails or is still running when Super answers, join it
+  with a short timeout (≤ 2 s), then fall back to running the picks serially.
+  The receipt line ("checked … · decided by Nemotron Super in N s") is
+  unchanged. Nemotron still makes and signs the decision.
+- Tests, all with `tools._exec` faked: (1) a picked tool that was prefetched is
+  not run twice; (2) an unpicked prefetched output is absent from `state.tools`;
+  (3) a prefetch error falls back to a serial run; (4) the brain is called on the
+  main thread.
+
+Jev (TypeSafe's decision model) was considered for this slot and parked. It
+would replace or pre-empt the Nemotron decision, the rubric's scored path, and
+add a third provider. Revisit only as a speculative prefetch hint if this task
+still leaves the decision step as the largest remaining slice.
+
 ## 3. Acceptance
 
 - `scripts/profile_channel.py` on a live channel: graph run **≤ 20 s**, Notes
@@ -167,5 +199,5 @@ Recommend 2 unless 1 is clean. A second write costs another ~5 s of Notes time.
 
 ## 4. Out of scope
 
-Model/tier changes, Jev, OpenShell, the Claude/Codex hand-off (step 6), the task
+Model/tier changes, Jev (see Task 6), OpenShell, the Claude/Codex hand-off (step 6), the task
 board (step 7). Do not raise `MAX_BODY_CHARS` or touch the picture guard.
