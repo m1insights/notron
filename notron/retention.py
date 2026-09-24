@@ -83,12 +83,15 @@ def apply_policy() -> None:
     inputs = lambda: (repr(signature), _stamp(library.STATE),
                       _stamp(index.CACHE.with_suffix('.enc')), _stamp(undo.STATE.with_suffix('.enc')))
     global _PURGED
-    if _PURGED != inputs():
+    # Key taken before the purge: a change landing during it is never recorded
+    # as done; the cost is one more (no-op) pass after the purge's own rewrite.
+    before = inputs()
+    if _PURGED != before:
         if index.CACHE.with_suffix('.enc').exists():
             index._load()  # persists removal using full title/date-aware policy
         if undo.STATE.with_suffix('.enc').exists():
             undo._load()
-        _PURGED = inputs()
+        _PURGED = before
     from . import attachments
     attachments.purge()
     from . import operations, requests

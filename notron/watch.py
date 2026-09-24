@@ -126,6 +126,9 @@ class Watcher:
     _last_channels: float = 0
     _last_tasks: float = 0
     _dump_on_hold: bool = False
+    # Set on a resume until one full tick has passed: a stamp from before the
+    # sleep says nothing about whether a line was finished.
+    _just_resumed: bool = False
     _intent_version: int = -1
 
     # A question that produced no write stays "unanswered" in the note, so the
@@ -263,6 +266,10 @@ class Watcher:
                      else self._ask_settle(text))
                for key, (text, at) in self._pending.items()
                if key.startswith(("chan:", "ask:"))]
+        # Only deadlines still ahead. A key goes stale when its text is edited
+        # (a new request id) and stays in `_pending` until an answer; counted
+        # as overdue it kept the loop at MIN_PAUSE — a spin (review 2026-09-23).
+        due = [d for d in due if d > now]
         return min(due) if due else None
 
     # ------------------------------------------------------------- the two jobs
@@ -310,8 +317,10 @@ class Watcher:
             key = f"ask:{envelope.request_id}"
             if not self._worth_trying(key):
                 continue
-            if not self._settled(key, q.text, settle=self._ask_settle(q.text),
-                                 quiet=lambda: self._quiet_for(self._ask_id)):
+            # No `quiet` here: a line half-typed before the lid closed, or typed
+            # on a phone and synced late, carries an old stamp while the person
+            # is still writing (review 2026-09-23). Only whole Siri lines use it.
+            if not self._settled(key, q.text, settle=self._ask_settle(q.text)):
                 continue
             wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
                                  after=q.after, source=q.text, note_id=self._ask_id, envelope=envelope)
@@ -360,8 +369,9 @@ class Watcher:
                 key = f"chan:{envelope.request_id}"
                 if not self._worth_trying(key):
                     continue
+                quiet = None if self._just_resumed else (lambda nid=ch.note_id: self._quiet_for(nid))
                 if not self._settled(key, q.text, settle=min(self.settle, self.channel_settle),
-                                     quiet=lambda nid=ch.note_id: self._quiet_for(nid)):
+                                     quiet=quiet):
                     continue
                 wrote = self._answer(q.text, title=ch.title, folder=workspace.FOLDER,
                                      after=q.after, source=q.text, note_id=ch.note_id, envelope=envelope)
@@ -617,6 +627,7 @@ class Watcher:
         if resumed or self._intent_version != intent['intent_version']:
             self._runtime_ready = False
             self._pending.clear()  # Sleep/pause never makes a half-typed turn settled.
+            self._just_resumed = True
             self._intent_version = intent['intent_version']
             store.update(state='starting', reason_code='resuming')
         # Local verified receipt repair does not depend on cloud entitlement or
@@ -674,6 +685,7 @@ class Watcher:
                     self._say("  Brain Dump filing is on hold until its old outcomes are reviewed")
             if not store.paused and not store.row()['stop_requested']:
                 audit.drain()
+            self._just_resumed = False
             store.update(state='ready', reason_code=None)
         except Exception as exc:
             self._runtime_ready = False

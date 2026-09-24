@@ -581,8 +581,9 @@ def test_a_line_seen_settling_wakes_the_listener_when_it_is_due(monkeypatch):
     w._settled("chan:1", "is CI green")
     now[0] += 1
     assert w.pause(now[0]) == pytest.approx(watch.CHANNEL_SETTLE - 1)
+    assert w.pause(now[0] + watch.CHANNEL_SETTLE - 1 - 0.1) == watch.MIN_PAUSE   # due any moment
     now[0] += 10
-    assert w.pause(now[0]) == watch.MIN_PAUSE                # overdue: soon, never a spin
+    assert w.pause(now[0]) == w.ask_poll                     # overdue: the usual poll, never a spin
     w._pending.clear()
     w._settled("ask:1", "half a thought")
     assert w.pause(now[0]) == w.ask_poll                     # 12 s away: the usual poll
@@ -605,3 +606,29 @@ def test_the_listener_wakes_for_a_question_when_it_is_due(monkeypatch):
     w = watch.Watcher(brain=None)
     w._settled("ask:1", "is the dentist tomorrow?")
     assert w.pause(now[0]) == pytest.approx(watch.QUESTION_SETTLE)
+
+
+def test_an_edited_half_line_left_a_stale_key_that_spun_the_loop(monkeypatch):
+    """Review 2026-09-23: editing a line gives it a new request id; the old key
+    stayed pending, overdue, and held the loop at 0.25 s ticks."""
+    now = _clock(monkeypatch)
+    w = watch.Watcher(brain=None)
+    w._settled("ask:A", "What is")
+    now[0] += 20
+    w._settled("ask:B", "What is on today and")
+    assert w.pause(now[0]) == w.ask_poll
+
+
+def test_a_line_half_typed_before_sleep_is_not_answered_on_wake(monkeypatch, _notes_is_never_the_real_one):
+    """Review 2026-09-23: after a resume the old stamp says hours of quiet."""
+    w, answered = _siri_line(monkeypatch, _notes_is_never_the_real_one, seconds_ago=3600)
+    w._just_resumed = True
+    assert not w.check_channels() and answered == []
+
+
+def test_the_ask_note_never_trusts_the_stamp(monkeypatch):
+    w = watch.Watcher(brain=None)
+    asked = []
+    monkeypatch.setattr(w, "_quiet_for", lambda nid: asked.append(nid) or 3600)
+    import inspect
+    assert "quiet=" not in inspect.getsource(watch.Watcher.check_ask).split("_settled(")[1].split(")")[0]

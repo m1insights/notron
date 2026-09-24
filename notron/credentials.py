@@ -46,6 +46,7 @@ class KeychainStore:
     def __init__(self, helper: Path):
         self.helper = Path(helper)
         self._held: dict[str, tuple[bytes, float]] = {}
+        self._generation = 0
         self._lock = threading.Lock()
 
     def _request(self, operation: str, name: str, value: bytes | None = None):
@@ -93,8 +94,11 @@ class KeychainStore:
             held = self._held.get(name)
             if held is not None and time.monotonic() - held[1] < self.TTL:
                 return held[0]
+            generation = self._generation
         value = self._request('get', name)
         with self._lock:
+            if generation != self._generation:
+                return value  # a put/delete overlapped this read: never hold it
             if value is None:
                 self._held.pop(name, None)
             else:
@@ -104,6 +108,7 @@ class KeychainStore:
     def forget(self) -> None:
         with self._lock:
             self._held.clear()
+            self._generation += 1
 
     def put(self, name: str, value: bytes) -> None:
         self.forget()

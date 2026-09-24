@@ -378,3 +378,20 @@ def test_a_failing_keychain_is_never_served_from_the_hold(monkeypatch, tmp_path)
         with pytest.raises(credentials.CredentialUnavailable):
             store.get(credentials.STORAGE_KEY)
     assert len(calls) == 2
+
+
+def test_a_read_overlapping_a_change_is_not_held(monkeypatch, tmp_path):
+    """Review 2026-09-23: a get in flight across a put stored the old value."""
+    from notron import credentials
+    store = credentials.KeychainStore(tmp_path / 'helper')
+    values = {credentials.NEBIUS_KEY: b'old'}
+
+    def request(self, operation, name, value=None):
+        if operation == 'get':
+            got = values.get(name)
+            if name == credentials.NEBIUS_KEY and got == b'old':
+                values[name] = b'new'; self.forget()      # a put lands mid-read
+            return got
+    monkeypatch.setattr(credentials.KeychainStore, '_request', request)
+    assert store.get(credentials.NEBIUS_KEY) == b'old'
+    assert store.get(credentials.NEBIUS_KEY) == b'new'

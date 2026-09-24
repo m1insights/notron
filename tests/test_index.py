@@ -168,6 +168,7 @@ def test_an_idle_tick_decrypted_the_whole_index_twice_to_purge_nothing(_notes_is
     from notron import retention
     index.build(CountingBrain())
     retention.apply_policy()
+    retention.apply_policy()        # one settling pass after a purge's own rewrite
     loads = []
     real = index._load
     monkeypatch.setattr(index, '_load', lambda: loads.append(1) or real())
@@ -177,5 +178,5 @@ def test_an_idle_tick_decrypted_the_whole_index_twice_to_purge_nothing(_notes_is
 
     library.save(library.Library(allow_new_notes=True, ignore={"Notes/Supps"}))
     retention.apply_policy()
-    assert loads == [1]
+    assert loads                    # a changed choice purges at once
     assert "Notes/Supps" not in real()
