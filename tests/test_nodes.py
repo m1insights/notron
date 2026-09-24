@@ -759,3 +759,18 @@ def test_her_own_surfaces_reach_the_writer_without_a_search():
     text = ' '.join(p.text for p in nodes._prompt(result))
     assert workspace.ASK in text
     assert 'not about AI assistants in general' in text
+
+
+def test_the_router_searched_this_quarter_as_q3_2025():
+    """Measured 2026-09-23: with no date, "my goals for this quarter" became
+    the search query "goals for Q3 2025". The router is told today's date."""
+    from datetime import datetime
+    brain = FakeBrain()
+    seen = []
+    real = brain.ask_json
+    def spy(**kw):
+        seen.extend(p.text for p in kw['user'])
+        return real(**kw)
+    brain.ask_json = spy
+    nodes.router(State(request="what are my goals for this quarter?"), brain=brain)
+    assert any(str(datetime.now().year) in t and t.startswith("# Today") for t in seen)

@@ -195,7 +195,10 @@ def router(state: State, *, brain) -> State:
         state.note("router", "project channel — Nemotron Super decides in the project node")
         return state
     try:
-        out = brain.ask_json(system=ROUTER_SYSTEM, user=[*_history_passages(state), _request_passage(state)], purpose="route", tier="smart", max_tokens=400)
+        # The router rewrites every request into a search query, and without
+        # the date it resolved "this quarter" to "Q3 2025" (2026-09-23).
+        today = Passage(f"# Today\n{datetime.now():%A %-d %B %Y}", "diagnostic")
+        out = brain.ask_json(system=ROUTER_SYSTEM, user=[today, *_history_passages(state), _request_passage(state)], purpose="route", tier="smart", max_tokens=400)
     except (CredentialUnavailable, StorageError, PolicyError):
         raise
     except Exception as e:

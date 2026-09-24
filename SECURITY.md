@@ -35,7 +35,9 @@ this document must name it and the response process before public release.
   There is no plaintext or environment-credential fallback. Signed provisioning
   and startup are still blocked on P06.
 - Provider HTTP uses fixed HTTPS destinations/routes, validated and pinned DNS
-  addresses, hostname-verified TLS and redirect rejection. Development endpoints
+  addresses, hostname-verified TLS and redirect rejection. A validated connection
+  may be reused on one thread for up to 30 s; every request re-runs the endpoint,
+  credential and readiness checks. Development endpoints
   require a separate injected credential. Citation checking makes no requests.
 
 ## Limits and future work
