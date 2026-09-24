@@ -106,6 +106,8 @@ def reconcile() -> set[str]:
     live = {n.id for n in listed if snapshot.readable(n)}
     global _LISTED
     _LISTED = (time.monotonic(), {n.id: n for n in listed})
+    from .executor import remember_all
+    remember_all(listed)
     from . import attachments
     attachments.purge(live)
     removed = False

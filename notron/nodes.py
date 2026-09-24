@@ -72,17 +72,16 @@ def watcher(state: State, *, brain=None) -> State:
     wanted = ((workspace.ABOUT, "about"), (workspace.MEMORY, "memory"), (workspace.LESSONS, "lessons"))
     if channels.for_note(state.source_note_id):
         wanted = wanted[:1]
-    from .executor import remember
+    from .executor import recall
     for title, attr in wanted:
         # By the id setup registered, not by listing her folder: measured
         # 2026-09-23, list + read + a second lookup of the same note was 3.2 s.
         # A renamed or moved note is not this system note any more.
         snap = policy.current()
         nid = snap.system_notes.get(title)
-        n = notes.get_note(nid) if nid else None
+        n = recall(nid) if nid else None
         if (n and n.folder == workspace.FOLDER and n.title == title
                 and snap.system_role(n.id) == title and snap.readable(n)):
-            remember(n)
             body = notes.read_body(n.id)
             text = markup.to_text(body)
             state.write_targets[title] = capture_write(title, note_id=n.id, body=body, note=n, mode="append")
