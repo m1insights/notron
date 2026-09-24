@@ -103,3 +103,18 @@ def test_a_due_date_is_built_on_the_same_pinned_calendar():
     Mac is set to, and the reminder lands on the wrong day."""
     for script in (reminders._OPEN, reminders._CREATE):
         assert "currentCalendar" not in script, "build it with gregorian() instead"
+
+
+def test_full_access_read_as_a_string_locked_every_reminder_and_event_read():
+    """2026-09-23: on macOS 26.2 JXA hands `authorizationStatusForEntityType`
+    back as the string "3", so `!== 3` threw "full access required" with full
+    access granted — every Reminders and Calendar read and write refused."""
+    import re
+    from pathlib import Path
+    import notron
+    root = Path(notron.__file__).parent
+    for name in ("reminders.py", "calendar.py"):
+        text = (root / name).read_text()
+        checks = re.findall(r"[^\s(]*\(?\$\.EKEventStore\.authorizationStatusForEntityType\([^)]*\)\)?\s*[!=]==", text)
+        assert checks, name
+        assert all(c.startswith("Number(") for c in checks), (name, checks)

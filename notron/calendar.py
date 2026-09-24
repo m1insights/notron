@@ -35,7 +35,7 @@ MAX_DAYS = 14
 # report the day: run at 10:00 it started the window at 10:00, and the 09:00
 # meeting the user had just come out of was simply not there.
 _WINDOW = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent)) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
 var start = input.start == null ? $.NSDate.dateWithTimeIntervalSinceNow(-86400 * input.back) : $.NSDate.dateWithTimeIntervalSince1970(input.start);
@@ -60,7 +60,7 @@ return JSON.stringify(rows);
 """
 
 _NAMES = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent)) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
 var names = [];
@@ -69,7 +69,7 @@ JSON.stringify(names);
 """
 
 _CREATE = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent)) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var e = $.EKEvent.eventWithEventStore(store);
 e.title = input.title;
@@ -257,7 +257,7 @@ def create(title: str, *, start_iso: str, end_iso: str | None = None,
 
 
 _FIND_OPERATION = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('calendar unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent)) !== 3) throw new Error('calendar unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var day = $.NSDate.dateWithTimeIntervalSince1970(input.start);
 var start = day.dateByAddingTimeInterval(-86400);
@@ -286,7 +286,7 @@ def find_by_operation(operation_id: str, *, caller=None) -> list[str]:
         'reference': reference(operation_id), 'start': start.timestamp()})
 
 _TARGETS = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent) !== 3) throw new Error('full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeEvent)) !== 3) throw new Error('full access required');
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeEvent);
 var def = store.defaultCalendarForNewEvents;
