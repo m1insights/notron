@@ -594,3 +594,47 @@ def test_a_slow_tick_is_not_a_sleep():
     assert not watch.slept((1000.0, 50.0), (1074.0, 124.0), 30)      # busy, awake
     assert watch.slept((1000.0, 50.0), (4600.0, 55.0), 30)           # an hour asleep
     assert watch.slept((1000.0, 50.0), (900.0, 55.0), 30)            # clock went backwards
+
+
+def test_five_log_receipts_ran_before_she_looked_for_a_new_line(monkeypatch):
+    """Measured 2026-09-23: each 📊 Log receipt is ~9 s of Notes, and the tick
+    delivered up to five before checking for new lines. Now: after the checks,
+    one a tick, none while a line is settling."""
+    from notron import audit, credentials, worker
+    from notron.health import HealthStore
+    order = []
+    w = watch.Watcher(brain=None, on_event=lambda m: None)
+    w._runtime_ready = True
+    monkeypatch.setattr(credentials, '_provider', object())
+    monkeypatch.setattr(audit, 'drain', lambda limit=5: order.append(('drain', limit)))
+    monkeypatch.setattr(worker, 'require_owner', lambda: None)
+    monkeypatch.setattr(worker, 'drain_one', lambda: False)
+    monkeypatch.setattr('notron.managed_lease.require_effect', lambda *a: None)
+    monkeypatch.setattr(w, 'recover_pending', lambda **k: False)
+    monkeypatch.setattr(w, 'check_ask', lambda: order.append('ask'))
+    monkeypatch.setattr(w, 'check_channels', lambda: order.append('channels') or False)
+    monkeypatch.setattr(w, 'check_tasks', lambda: False)
+    monkeypatch.setattr(w, 'sweep_mentions', lambda: None)
+    monkeypatch.setattr(w, 'check_dump', lambda: None)
+    monkeypatch.setattr(HealthStore, 'row', lambda self: {'stop_requested': 0, 'paused': 0, 'intent_version': w._intent_version})
+    monkeypatch.setattr(HealthStore, 'paused', property(lambda self: False))
+    monkeypatch.setattr(HealthStore, 'update', lambda self, **k: None)
+    w.tick()
+    assert order[:2] == ['ask', 'channels'] and order[2:] == [('drain', 1)]
+
+    order.clear()
+    w._pending['chan:1'] = ('is CI green', watch.time.time())   # a line settling
+    w.tick()
+    assert ('drain', 1) not in order
+
+
+def test_a_mention_sweep_listed_every_note_twice(monkeypatch):
+    """Measured 2026-09-23: reconcile and the scanner each listed every note,
+    ~1.6 s apiece, every 20 s. The scanner uses the listing just taken."""
+    from notron import mentions, notes as notes_mod, retention
+    listings = []
+    real = notes_mod.list_all_notes
+    monkeypatch.setattr(notes_mod, 'list_all_notes', lambda: listings.append(1) or real())
+    retention.reconcile()
+    mentions.Scanner().changed()
+    assert len(listings) == 1

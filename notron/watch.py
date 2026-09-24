@@ -635,7 +635,12 @@ class Watcher:
         try:
             from . import credentials
             if credentials._provider is not None:
-                audit.drain()
+                # Only while the runtime is down: when it is up, receipts wait
+                # until after the new-line checks below. Measured 2026-09-23:
+                # a 📊 Log receipt costs ~9 s of Notes, and five of them here
+                # ran before she looked for a new line at all.
+                if not self._runtime_ready:
+                    audit.drain(limit=1)
                 if self.recover_pending(local_only=True):return
         except Exception:
             pass
@@ -683,8 +688,11 @@ class Watcher:
                     # one optional surface; it waits for review on its own.
                     self._dump_on_hold = True
                     self._say("  Brain Dump filing is on hold until its old outcomes are reviewed")
-            if not store.paused and not store.row()['stop_requested']:
-                audit.drain()
+            # One receipt a tick, and none while a line is settling: receipts
+            # are best effort (Invariant 4); a person waiting is not.
+            if (not store.paused and not store.row()['stop_requested']
+                    and self.next_wake(time.time()) is None):
+                audit.drain(limit=1)
             self._just_resumed = False
             store.update(state='ready', reason_code=None)
         except Exception as exc:
