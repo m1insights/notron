@@ -38,6 +38,12 @@ SWEEP_EVERY = 20       # seconds between sweeps for #notron mentions (a survey i
 SETTLE = 12            # how long your typing must be still before she answers
 MIN_CHARS = 2
 
+# A typed turn that ends in a question mark is finished far more often than not;
+# the 12 s above is for a thought still being written. Measured 2026-09-23: the
+# 12 s wait was the largest single slice of a typed Ask-note answer after the
+# graph itself. A question answered a moment early costs one more line.
+QUESTION_SETTLE = 4
+
 # A project channel line usually arrives whole — Siri dictates it in one go —
 # so it waits 3 s, not the 12 s a typed Ask-note turn needs. Measured
 # 2026-09-23: poll + settle were 22 of a ~110 s channel reply. A half-typed line
@@ -248,10 +254,14 @@ class Watcher:
         still = (datetime.now() - at).total_seconds() - 1
         return still if still >= 0 else None
 
+    def _ask_settle(self, text: str) -> float:
+        return min(self.settle, QUESTION_SETTLE) if text.rstrip().endswith("?") else self.settle
+
     def next_wake(self, now: float) -> float | None:
         """When the earliest line now settling will have sat long enough."""
-        due = [at + (self.channel_settle if key.startswith("chan:") else self.settle)
-               for key, (_, at) in self._pending.items()
+        due = [at + (min(self.settle, self.channel_settle) if key.startswith("chan:")
+                     else self._ask_settle(text))
+               for key, (text, at) in self._pending.items()
                if key.startswith(("chan:", "ask:"))]
         return min(due) if due else None
 
@@ -300,7 +310,8 @@ class Watcher:
             key = f"ask:{envelope.request_id}"
             if not self._worth_trying(key):
                 continue
-            if not self._settled(key, q.text, quiet=lambda: self._quiet_for(self._ask_id)):
+            if not self._settled(key, q.text, settle=self._ask_settle(q.text),
+                                 quiet=lambda: self._quiet_for(self._ask_id)):
                 continue
             wrote = self._answer(q.text, title=workspace.ASK, folder=workspace.FOLDER,
                                  after=q.after, source=q.text, note_id=self._ask_id, envelope=envelope)

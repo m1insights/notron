@@ -586,3 +586,22 @@ def test_a_line_seen_settling_wakes_the_listener_when_it_is_due(monkeypatch):
     w._pending.clear()
     w._settled("ask:1", "half a thought")
     assert w.pause(now[0]) == w.ask_poll                     # 12 s away: the usual poll
+
+
+def test_a_typed_question_waited_twelve_seconds_after_its_question_mark(monkeypatch):
+    """Measured 2026-09-23: the 12 s typing settle was the largest slice of a
+    typed answer after the graph. A turn ending in '?' is done: 4 s."""
+    now = _clock(monkeypatch)
+    w = watch.Watcher(brain=None)
+    assert not w._settled("ask:1", "what's on today?", settle=w._ask_settle("what's on today?"))
+    now[0] += watch.QUESTION_SETTLE
+    assert w._settled("ask:1", "what's on today?", settle=w._ask_settle("what's on today?"))
+    assert w._ask_settle("what's on to") == watch.SETTLE
+    assert w._ask_settle("plan my week. then") == watch.SETTLE
+
+
+def test_the_listener_wakes_for_a_question_when_it_is_due(monkeypatch):
+    now = _clock(monkeypatch)
+    w = watch.Watcher(brain=None)
+    w._settled("ask:1", "is the dentist tomorrow?")
+    assert w.pause(now[0]) == pytest.approx(watch.QUESTION_SETTLE)
