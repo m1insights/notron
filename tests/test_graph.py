@@ -343,3 +343,17 @@ def test_a_node_that_acts_is_always_checkpointed(monkeypatch):
     monkeypatch.setattr(graph, "NODES", fake)
     graph.run("remind me", brain=None, dry_run=False)
     assert "doer" in saved
+
+
+def test_185_dry_runs_were_counted_as_waiting_work():
+    """Measured 2026-09-23: every `--dry-run` left its request `prepared`, and
+    `listen --status` counted 185 of them as pending. A rehearsal retires its
+    own request; a request that existed before is never touched."""
+    from notron import requests
+    state, brain = _run("question")
+    assert requests.current().get(state.request_id) is None
+
+    real = requests.create("a real one", source='cli')
+    requests.current().capture(real)
+    graph.run_request(real, brain=brain, dry_run=True)
+    assert requests.current().get(real.request_id).status == 'prepared'

@@ -393,6 +393,24 @@ Two different Nemotron models, arranged adversarially, with plain Python as the
 arbiter. A model that can only produce quotable evidence and cannot approve its
 own output is the whole design in one function.
 
+### How fast she answers, and where the time goes
+
+Measured 2026-09-23 on a real library (254 notes), from the listener's own code
+path with nothing written (`scripts/profile_dry.py`):
+
+| | Before this round | Now |
+|---|---|---|
+| Question in 📥 Ask Notron, answered from your notes | 58 s | ~16–27 s |
+| Line in a project channel (Siri) | 16 s | ~9–12 s |
+| Listener idle check | 3.5 s | ~1 s |
+| Wait after a typed question ending in "?" | 12 s | 4 s |
+
+Where the rest goes, on a notes question: two Nemotron Super decisions (~3 s
+each), one embedding of the query on Nebius (2–8 s, all provider-side), and
+Apple Notes itself (~0.2 s a request, and there is no faster door into Notes).
+Every write is still re-checked against Notes right before it happens; none of
+the speed came from skipping a safety check.
+
 ## Powered by
 
 - **[Nebius Token Factory](https://tokenfactory.nebius.com)** — core inference; planned external-agent integrations use separately authorized providers.

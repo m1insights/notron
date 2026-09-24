@@ -80,7 +80,8 @@ def test_the_listener_survives_notes_going_away(monkeypatch):
             pass
     t = threading.Thread(target=run, daemon=True)
     t.start()
-    t.join(timeout=3)
+    # 0.3 s normally; 3 s timed out on 2026-09-23 while another process loaded the Mac.
+    t.join(timeout=10)
     assert not t.is_alive()
     assert len(calls) > 1, "loop stopped after the first failure"
 
