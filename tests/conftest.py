@@ -33,6 +33,15 @@ from notron import (applescript, attachments, mentions, notes,
 
 
 @pytest.fixture(autouse=True)
+def _no_kept_provider_connection():
+    """A connection kept by one test's fake socket must never serve another's."""
+    from notron import network
+    network.forget_connections()
+    yield
+    network.forget_connections()
+
+
+@pytest.fixture(autouse=True)
 def _no_search_key(monkeypatch):
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
 

@@ -15,6 +15,8 @@ import os
 import re
 import socket
 import ssl
+import threading
+import time
 from urllib.parse import urlsplit
 
 import httpx2
@@ -263,20 +265,91 @@ class ProviderTransport(httpx2.BaseTransport):
         if endpoint.service == 'nebius':
             headers['Authorization'] = f'Bearer {secret}'
         timeouts = request.extensions.get('timeout', {})
+        body = request.read()
+        conn = _take(base.hostname)
+        if conn is not None:
+            try:
+                return self._send(conn, request.method, parts.path, body, headers, timeouts,
+                                  base.hostname, reused=True)
+            except _Stale:
+                pass   # closed by the provider while idle, before any reply: once, fresh
         conn = _ProviderConnection(base.hostname, 443, timeout=remaining(timeouts.get('connect', 20)),
                                    context=ssl.create_default_context())
         conn.write_timeout = remaining(timeouts.get('write', 20))
         try:
-            conn.request(request.method, parts.path, body=request.read(), headers=headers)
-            conn.sock.settimeout(remaining(timeouts.get('read', 20)))
-            response = conn.getresponse()
+            return self._send(conn, request.method, parts.path, body, headers, timeouts,
+                              base.hostname, reused=False)
+        except _Stale:
+            raise ProviderConnectivityError('Provider transport unavailable.') from None
+
+    @staticmethod
+    def _send(conn, method, path, body, headers, timeouts, host, *, reused):
+        kept = False
+        try:
+            if reused:
+                conn.sock.settimeout(remaining(timeouts.get('write', 20)))
+            try:
+                conn.request(method, path, body=body, headers=headers)
+                conn.sock.settimeout(remaining(timeouts.get('read', 20)))
+                response = conn.getresponse()
+            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError,
+                    ssl.SSLEOFError):
+                if reused:
+                    raise _Stale() from None
+                raise
             if 300 <= response.status < 400:
                 raise NetworkPolicyError('Provider redirects are not allowed.')
-            return httpx2.Response(response.status, headers=response.getheaders(), content=response.read())
+            content = response.read()
+            if not getattr(response, 'will_close', True):
+                _keep(host, conn)
+                kept = True
+            return httpx2.Response(response.status, headers=response.getheaders(), content=content)
         except (OSError, http.client.HTTPException):
             raise ProviderConnectivityError('Provider transport unavailable.') from None
         finally:
-            conn.close()
+            if not kept:
+                conn.close()
+
+
+class _Stale(Exception):
+    """A kept connection the provider had already closed; nothing was answered."""
+
+
+# One open connection per provider host per thread, reused for KEEP_ALIVE
+# seconds. Measured 2026-09-23: a fresh TCP + TLS handshake to Nebius (Europe,
+# 0.14 s away) cost ~0.3 s on every call, four or five calls a reply. The
+# connection is only ever to the address validated when it was opened, TLS
+# still authenticates the service name, and every request re-runs the
+# endpoint, credential and readiness checks above before it is sent.
+KEEP_ALIVE = 30.0
+_POOL = threading.local()
+
+
+def _take(host):
+    held = getattr(_POOL, 'held', {}).pop(host, None)
+    if held is None:
+        return None
+    conn, at = held
+    if time.monotonic() - at >= KEEP_ALIVE or conn.sock is None:
+        conn.close()
+        return None
+    return conn
+
+
+def _keep(host, conn):
+    if not hasattr(_POOL, 'held'):
+        _POOL.held = {}
+    old = _POOL.held.pop(host, None)
+    if old is not None:
+        old[0].close()
+    _POOL.held[host] = (conn, time.monotonic())
+
+
+def forget_connections():
+    """Close every kept connection on this thread (tests; credential changes)."""
+    for conn, _ in getattr(_POOL, 'held', {}).values():
+        conn.close()
+    _POOL.held = {}
 
 
 def provider_client(endpoint: ProviderEndpoint) -> httpx2.Client:
