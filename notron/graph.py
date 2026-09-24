@@ -108,10 +108,16 @@ def run_request(envelope, *, brain, dry_run: bool = False,
     envelope carries provenance, but does not grant an explicit reply capability.
     """
     from .executor import metadata_memo
-    with metadata_memo():
-        return _run_request(envelope, brain=brain, dry_run=dry_run, on_node=on_node,
-                            trigger=trigger, carried=carried,
-                            conversation_context=conversation_context)
+    from . import requests
+    rehearsal = dry_run and requests.current().get(envelope.request_id) is None
+    try:
+        with metadata_memo():
+            return _run_request(envelope, brain=brain, dry_run=dry_run, on_node=on_node,
+                                trigger=trigger, carried=carried,
+                                conversation_context=conversation_context)
+    finally:
+        if rehearsal:
+            requests.current().retire_rehearsal(envelope.request_id)
 
 
 def _run_request(envelope, *, brain, dry_run, on_node, trigger, carried,

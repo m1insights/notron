@@ -180,3 +180,21 @@ def test_an_idle_tick_decrypted_the_whole_index_twice_to_purge_nothing(_notes_is
     retention.apply_policy()
     assert loads                    # a changed choice purges at once
     assert "Notes/Supps" not in real()
+
+
+def test_a_note_deleted_while_the_query_was_embedded_never_reaches_the_prompt(_notes_is_never_the_real_one, monkeypatch):
+    """Review 2026-09-23: a 5 s-old listing still showed a note deleted since.
+    Past LISTED_FRESH the hits are checked against a fresh listing."""
+    from notron import retention
+    app = _notes_is_never_the_real_one
+    index.build(CountingBrain())
+
+    class SlowBrain(CountingBrain):
+        def embed(self, texts):
+            app.folders[0][1].remove("Supps")          # deleted mid-search
+            real = retention.time.monotonic
+            monkeypatch.setattr(retention.time, 'monotonic', lambda: real() + retention.LISTED_FRESH + 1)
+            return super().embed(texts)
+    hits = index.search([Passage('parking', 'user_request')], SlowBrain())
+    assert "Notes/Supps" not in {c.note_id for c in hits}
+    assert "Notes/Parking Garages" in {c.note_id for c in hits}

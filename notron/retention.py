@@ -110,7 +110,7 @@ def apply_policy() -> None:
 #: listing it just took answers those checks (measured 2026-09-23: 8 lookups,
 #: 6.4 s, in one reply). Only a listing at most LISTED_FRESH seconds old counts.
 _LISTED: tuple[float, dict] | None = None
-LISTED_FRESH = 5.0
+LISTED_FRESH = 2.0   # review 2026-09-23: 5 s let a just-deleted note reach a prompt
 
 
 def listed(since: float) -> dict | None:

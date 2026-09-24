@@ -256,7 +256,12 @@ def search(query: list[Passage], brain, *, limit: int = 8, read_budget: int = QU
     seen = set()
     out = SearchResults()
     reads = 0
-    listing = retention.listed(started) or {}
+    listing = retention.listed(started)
+    if listing is None:
+        # The reconcile's listing has aged past trusting (a slow embed call):
+        # one fresh listing for the hits we may use, never one lookup each.
+        wanted = list(dict.fromkeys(rows[int(i)]['note_id'] for i in best))[:read_budget]
+        listing = notes.get_notes(wanted)
     for i in best:
         row = rows[int(i)]
         nid = row['note_id']

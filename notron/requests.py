@@ -211,6 +211,20 @@ class RequestStore:
             return db.execute("UPDATE requests SET status='running',updated_at=? WHERE request_id=? AND status='prepared'",
                               (now(), request_id)).rowcount == 1
 
+    def retire_rehearsal(self, request_id: str) -> None:
+        """A dry run's own request never ran: remove it, as if never captured.
+
+        Left `prepared`, each `--dry-run` counted as waiting work in
+        `listen --status` (185 of them on 2026-09-23). Only ever called for a
+        request the dry run itself created, and only while nothing refers to
+        it, so a real run with the same id afterwards starts clean.
+        """
+        with self.operations.transaction() as db:
+            db.execute("DELETE FROM requests WHERE request_id=? AND status='prepared' "
+                       "AND NOT EXISTS (SELECT 1 FROM operations WHERE request_id=?)",
+                       (request_id, request_id))
+        self.prune_payloads()
+
     def finish(self, request_id: str, *, needs_review=False):
         with self.operations.transaction() as db:
             count = db.execute("UPDATE requests SET status=?,updated_at=?,failure_code=? WHERE request_id=? AND status='running'",

@@ -114,7 +114,7 @@ def test_interruption_cannot_blindly_restart_inference(monkeypatch):
 def test_dry_run_does_not_complete_real_request(monkeypatch):
     monkeypatch.setattr(graph, 'ORDER', ())
     graph.run('hello', brain=None, request_id='dry', dry_run=True)
-    assert requests.current().get('dry').status == 'prepared'
+    assert requests.current().get('dry') is None       # a rehearsal leaves nothing waiting
     graph.run('hello', brain=None, request_id='dry')
     assert requests.current().get('dry').status == 'completed'
 
