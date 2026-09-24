@@ -13,6 +13,7 @@ import http.client
 import ipaddress
 import os
 import re
+import select
 import socket
 import ssl
 import threading
@@ -272,7 +273,7 @@ class ProviderTransport(httpx2.BaseTransport):
                 return self._send(conn, request.method, parts.path, body, headers, timeouts,
                                   base.hostname, reused=True)
             except _Stale:
-                pass   # closed by the provider while idle, before any reply: once, fresh
+                pass   # dead while idle, no complete response: once, fresh (every route is side-effect-free)
         conn = _ProviderConnection(base.hostname, 443, timeout=remaining(timeouts.get('connect', 20)),
                                    context=ssl.create_default_context())
         conn.write_timeout = remaining(timeouts.get('write', 20))
@@ -292,8 +293,9 @@ class ProviderTransport(httpx2.BaseTransport):
                 conn.request(method, path, body=body, headers=headers)
                 conn.sock.settimeout(remaining(timeouts.get('read', 20)))
                 response = conn.getresponse()
-            except (http.client.RemoteDisconnected, ConnectionResetError, BrokenPipeError,
-                    ssl.SSLEOFError):
+            except TimeoutError:
+                raise              # a slow provider is not a dead socket: never waited on twice
+            except (OSError, http.client.RemoteDisconnected):
                 if reused:
                     raise _Stale() from None
                 raise
@@ -312,7 +314,9 @@ class ProviderTransport(httpx2.BaseTransport):
 
 
 class _Stale(Exception):
-    """A kept connection the provider had already closed; nothing was answered."""
+    """A kept connection that failed before a complete response. Retrying is
+    safe only because every allowed route (chat, embeddings, models, search)
+    has no side effects; keep the retry reused-only if that ever changes."""
 
 
 # One open connection per provider host per thread, reused for KEEP_ALIVE
@@ -329,11 +333,23 @@ def _take(host):
     held = getattr(_POOL, 'held', {}).pop(host, None)
     if held is None:
         return None
-    conn, at = held
-    if time.monotonic() - at >= KEEP_ALIVE or conn.sock is None:
+    conn, at, wall = held
+    # Both clocks: the monotonic one stops while the Mac sleeps, so a socket
+    # from before the lid closed would look five seconds old (review
+    # 2026-09-23). And a socket that is already readable holds the peer's
+    # close or stray bytes, never a reply we asked for.
+    if (time.monotonic() - at >= KEEP_ALIVE or time.time() - wall >= KEEP_ALIVE
+            or conn.sock is None or _dropped(conn.sock)):
         conn.close()
         return None
     return conn
+
+
+def _dropped(sock) -> bool:
+    try:
+        return bool(select.select([sock], [], [], 0)[0])
+    except (OSError, ValueError, TypeError):
+        return True
 
 
 def _keep(host, conn):
@@ -342,12 +358,12 @@ def _keep(host, conn):
     old = _POOL.held.pop(host, None)
     if old is not None:
         old[0].close()
-    _POOL.held[host] = (conn, time.monotonic())
+    _POOL.held[host] = (conn, time.monotonic(), time.time())
 
 
 def forget_connections():
-    """Close every kept connection on this thread (tests; credential changes)."""
-    for conn, _ in getattr(_POOL, 'held', {}).values():
+    """Close every kept connection on this thread (tests)."""
+    for conn, *_ in getattr(_POOL, 'held', {}).values():
         conn.close()
     _POOL.held = {}
 

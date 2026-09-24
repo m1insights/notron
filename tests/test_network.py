@@ -410,11 +410,13 @@ def test_late_secure_boundary_failure_remains_fail_closed_through_sdk(monkeypatc
     finally: brain._client.close()
 
 
-def test_every_model_call_opened_a_new_tls_connection_to_nebius(wire):
+def test_every_model_call_opened_a_new_tls_connection_to_nebius(wire, monkeypatch):
     """Measured 2026-09-23: ~0.3 s of TCP + TLS per call, 4-5 calls a reply.
     Calls on one thread reuse the validated connection; each still re-runs
     the endpoint and credential checks and carries its own Authorization."""
+    from notron import network
     from notron.brain import Brain
+    monkeypatch.setattr(network, '_dropped', lambda sock: False)   # fake sockets cannot be selected
     brain = Brain.from_credentials()
     try:
         for _ in range(3):
@@ -430,6 +432,7 @@ def test_a_kept_connection_is_dropped_after_keep_alive(wire, monkeypatch):
     from notron.brain import Brain
     clock = [1000.0]
     monkeypatch.setattr(network.time, 'monotonic', lambda: clock[0])
+    monkeypatch.setattr(network, '_dropped', lambda sock: False)
     brain = Brain.from_credentials()
     try:
         brain.ask(system='static', user=[Passage('synthetic question', 'user_request')], purpose='write')
@@ -444,6 +447,7 @@ def test_a_connection_closed_while_idle_is_retried_once_fresh(wire, monkeypatch)
     import http.client
     from notron import network
     from notron.brain import Brain
+    monkeypatch.setattr(network, '_dropped', lambda sock: False)
     brain = Brain.from_credentials()
     try:
         brain.ask(system='static', user=[Passage('synthetic question', 'user_request')], purpose='write')
@@ -469,3 +473,55 @@ def test_a_removed_key_blocks_a_kept_connection(monkeypatch, wire):
     finally:
         brain._client.close()
     assert len(wire.requests) == 1
+
+
+def test_a_connection_from_before_the_mac_slept_is_not_reused(wire, monkeypatch):
+    """Review 2026-09-23: the monotonic clock stops during sleep, so a socket
+    from before the lid closed looked seconds old. Wall time counts too."""
+    from notron import network
+    from notron.brain import Brain
+    wall = [5000.0]
+    monkeypatch.setattr(network.time, 'time', lambda: wall[0])
+    monkeypatch.setattr(network, '_dropped', lambda sock: False)
+    brain = Brain.from_credentials()
+    try:
+        brain.ask(system='static', user=[Passage('synthetic question', 'user_request')], purpose='write')
+        wall[0] += 2 * 3600                                    # asleep; monotonic did not move
+        brain.ask(system='static', user=[Passage('synthetic question', 'user_request')], purpose='write')
+    finally:
+        brain._client.close()
+    assert len(wire.connects) == 2
+
+
+def test_a_socket_the_peer_already_closed_is_not_reused(wire, monkeypatch):
+    from notron import network
+    from notron.brain import Brain
+    monkeypatch.setattr(network, '_dropped', lambda sock: True)
+    brain = Brain.from_credentials()
+    try:
+        for _ in range(2):
+            brain.ask(system='static', user=[Passage('synthetic question', 'user_request')], purpose='write')
+    finally:
+        brain._client.close()
+    assert len(wire.connects) == 2
+
+
+def test_a_slow_provider_on_a_kept_connection_is_not_retried_fresh():
+    """A read timeout means a slow provider, not a dead socket: the transport
+    does not quietly send the request again (the brain's own retry decides)."""
+    from notron import network
+
+    class Conn:
+        sock = type('S', (), {'settimeout': lambda self, v: None})()
+        def request(self, *a, **k): pass
+        def getresponse(self): raise TimeoutError('read timed out')
+        def close(self): pass
+    with pytest.raises(network.ProviderConnectivityError):
+        network.ProviderTransport._send(Conn(), 'POST', '/v1/chat/completions', b'{}', {}, {},
+                                        'api.tokenfactory.nebius.com', reused=True)
+
+    class Dead(Conn):
+        def getresponse(self): raise ConnectionResetError()
+    with pytest.raises(network._Stale):
+        network.ProviderTransport._send(Dead(), 'POST', '/v1/chat/completions', b'{}', {}, {},
+                                        'api.tokenfactory.nebius.com', reused=True)
