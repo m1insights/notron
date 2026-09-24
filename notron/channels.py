@@ -28,7 +28,9 @@ from . import paths
 #: What a channel may do. `read` is the local repository and GitHub, read-only;
 #: `research` is a web search; `run` lets Nemotron hand an approved brief to a
 #: coding agent in a throwaway copy of the repository (`handoff.py`). `run`
-#: never skips the approval, and it needs a repository and a named agent.
+#: never skips the approval, and it needs a named agent. Without a repository
+#: the channel is a *workspace*: the agent writes drafts, plans and CSVs into an
+#: empty folder of its own, never into anything of the user's.
 ALLOW = ("read", "research", "run")
 
 #: The coding agents a channel may hand work to. Bring-your-own: the user's own
@@ -62,6 +64,11 @@ class Channel:
     def title(self) -> str:
         return title_for(self.name)
 
+    @property
+    def workspace(self) -> bool:
+        """No repository: work here is documents, not code."""
+        return not self.repo
+
 
 def title_for(name: str) -> str:
     return f"Notron {name}"
@@ -87,8 +94,8 @@ def _validate(ch: Channel) -> Channel:
         raise ChannelError(f"Allowed tools are {', '.join(ALLOW)}.")
     if ch.hand and ch.hand not in HANDS:
         raise ChannelError(f"The coding agent is one of {', '.join(HANDS)}.")
-    if "run" in ch.allow and not (ch.repo and ch.hand):
-        raise ChannelError("`run` needs a repository and a coding agent: --repo … --hand claude|codex.")
+    if "run" in ch.allow and not ch.hand:
+        raise ChannelError("`run` needs an agent: --hand claude|codex.")
     return ch
 
 

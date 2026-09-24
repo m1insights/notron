@@ -50,6 +50,9 @@ QUESTION_SETTLE = 4
 # answered early costs one more line; a Siri line waiting 12 s costs every time.
 CHANNEL_POLL = 3       # seconds between looks at project channels (one read each)
 CHANNEL_SETTLE = 3
+# The Reminders inbox: one EventKit read (~0.1 s), so it can be looked at often.
+# A reminder arrives whole; there is nothing to let settle.
+INBOX_POLL = 5
 MIN_PAUSE = 0.25      # never spin: a due line is looked at again this soon at most
 DUMP_POLL = 60         # seconds between looks at the Brain Dump (one cheap read)
 
@@ -113,6 +116,7 @@ class Watcher:
     dump_settle: float = DUMP_SETTLE
     channel_poll: float = CHANNEL_POLL
     channel_settle: float = CHANNEL_SETTLE
+    inbox_poll: float = INBOX_POLL
     on_event: object = None
     scanner: mentions.Scanner = field(default_factory=mentions.Scanner)
 
@@ -125,6 +129,8 @@ class Watcher:
     _last_dump: float = 0
     _last_channels: float = 0
     _last_tasks: float = 0
+    _last_inbox: float = 0
+    _inbox_problem: str = ""
     _dump_on_hold: bool = False
     # Set on a resume until one full tick has passed: a stamp from before the
     # sleep says nothing about whether a line was finished.
@@ -381,6 +387,75 @@ class Watcher:
                 return True
         return False
 
+    def check_inbox(self) -> bool:
+        """Answer one request from the Notron list in Reminders. True if she wrote.
+
+        The request runs through the graph like a line typed into the note it
+        belongs in — Nemotron picks that note (`inbox.route`), then decides what
+        the request is in the `project` node — and the reply is appended there.
+        The reminder is ticked once the reply has landed, never before.
+        """
+        from . import eventkit, handoff, inbox, recovery
+        try:
+            items = inbox.waiting()
+            problem = ""
+        except eventkit.EventKitError as exc:
+            items, problem = [], f"can't read Reminders ({exc})"
+        if problem != self._inbox_problem:
+            # Said once when it starts and once when it clears, never per poll.
+            self._inbox_problem = problem
+            self._say(f"  Reminders inbox: {problem or 'reading the Notron list again'}")
+        for r in items:
+            request_id = f"reminder:{r.id}"
+            key = f"rem:{r.id}"
+            if not self._worth_trying(key):
+                continue
+            record = requests.current().get(request_id)
+            if record is not None and record.status == 'completed':
+                # Answered before a crash stopped the tick: tick it, never re-answer.
+                self._take(r)
+                continue
+            if record is not None and record.status != 'prepared' and not recovery.available(record):
+                continue
+            ch, why = inbox.remembered_route(r.id, r.title, brain=self.brain)
+            if ch is None:
+                if self._inbox_problem != "no Tasks note":
+                    self._inbox_problem = "no Tasks note"
+                    self._say("  Reminders inbox: no Tasks note yet — run `notron tasks setup`")
+                return False
+            self._say(f"\n> [Reminders] {r.title[:60]} → {ch.title}" + (f" ({why})" if why else ""))
+            with policy.explicit_reply(ch.note_id):
+                state = graph.run(r.title, brain=self.brain, trigger="reminder",
+                                  source_note_id=ch.note_id, reply_to=(ch.title, workspace.FOLDER, 0),
+                                  request_id=request_id)
+            for line in state.trace:
+                self._say(f"  {line}")
+            if state.receipt_complete:
+                self._take(r)
+            self._attempted(key, state.receipt_complete)
+            return True
+        return False
+
+    def _take(self, r) -> None:
+        from . import eventkit, inbox
+        try:
+            inbox.take(r.id)
+        except (LookupError, eventkit.EventKitError) as exc:
+            self._say(f"  could not tick “{r.title[:40]}” in Reminders: {exc}")
+
+    def tend_reminders(self) -> None:
+        """Approve reminders out, ticked approvals in. Never stops the tasks loop."""
+        from . import eventkit, handoff, inbox
+        try:
+            for task in handoff.all_tasks():
+                if task.status == "proposed" and task.source_reminder and not task.approve_reminder:
+                    inbox.ask_approval(task)
+                    self._say(f"  asked for approval in Reminders: {task.goal[:60]}")
+            for task in inbox.sync_approvals():
+                self._say(f"  approved in Reminders: {task.goal[:60]}")
+        except (LookupError, eventkit.EventKitError, inbox.InboxError, handoff.TaskError) as exc:
+            self._say(f"  Reminders approvals: {exc}")
+
     def check_tasks(self) -> bool:
         """Move hand-off work along: collect, start one, report one. True if she wrote.
 
@@ -390,6 +465,7 @@ class Watcher:
         Nemotron's review, the Guard, the executor — like any other reply.
         """
         from . import channels, handoff
+        self.tend_reminders()
         for task in handoff.poll():
             self._say(f"  task {task.id[:8]} {task.status} — {len(task.changed)} files changed")
         started = handoff.dispatch_next()
@@ -419,6 +495,12 @@ class Watcher:
             self._say(f"  {line}")
         if state.receipt_complete:
             handoff.reported(task.id)
+            if task.source_reminder:
+                from . import eventkit, inbox
+                try:
+                    inbox.say_done(task)
+                except (eventkit.EventKitError, inbox.InboxError) as exc:
+                    self._say(f"  could not add the Done reminder: {exc}")
         self._attempted(key, state.receipt_complete)
         return True
 
@@ -663,6 +745,10 @@ class Watcher:
             if now - self._last_channels >= self.channel_poll:
                 self._last_channels = now
                 if self.check_channels():
+                    return
+            if now - self._last_inbox >= self.inbox_poll:
+                self._last_inbox = now
+                if self.check_inbox():
                     return
             if now - self._last_tasks >= self.channel_poll:
                 self._last_tasks = now

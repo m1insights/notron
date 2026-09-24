@@ -42,8 +42,8 @@ class Decides:
 
 # ------------------------------------------------------------------ grants
 
-@pytest.mark.parametrize("kw", [dict(hand=""), dict(repo=""), dict(hand="copilot")])
-def test_run_needs_a_repository_and_a_named_agent(kw):
+@pytest.mark.parametrize("kw", [dict(hand=""), dict(hand="copilot")])
+def test_run_needs_a_named_agent(kw):
     base = dict(name="S", note_id="n", repo="/tmp/x", github="", allow=("read", "run"), hand="claude")
     with pytest.raises(channels.ChannelError):
         channels._validate(channels.Channel(**{**base, **kw}))
