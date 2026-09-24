@@ -614,6 +614,7 @@ def test_five_log_receipts_ran_before_she_looked_for_a_new_line(monkeypatch):
     monkeypatch.setattr(w, 'check_ask', lambda: order.append('ask'))
     monkeypatch.setattr(w, 'check_channels', lambda: order.append('channels') or False)
     monkeypatch.setattr(w, 'check_tasks', lambda: False)
+    monkeypatch.setattr(w, 'check_inbox', lambda: False)
     monkeypatch.setattr(w, 'sweep_mentions', lambda: None)
     monkeypatch.setattr(w, 'check_dump', lambda: None)
     monkeypatch.setattr(HealthStore, 'row', lambda self: {'stop_requested': 0, 'paused': 0, 'intent_version': w._intent_version})

@@ -105,6 +105,7 @@ nor tell whether one is pinned; that screen instructs and opens
 .venv/bin/python -m notron channel set Synqology --allow read,research,run --hand claude  # let Nemotron hand approved work to your coding agent
 .venv/bin/python -m notron tasks           # hand-off tasks; `tasks show|approve|cancel <id>`, `--json` for the task board
 .venv/bin/python -m notron tasks fence     # show macOS refusing the agent your secrets (no model involved)
+.venv/bin/python -m notron tasks setup     # the Notron Tasks note + check the "Notron" Reminders list (the task inbox)
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -167,6 +168,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `channels.py` | Project channels: `Notron <Project>` notes, every new line a request (Siri can append one). Grants live in the registry, never the note |
 | `tools.py` | Fixed-argv, read-only git/gh tools a channel may use; the model names tools, never commands |
 | `handoff.py` | Nemotron-briefed tasks: digest-bound approval, a git worktree + `sandbox-exec` fence for Claude Code/Codex, branch-only results, Nemotron review. Never pushes |
+| `inbox.py` | The task inbox: a Reminders list "Notron". Nemotron routes each reminder to a channel (or `Notron Tasks`); the answer lands in that note; `Approve:` / `✅ Done:` reminders buzz the phone, and ticking Approve is the id-bound go. Channels without a repo are workspaces: the agent writes Markdown/CSV into `~/Documents/Notron` |
 
 ## Invariants — do not break these
 

@@ -169,6 +169,8 @@ def cmd_tasks(args):
         return
     if credentials._provider is None:
         credentials.startup()
+    if args.action == 'setup':
+        return _tasks_setup(args)
     try:
         if args.action in ('approve', 'cancel', 'show'):
             if not args.id:
@@ -188,6 +190,8 @@ def cmd_tasks(args):
                 print(f"    {i}. {step}")
             if task.branch and task.changed:
                 print(f"  branch: {task.branch} · {task.diffstat}")
+            if task.output:
+                print(f"  saved to: {task.output}")
             if task.review:
                 print(f"  review: {task.review.get('verdict', '?')} — {task.review.get('summary', '')}")
             if task.error:
@@ -208,6 +212,30 @@ def cmd_tasks(args):
         age = int((_time.time() - t.created) / 60)
         print(f"  {t.id[:8]}  {t.status:9} {t.channel:14} {age:>4}m ago  {t.goal[:60]}")
     print()
+
+
+def _tasks_setup(args):
+    """The Tasks note and the Reminders list: the two things the inbox needs."""
+    from . import channels, eventkit, inbox
+    ch = inbox.tasks_channel()
+    if ch is None:
+        try:
+            ch, state = channels.add(inbox.TASKS, allow=("research", "run"), hand=args.hand)
+        except channels.ChannelError as problem:
+            raise SystemExit(str(problem))
+        print(f"\n  {state.capitalize()} “{ch.title}” in 🤖 NOTRON — answers to your Reminders requests land here.")
+    else:
+        print(f"\n  “{ch.title}” is ready ({ch.hand or 'no agent'}; {', '.join(ch.allow)}).")
+    try:
+        found = inbox.target()
+    except eventkit.EventKitError as problem:
+        print(f"  I can't read Reminders from here: {problem}\n")
+        return
+    if found:
+        print(f"  The “{inbox.LIST}” list in Reminders is ready.")
+        print(f"  Try: “Hey Siri, remind me to draft a packing list for Lisbon in {inbox.LIST}.”\n")
+    else:
+        print(f"  One step left: in Reminders, make a list called “{inbox.LIST}” (exactly one).\n")
 
 
 def cmd_review(args):
@@ -747,7 +775,9 @@ def main(argv=None):
     ch.set_defaults(fn=cmd_channel)
 
     tk = sub.add_parser('tasks', help='hand-off tasks: briefed by Nemotron, run by your coding agent')
-    tk.add_argument('action', nargs='?', choices=['list', 'show', 'approve', 'cancel', 'fence'], default='list')
+    tk.add_argument('action', nargs='?', choices=['list', 'show', 'approve', 'cancel', 'fence', 'setup'], default='list')
+    tk.add_argument('--hand', choices=['claude', 'codex'], default='claude',
+                    help='setup: which of your agents writes the documents')
     tk.add_argument('id', nargs='?', help='task id (the first 6+ characters are enough)')
     tk.add_argument('--digest', help='approve only if the brief still has this digest (the task board passes it)')
     tk.add_argument('--json', action='store_true')

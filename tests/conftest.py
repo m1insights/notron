@@ -79,6 +79,8 @@ def _app_state_is_disposable(monkeypatch, tmp_path):
 
     root = tmp_path / 'app-state'
     monkeypatch.setenv('NOTRON_DATA_DIR', str(root))
+    # A workspace task copies its files into ~/Documents/Notron; never from a test.
+    monkeypatch.setenv('NOTRON_OUTPUT_DIR', str(tmp_path / 'outputs'))
     monkeypatch.setattr(paths, 'DATA_DIR', root)
 
     real_root = Path.home() / 'Library' / 'Application Support' / 'com.m1labs.notron'
