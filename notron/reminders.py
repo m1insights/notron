@@ -22,7 +22,7 @@ MAX_IN_PROMPT = 25
 FETCH_SECONDS = 15
 
 _OPEN = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var pred = store.predicateForIncompleteRemindersWithDueDateStartingEndingCalendars($(), $(), $());
 var out = null;
@@ -53,7 +53,7 @@ JSON.stringify(out);
 """ % FETCH_SECONDS
 
 _LISTS = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeReminder);
 var names = [];
@@ -62,7 +62,7 @@ JSON.stringify(names);
 """
 
 _CREATE = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var r = $.EKReminder.reminderWithEventStore(store);
 r.title = input.title;
@@ -89,7 +89,7 @@ return JSON.stringify(ok ? {id: ObjC.unwrap(r.calendarItemIdentifier)}
 """
 
 _COMPLETE = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var item = store.calendarItemWithIdentifier(input.id);
 if (item.isNil()) { return JSON.stringify({error: 'not found'}); }
@@ -188,7 +188,7 @@ def find_open(phrase: str, *, list_name: str = "", caller=None) -> list[Reminder
 
 
 _FIND_OPERATION = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var pred = store.predicateForRemindersInCalendars($());
 var out = null;
@@ -208,7 +208,7 @@ return JSON.stringify(out);
 """
 
 _COMPLETED = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('reminders unavailable: full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('reminders unavailable: full access required');
 var store = $.EKEventStore.alloc.init;
 var item = store.calendarItemWithIdentifier(input.id);
 return JSON.stringify(!item.isNil() && Boolean(item.completed));
@@ -225,7 +225,7 @@ def is_completed(reminder_id: str, *, caller=None) -> bool:
     return (caller or eventkit.run)(_COMPLETED, data={'id': reminder_id}) is True
 
 _TARGETS = """
-if ($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder) !== 3) throw new Error('full access required');
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('full access required');
 var store = $.EKEventStore.alloc.init;
 var cals = store.calendarsForEntityType($.EKEntityTypeReminder);
 var def = store.defaultCalendarForNewReminders;
