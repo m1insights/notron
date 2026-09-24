@@ -73,8 +73,16 @@ end run
 _METADATA = f"""
 on run argv
   tell application "Notes"
-    if not (exists note id (item 1 of argv)) then return ""
-    set n to note id (item 1 of argv)
+    -- No separate `exists`: each question Notes answers about a note resolves
+    -- its id again, ~0.13 s apiece (measured 2026-09-23). Missing is -1728 or
+    -- -1700 depending on the question; anything else still raises.
+    try
+      set n to note id (item 1 of argv)
+      set nm to name of n
+    on error errMsg number errNum
+      if errNum is -1728 or errNum is -1700 then return ""
+      error errMsg number errNum
+    end try
     -- Bind the container to a variable FIRST. Notes refuses the inline form
     -- `name of container of n` on macOS 26.2 with -1700 / -1728 ("Can't get name
     -- of container of note id ..."), while `set c to container of n` followed by
@@ -82,7 +90,22 @@ on run argv
     -- 2026-09-22: the two-step form returned the folder name, the inline form
     -- raised. Do not fold these back into one expression.
     set c to container of n
-    return (id of n) & "{RS}" & (name of n) & "{RS}" & (name of c) & "{RS}" & (modification date of n as text)
+    return (id of n) & "{RS}" & nm & "{RS}" & (name of c) & "{RS}" & (modification date of n as text)
+  end tell
+end run
+"""
+
+# One property of one note: a single `note id` resolution (~0.2 s), where
+# `_METADATA` pays for four.
+_MODIFIED = """
+on run argv
+  tell application "Notes"
+    try
+      return (modification date of note id (item 1 of argv)) as text
+    on error
+      -- A missing note answers -1700 here, not -1728 (measured 2026-09-23).
+      return ""
+    end try
   end tell
 end run
 """
@@ -321,6 +344,34 @@ def get_note(note_id: str) -> Note | None:
         raise AppleScriptError('Invalid note metadata response.')
     note = Note(*fields)
     return None if note.folder in SKIP_FOLDERS else note
+
+
+#: From this many notes up, one metadata listing beats a lookup per note.
+#: Measured 2026-09-23 on 254 notes: `get_note` 0.7–0.9 s each (Notes resolves
+#: `note id` once per property it is asked for), `list_all_notes` 1.6 s for
+#: all of them, field for field identical. A reply drawing on 8 notes checked
+#: them 24 times before writing — 18.8 s of a 48 s answer.
+BULK_FROM = 3
+
+
+def get_notes(note_ids) -> dict[str, Note | None]:
+    """`get_note` for several ids at once: fresh, metadata only, same answers.
+
+    A note the listing does not show (Recently Deleted, or a folder the listing
+    cannot reach) is asked for by id, so nothing differs from asking one by one
+    except the number of requests.
+    """
+    ids = list(dict.fromkeys(nid for nid in note_ids if nid))
+    if len(ids) < BULK_FROM:
+        return {nid: get_note(nid) for nid in ids}
+    listed = {n.id: n for n in list_all_notes()}
+    return {nid: listed[nid] if nid in listed else get_note(nid) for nid in ids}
+
+
+def modified_at(note_id: str) -> datetime | None:
+    """When Notes last saw this note change, by its own clock (whole seconds)."""
+    raw = run(_MODIFIED, note_id)
+    return Note(note_id, "", "", raw).modified_at if raw else None
 
 
 def unique_note(folder: str, title: str) -> Note | None:

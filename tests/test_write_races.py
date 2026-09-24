@@ -1157,3 +1157,85 @@ def test_a_held_write_whose_content_was_purged_stays_held(monkeypatch, fake_note
     monkeypatch.setattr(recovery, 'get', purged)
     assert not executor.settle_held(nid)
     assert undo.unresolved(nid)
+
+
+def test_a_reply_drawing_on_8_notes_looked_each_up_3_times_before_writing(fake_note_store, make_write, monkeypatch):
+    """Measured 2026-09-23: 24 single-note lookups, 18.8 s of a 48 s answer.
+    Many sources now cost one listing per check, with the same answers."""
+    from notron import notes as notes_mod
+    target = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    sources = tuple(fake_note_store.add(f'Source {i}', f'<div>Source {i}</div>') for i in range(8))
+    single, listings = [], []
+    real_get, real_list = notes_mod.get_note, notes_mod.list_all_notes
+    monkeypatch.setattr(notes_mod, 'get_note', lambda nid: single.append(nid) or real_get(nid))
+    monkeypatch.setattr(notes_mod, 'list_all_notes', lambda: listings.append(1) or real_list())
+    with executor.metadata_memo():  # as inside graph.run_request
+        result = executor.Executor(audit=False).apply_write(
+            make_write(note_id=target, mode='append', markdown='more', content_sources=sources))
+    assert result.ok
+    assert not set(single) & set(sources)
+    assert 1 <= len(listings) <= 3
+
+
+def test_a_source_missing_from_the_listing_is_still_asked_for_by_id(fake_note_store, monkeypatch):
+    """Recently Deleted and unreachable folders are not listed; a lookup by id
+    still decides, exactly as before."""
+    from notron import notes as notes_mod
+    ids = [fake_note_store.add(f'N{i}', f'<div>N{i}</div>') for i in range(4)]
+    hidden = ids[0]
+    real_list = notes_mod.list_all_notes
+    monkeypatch.setattr(notes_mod, 'list_all_notes', lambda: [n for n in real_list() if n.id != hidden])
+    got = notes_mod.get_notes(ids + ['gone'])
+    assert got[hidden] is not None and got[hidden].id == hidden
+    assert got['gone'] is None
+    assert all(got[i] is not None for i in ids)
+
+
+def test_bulk_checks_still_refuse_a_source_ignored_mid_write(fake_note_store, make_write, monkeypatch):
+    from notron import recovery
+    target = fake_note_store.add('Ideas', '<div>Ideas</div><div>original</div>')
+    sources = tuple(fake_note_store.add(f'Source {i}', f'<div>Source {i}</div>') for i in range(5))
+
+    def ignore_one(name, operation_id):
+        if name == 'before_applying':
+            lib = library.load(); lib.homes.discard(sources[2]); lib.decided.discard(sources[2])
+            lib.ignore.add(sources[2]); library.save(lib)
+    monkeypatch.setattr(recovery, 'boundary', ignore_one)
+    result = executor.Executor(audit=False).apply_write(
+        make_write(note_id=target, mode='append', markdown='more', content_sources=sources))
+    assert not result.ok and fake_note_store.writes == []
+
+
+def test_the_watcher_looked_up_four_notes_its_reconcile_had_just_listed(fake_note_store, monkeypatch):
+    """Measured 2026-09-23: ~2.8 s of lookups straight after the request's own
+    reconcile listed the same notes. Inside a request, recall uses the listing."""
+    from notron import notes as notes_mod
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    looked = []
+    real = notes_mod.get_note
+    monkeypatch.setattr(notes_mod, 'get_note', lambda nid: looked.append(nid) or real(nid))
+    with executor.metadata_memo():
+        executor.remember_all(notes_mod.list_all_notes())
+        assert executor.recall(src).id == src
+        assert looked == []
+
+
+def test_recall_asks_notes_again_once_the_listing_ages_out(fake_note_store, monkeypatch):
+    from notron import notes as notes_mod
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    clock = [100.0]
+    monkeypatch.setattr(executor.time, 'monotonic', lambda: clock[0])
+    with executor.metadata_memo():
+        executor.remember_all(notes_mod.list_all_notes())
+        del fake_note_store.rows[src]
+        assert executor.recall(src) is not None          # within the window
+        clock[0] += executor.MEMO_TTL + 1
+        assert executor.recall(src) is None              # asked again: gone
+
+
+def test_recall_outside_a_request_always_asks_notes(fake_note_store):
+    from notron import notes as notes_mod
+    src = fake_note_store.add('Source', '<div>Source</div>')
+    executor.remember_all(notes_mod.list_all_notes())    # no request: nothing kept
+    del fake_note_store.rows[src]
+    assert executor.recall(src) is None

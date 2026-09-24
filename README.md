@@ -321,12 +321,13 @@ order, and on which model.
 ```
   watcher ─► router ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► writer ─► executor
      │          │          │            │           │          │           │          │       │          │
-   no LLM     Nano      no LLM       Tavily      no LLM      Super        Nano     no LLM   Super  no LLM + Guard
+   no LLM     Super     no LLM       Tavily      no LLM      Super        Super    no LLM   Super  no LLM + Guard
 ```
 
 - **watcher** — loads `📌 About Me` and `🧠 Memory`. No model, runs every time.
-- **router** — Nemotron **Nano 30B**. Classifies intent in ~200 tokens and
-  decides whether the expensive nodes need to run at all. Most wake-ups stop here.
+- **router** — Nemotron **Super 120B**. Classifies intent in ~200 tokens and
+  decides whether the expensive nodes need to run at all. Plain words ("file
+  this", "undo") are routed in code with no model at all.
 - **retriever** — semantic search over approved notes, with redaction before embeddings
   and encrypted caching. Ignored notes are excluded; secret detection is imperfect.
 - **researcher** — Tavily web search, only when the answer cannot be in her head
@@ -335,15 +336,15 @@ order, and on which model.
   model, and only when the request is about the day.
 - **planner** — Nemotron **Super 120B**. Only fires on planning intent, plans
   around what `agenda` actually found.
-- **scheduler** — Nemotron **Nano 30B**. Turns "remind me to..." into a
+- **scheduler** — Nemotron **Super 120B**. Turns "remind me to..." into a
   structured reminder or calendar action.
 - **doer** — no model. Applies the action through the Guard. Scheduling replies
   are composed from executor outcomes without a further model call.
 - **writer** — Nemotron **Super 120B**. Composes the answer as Markdown.
 - **executor** — no model. Runs the Guard, applies the write, records the log.
 
-Nodes decline work they do not own, so a "note to self" costs one Nano call and
-a plan costs one Nano plus one Super. Cost scales with what you actually asked for.
+Nodes decline work they do not own, so a "note to self" costs one model call and
+a plan costs two. Cost scales with what you actually asked for.
 
 ### Which Nemotron tier, and why
 
@@ -357,6 +358,14 @@ Re-measured on **2026-09-23**, same routing prompt, from the listener:
 |---|---|
 | Nemotron **Nano 30B** | 2.3 s when it answered — and three 30 s timeouts in a row, each of which put the whole provider into cooldown, so the Super call behind it failed too. One reply took 147 s. |
 | Nemotron **Super 120B** | ~2.6 s, every time |
+
+And again the same evening, five router calls and four scheduler calls per tier,
+straight to Nebius:
+
+| Call | Nano 30B | Super 120B |
+|---|---|---|
+| router (intent) | median 6.2 s, worst 7.5 s | median **3.0 s**, worst 3.3 s |
+| scheduler (date → action) | median 8.8 s, worst 24.2 s; dated "Friday 3pm" on Thursday | median **3.7 s**, worst 5.7 s; dates right |
 
 (An earlier single measurement on 2026-09-01 — Nano 43 s, Super 1.3 s — did not
 reproduce, and is not a claim this project makes.)

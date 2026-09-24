@@ -47,6 +47,30 @@ def remember(note) -> None:
         memo[note.id] = (note, time.monotonic())
 
 
+def remember_all(listed) -> None:
+    """Offer a whole metadata listing (a reconcile's) to this request's memo."""
+    memo = _MEMO.get()
+    if memo is not None:
+        at = time.monotonic()
+        memo.update((n.id, (n, at)) for n in listed)
+
+
+def recall(note_id: str) -> notes.Note | None:
+    """Metadata for a pre-inference read: this request's memo if still fresh,
+    else Notes. Measured 2026-09-23: the watcher looked up About Me, Memory,
+    Lessons and the reply note one by one (~2.8 s) straight after the request's
+    reconcile had listed them all. Never for a check right before an effect —
+    those call `notes.get_note` or `_content_readable` without `reuse`."""
+    memo = _MEMO.get()
+    if memo is not None and note_id in memo:
+        note, at = memo[note_id]
+        if time.monotonic() - at <= MEMO_TTL:
+            return note
+    note = notes.get_note(note_id)
+    remember(note)
+    return note
+
+
 @contextmanager
 def metadata_memo():
     """Scope a metadata memo to one request (`graph.run_request`)."""
@@ -224,7 +248,7 @@ def capture_write(title: str, *, folder: str = workspace.FOLDER, note_id: str | 
     if note_id is None and folder == workspace.FOLDER:
         note_id = policy.current().system_notes.get(title)
     if note is None or note.id != note_id:
-        note = notes.get_note(note_id) if note_id else notes.unique_note(folder, title)
+        note = recall(note_id) if note_id else notes.unique_note(folder, title)
     if note and policy.current().readable(note):
         body = notes.read_body(note.id) if body is None else body
         if kwargs.get('mode') == 'append' and 'anchor' not in kwargs:
@@ -349,17 +373,19 @@ class Executor:
         checkpoints and pre-checks that a fresh check follows may pass it.
         """
         memo = _MEMO.get()
-        current = []
+        current, stale = [], []
         for nid in sources:
             if reuse and memo is not None and nid in memo:
                 note, at = memo[nid]
                 if time.monotonic() - at <= MEMO_TTL:
                     current.append(note)
                     continue
-            note = notes.get_note(nid)
+            stale.append(nid)
+        fresh = notes.get_notes(stale) if stale else {}
+        for nid in stale:
             if memo is not None:
-                memo[nid] = (note, time.monotonic())
-            current.append(note)
+                memo[nid] = (fresh.get(nid), time.monotonic())
+            current.append(fresh.get(nid))
         # Read current policy after the metadata reads; those reads may overlap
         # a policy save. All contributing Notes sources must remain readable.
         snap = policy.current()

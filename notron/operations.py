@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from hashlib import sha256
 import os
+import time
 import json
 from pathlib import Path
 import sqlite3
@@ -96,6 +97,7 @@ class OperationStore:
         os.chmod(self.path, 0o600)
         with self.connection() as db:
             version = db.execute('PRAGMA user_version').fetchone()[0]
+            migrating = version != SCHEMA_VERSION
             if version not in (0, 1, 2, SCHEMA_VERSION):
                 raise StorageError('Operation schema requires explicit migration.')
             if version == 0:
@@ -168,7 +170,15 @@ class OperationStore:
         if not marker_path.exists():
             self.payload_store.write(marker, b'notron-operation-ledger-v1')
         # Also completes physical cleanup after a crash following migration commit.
-        self.prune_payloads()
+        # A sweep for crash leftovers, so once a minute per ledger is plenty:
+        # measured 2026-09-23, an idle listener tick opened this store 62 times
+        # and globbed every payload file each time (~0.17 s a tick). Purges
+        # still prune explicitly, at once.
+        # A migration's purge relies on this sweep, so it always runs then.
+        swept = _SWEPT.get(self.path)
+        if migrating or swept is None or time.monotonic() - swept >= SWEEP_EVERY:
+            self.prune_payloads()
+            _SWEPT[self.path] = time.monotonic()
         # Persist directory entries as well as the SQLite transaction contents.
         fd = os.open(self.path.parent, os.O_RDONLY)
         try:
@@ -343,6 +353,11 @@ class OperationStore:
         if sha256(payload).hexdigest() != record.payload_hash:
             raise StorageError('Operation payload digest mismatch.')
         return payload
+
+
+#: ledger path -> when its crash-leftover sweep last ran (see __init__).
+_SWEPT: dict[Path, float] = {}
+SWEEP_EVERY = 60.0
 
 
 def current() -> OperationStore:

@@ -130,7 +130,7 @@ A declared graph of specialised nodes, not one agent in a loop:
 ```
 watcher ─► router ─► project ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► organizer ─► undoer ─► writer ─► executor
   │          │          │            │           │          │           │          │        │        │           │        │          │
-no LLM     Nano      Super      no LLM       Tavily      no LLM       Super       Nano     no LLM   Super     Super     no LLM   Super   no LLM + Guard
+no LLM     Super     Super      no LLM       Tavily      no LLM       Super       Super    no LLM   Super     Super     no LLM   Super   no LLM + Guard
 ```
 
 Nodes decline work they do not own. Model tiers live in `brain.DEFAULT_MODELS`

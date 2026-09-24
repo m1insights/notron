@@ -151,6 +151,8 @@ class FakeNotesApp:
         #: attachment id -> the bytes Notes would write out on `save`.
         self.files: dict[str, bytes] = {}
         self.calls: list[str] = []
+        #: note id -> `modification date as text`; unknown unless a test sets it.
+        self.modified: dict[str, str] = {}
 
     def insert_folder(self, position: int, name: str) -> None:
         self.folders.insert(position - 1, (name, []))
@@ -180,6 +182,10 @@ class FakeNotesApp:
                     if args[0] == f'{folder}/{title}':
                         return notes.RS.join((args[0], title, folder, 'observed'))
             return ''
+
+        if script is notes._MODIFIED:
+            self.calls.append("modified")
+            return self.modified.get(args[0], "")
 
         if script is notes._BODY:
             self.calls.append("body")

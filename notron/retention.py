@@ -1,6 +1,8 @@
 """Fail-closed cache readiness and conservative removal of stale note content."""
 from __future__ import annotations
 
+import time
+
 from pathlib import Path
 
 from . import credentials, policy
@@ -34,6 +36,17 @@ def require_ready() -> None:
     diagnostics.prune_usage(brain.USAGE_LOG)
 
 
+_PURGED: tuple | None = None
+
+
+def _stamp(path: Path):
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return (str(path), None)
+    return (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def apply_policy() -> None:
     """Also called after permission saves. Revocation is durable before reuse.
 
@@ -61,10 +74,24 @@ def apply_policy() -> None:
         for path in (filer.STATE, reflect.STATE):
             if path.with_suffix('.enc').exists():
                 write_json(path, {})
-    if index.CACHE.with_suffix('.enc').exists():
-        index._load()  # persists removal using full title/date-aware policy
-    if undo.STATE.with_suffix('.enc').exists():
-        undo._load()
+    # Both purges are a pure function of the policy and of these files. When
+    # none has changed since the last pass in this process, the answer is the
+    # one already on disk: measured 2026-09-23, re-deriving it decrypted and
+    # re-validated the whole index twice every idle listener tick (~0.2 s).
+    # (`require_ready` still authenticates each file every time.)
+    from . import library
+    inputs = lambda: (repr(signature), _stamp(library.STATE),
+                      _stamp(index.CACHE.with_suffix('.enc')), _stamp(undo.STATE.with_suffix('.enc')))
+    global _PURGED
+    # Key taken before the purge: a change landing during it is never recorded
+    # as done; the cost is one more (no-op) pass after the purge's own rewrite.
+    before = inputs()
+    if _PURGED != before:
+        if index.CACHE.with_suffix('.enc').exists():
+            index._load()  # persists removal using full title/date-aware policy
+        if undo.STATE.with_suffix('.enc').exists():
+            undo._load()
+        _PURGED = before
     from . import attachments
     attachments.purge()
     from . import operations, requests
@@ -78,13 +105,34 @@ def apply_policy() -> None:
         write_json(marker, {'policy': signature})
 
 
+#: The metadata listing the last reconcile took: (monotonic time, id -> Note).
+#: `index.search` reconciles and then checks every hit against Notes; the
+#: listing it just took answers those checks (measured 2026-09-23: 8 lookups,
+#: 6.4 s, in one reply). Only a listing at most LISTED_FRESH seconds old counts.
+_LISTED: tuple[float, dict] | None = None
+LISTED_FRESH = 5.0
+
+
+def listed(since: float) -> dict | None:
+    """The listing a reconcile took after `since`, while still fresh enough to
+    stand in for Notes; otherwise None and the caller asks Notes itself."""
+    if _LISTED is None or _LISTED[0] < since or time.monotonic() - _LISTED[0] > LISTED_FRESH:
+        return None
+    return _LISTED[1]
+
+
 def reconcile() -> set[str]:
     """A successful metadata-only Apple inventory is required to infer deletion."""
     from . import index, undo, filer, reflect, notes, mentions
     require_ready()
     policy.require_ready()
     snapshot = policy.current()
-    live = {n.id for n in notes.list_all_notes() if snapshot.readable(n)}
+    listed = notes.list_all_notes()
+    live = {n.id for n in listed if snapshot.readable(n)}
+    global _LISTED
+    _LISTED = (time.monotonic(), {n.id: n for n in listed})
+    from .executor import remember_all
+    remember_all(listed)
     from . import attachments
     attachments.purge(live)
     removed = False

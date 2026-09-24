@@ -521,3 +521,114 @@ def test_github_tools_are_not_prefetched(monkeypatch):
     monkeypatch.setattr(tools, "_exec", lambda argv, cwd: ran.append(argv[0]) or (0, "ok"))
     nodes.project(_channel_state(), brain=Decides({"tools": []}))
     assert "gh" not in ran and "git" in ran
+
+
+def _stamp(seconds_ago):
+    from datetime import datetime, timedelta
+    return (datetime.now() - timedelta(seconds=seconds_ago)).strftime("%A, %B %d, %Y at %I:%M:%S %p")
+
+
+def _siri_line(monkeypatch, app, seconds_ago):
+    ch = _register()
+    body = markup.render(ch.title, channels.HELP.format(title=ch.title, project="x")
+                         + "\n\n———\n\nis CI green")
+    monkeypatch.setattr(watch.notes, "read_body", lambda nid: body)
+    if seconds_ago is not None:
+        app.modified[ch.note_id] = _stamp(seconds_ago)
+    w = watch.Watcher(brain=None)
+    answered = []
+    monkeypatch.setattr(w, "_answer", lambda q, **kw: answered.append(q) or True)
+    return w, answered
+
+
+def test_a_siri_line_waited_for_a_second_look_though_it_had_been_still_for_seconds(
+        monkeypatch, _notes_is_never_the_real_one):
+    """Measured 2026-09-23: a dictated line, whole when it arrived, waited for
+    a second look ~6 s later. Notes' own clock says it was already still."""
+    w, answered = _siri_line(monkeypatch, _notes_is_never_the_real_one, seconds_ago=10)
+    assert w.check_channels()
+    assert answered == ["is CI green"]
+
+
+def test_a_line_that_just_changed_still_waits_its_settle(monkeypatch, _notes_is_never_the_real_one):
+    w, answered = _siri_line(monkeypatch, _notes_is_never_the_real_one, seconds_ago=0)
+    assert not w.check_channels() and answered == []
+
+
+def test_a_stamp_from_the_future_is_not_quiet(monkeypatch, _notes_is_never_the_real_one):
+    """A phone whose clock runs ahead must not make a line look finished."""
+    w, answered = _siri_line(monkeypatch, _notes_is_never_the_real_one, seconds_ago=-30)
+    assert not w.check_channels() and answered == []
+
+
+def test_an_unknown_stamp_falls_back_to_the_second_look(monkeypatch, _notes_is_never_the_real_one):
+    w, answered = _siri_line(monkeypatch, _notes_is_never_the_real_one, seconds_ago=None)
+    assert not w.check_channels() and answered == []
+
+
+def test_the_ask_note_counts_quiet_against_its_own_twelve_seconds(monkeypatch):
+    w = watch.Watcher(brain=None)
+    assert not w._settled("ask:1", "half a tho", quiet=lambda: watch.SETTLE - 1)
+    assert w._settled("ask:2", "a whole thought", quiet=lambda: watch.SETTLE + 1)
+
+
+def test_a_line_seen_settling_wakes_the_listener_when_it_is_due(monkeypatch):
+    """Measured 2026-09-23: a line due 3 s after first sight was looked at again
+    only after a 5 s sleep and another tick."""
+    now = _clock(monkeypatch)
+    w = watch.Watcher(brain=None)
+    assert w.pause(now[0]) == w.ask_poll                     # nothing settling
+    w._settled("chan:1", "is CI green")
+    now[0] += 1
+    assert w.pause(now[0]) == pytest.approx(watch.CHANNEL_SETTLE - 1)
+    assert w.pause(now[0] + watch.CHANNEL_SETTLE - 1 - 0.1) == watch.MIN_PAUSE   # due any moment
+    now[0] += 10
+    assert w.pause(now[0]) == w.ask_poll                     # overdue: the usual poll, never a spin
+    w._pending.clear()
+    w._settled("ask:1", "half a thought")
+    assert w.pause(now[0]) == w.ask_poll                     # 12 s away: the usual poll
+
+
+def test_a_typed_question_waited_twelve_seconds_after_its_question_mark(monkeypatch):
+    """Measured 2026-09-23: the 12 s typing settle was the largest slice of a
+    typed answer after the graph. A turn ending in '?' is done: 4 s."""
+    now = _clock(monkeypatch)
+    w = watch.Watcher(brain=None)
+    assert not w._settled("ask:1", "what's on today?", settle=w._ask_settle("what's on today?"))
+    now[0] += watch.QUESTION_SETTLE
+    assert w._settled("ask:1", "what's on today?", settle=w._ask_settle("what's on today?"))
+    assert w._ask_settle("what's on to") == watch.SETTLE
+    assert w._ask_settle("plan my week. then") == watch.SETTLE
+
+
+def test_the_listener_wakes_for_a_question_when_it_is_due(monkeypatch):
+    now = _clock(monkeypatch)
+    w = watch.Watcher(brain=None)
+    w._settled("ask:1", "is the dentist tomorrow?")
+    assert w.pause(now[0]) == pytest.approx(watch.QUESTION_SETTLE)
+
+
+def test_an_edited_half_line_left_a_stale_key_that_spun_the_loop(monkeypatch):
+    """Review 2026-09-23: editing a line gives it a new request id; the old key
+    stayed pending, overdue, and held the loop at 0.25 s ticks."""
+    now = _clock(monkeypatch)
+    w = watch.Watcher(brain=None)
+    w._settled("ask:A", "What is")
+    now[0] += 20
+    w._settled("ask:B", "What is on today and")
+    assert w.pause(now[0]) == w.ask_poll
+
+
+def test_a_line_half_typed_before_sleep_is_not_answered_on_wake(monkeypatch, _notes_is_never_the_real_one):
+    """Review 2026-09-23: after a resume the old stamp says hours of quiet."""
+    w, answered = _siri_line(monkeypatch, _notes_is_never_the_real_one, seconds_ago=3600)
+    w._just_resumed = True
+    assert not w.check_channels() and answered == []
+
+
+def test_the_ask_note_never_trusts_the_stamp(monkeypatch):
+    w = watch.Watcher(brain=None)
+    asked = []
+    monkeypatch.setattr(w, "_quiet_for", lambda nid: asked.append(nid) or 3600)
+    import inspect
+    assert "quiet=" not in inspect.getsource(watch.Watcher.check_ask).split("_settled(")[1].split(")")[0]
