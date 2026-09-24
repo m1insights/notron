@@ -36,6 +36,17 @@ def require_ready() -> None:
     diagnostics.prune_usage(brain.USAGE_LOG)
 
 
+_PURGED: tuple | None = None
+
+
+def _stamp(path: Path):
+    try:
+        st = path.stat()
+    except FileNotFoundError:
+        return (str(path), None)
+    return (str(path), st.st_ino, st.st_mtime_ns, st.st_size)
+
+
 def apply_policy() -> None:
     """Also called after permission saves. Revocation is durable before reuse.
 
@@ -63,10 +74,21 @@ def apply_policy() -> None:
         for path in (filer.STATE, reflect.STATE):
             if path.with_suffix('.enc').exists():
                 write_json(path, {})
-    if index.CACHE.with_suffix('.enc').exists():
-        index._load()  # persists removal using full title/date-aware policy
-    if undo.STATE.with_suffix('.enc').exists():
-        undo._load()
+    # Both purges are a pure function of the policy and of these files. When
+    # none has changed since the last pass in this process, the answer is the
+    # one already on disk: measured 2026-09-23, re-deriving it decrypted and
+    # re-validated the whole index twice every idle listener tick (~0.2 s).
+    # (`require_ready` still authenticates each file every time.)
+    from . import library
+    inputs = lambda: (repr(signature), _stamp(library.STATE),
+                      _stamp(index.CACHE.with_suffix('.enc')), _stamp(undo.STATE.with_suffix('.enc')))
+    global _PURGED
+    if _PURGED != inputs():
+        if index.CACHE.with_suffix('.enc').exists():
+            index._load()  # persists removal using full title/date-aware policy
+        if undo.STATE.with_suffix('.enc').exists():
+            undo._load()
+        _PURGED = inputs()
     from . import attachments
     attachments.purge()
     from . import operations, requests

@@ -159,3 +159,23 @@ def test_search_never_trusts_a_listing_it_did_not_take(_notes_is_never_the_real_
     hits = index.search([Passage('parking', 'user_request')], CountingBrain())
     assert "Notes/Supps" not in {c.note_id for c in hits}
     assert "Notes/Parking Garages" in {c.note_id for c in hits}
+
+
+def test_an_idle_tick_decrypted_the_whole_index_twice_to_purge_nothing(_notes_is_never_the_real_one, monkeypatch):
+    """Measured 2026-09-23: apply_policy re-derived the index purge on every
+    call, twice an idle listener tick, with nothing changed. Unchanged policy
+    and files: skipped. A changed choice: purged at once."""
+    from notron import retention
+    index.build(CountingBrain())
+    retention.apply_policy()
+    loads = []
+    real = index._load
+    monkeypatch.setattr(index, '_load', lambda: loads.append(1) or real())
+    retention.apply_policy()
+    retention.apply_policy()
+    assert loads == []
+
+    library.save(library.Library(allow_new_notes=True, ignore={"Notes/Supps"}))
+    retention.apply_policy()
+    assert loads == [1]
+    assert "Notes/Supps" not in real()

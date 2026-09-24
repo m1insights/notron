@@ -202,3 +202,27 @@ def test_schema2_unknown_provenance_payload_is_purged_without_resetting_identity
     with pytest.raises(OperationConflict):
         migrated.prepare('r', 'legacy-op', sha256(data).hexdigest(), payload=data,
                          source_id='first', content_source_ids=('first', 'second'))
+
+
+def test_an_idle_tick_opened_the_ledger_62_times_and_swept_payloads_each_time(tmp_path, monkeypatch):
+    """Measured 2026-09-23: each open globbed every payload file for crash
+    leftovers. Once a minute per ledger; a new process always sweeps first."""
+    from notron import operations
+    from notron.operations import OperationStore
+    from notron.securestore import EncryptedStore
+    payload_store = EncryptedStore(tmp_path / 'payloads', bytes(range(32)))
+    swept = []
+    real = OperationStore.prune_payloads
+    monkeypatch.setattr(OperationStore, 'prune_payloads', lambda self: swept.append(1) or real(self))
+    monkeypatch.setattr(operations, '_SWEPT', {})
+    clock = [500.0]
+    monkeypatch.setattr(operations.time, 'monotonic', lambda: clock[0])
+    for _ in range(62):
+        OperationStore(tmp_path / 'ledger.sqlite3', payload_store)
+    assert len(swept) == 1
+    clock[0] += operations.SWEEP_EVERY
+    OperationStore(tmp_path / 'ledger.sqlite3', payload_store)
+    assert len(swept) == 2
+    monkeypatch.setattr(operations, '_SWEPT', {})       # a new process
+    OperationStore(tmp_path / 'ledger.sqlite3', payload_store)
+    assert len(swept) == 3
