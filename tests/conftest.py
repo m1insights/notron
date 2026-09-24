@@ -33,6 +33,13 @@ from notron import (applescript, attachments, mentions, notes,
 
 
 @pytest.fixture(autouse=True)
+def _no_listing_from_another_test(monkeypatch):
+    """A reconcile's listing is trusted for seconds; never across tests."""
+    from notron import retention
+    monkeypatch.setattr(retention, '_LISTED', None)
+
+
+@pytest.fixture(autouse=True)
 def _no_kept_provider_connection():
     """A connection kept by one test's fake socket must never serve another's."""
     from notron import network

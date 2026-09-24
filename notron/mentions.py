@@ -107,7 +107,14 @@ class Scanner:
 
         lib = library.load()
         out = []
-        live = notes.list_all_notes()
+        # The listener's sweep reconciles just before scanning, and that took
+        # the same listing a moment ago (measured 2026-09-23: two full listings
+        # a sweep, ~1.6 s each). Only which notes changed comes from it; any
+        # note worth answering is still read fresh.
+        import time
+        from . import retention
+        recent = retention.listed(time.monotonic() - retention.LISTED_FRESH)
+        live = list(recent.values()) if recent is not None else notes.list_all_notes()
         # An id that is no longer in the library is a deleted note, and it was
         # only ever discarded by being seen again — so it sat in
         # .notron/seen.json for ever, owing an answer nobody could give.
