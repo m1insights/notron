@@ -239,7 +239,7 @@ def router(state: State, *, brain) -> State:
         # refused here rather than defended against twice downstream.
         state.intent = "question"
         state.note("router", "the model cannot choose file, undo or organize — answering instead")
-    if state.intent == "ignore" and state.trigger in ("notes", "manual"):
+    if state.intent == "ignore" and state.trigger in ("notes", "manual", "reminder"):
         # Everything that reaches the router today was said *to* her — typed in
         # the Ask note, tagged #notron, or given on the command line. A router
         # that answers "not addressed to the assistant" is wrong by construction,
@@ -1525,6 +1525,11 @@ def _task_turn_intent(state: State, channel) -> str:
     """approve / cancel / report, when this turn is about a hand-off. Plain code."""
     if state.trigger == "task":
         return "report"
+    if state.trigger == "reminder":
+        # A dictated "yes" or "go" is not pointing at any brief: Siri mishears,
+        # and the channel was picked by a model. A reminder's go is ticking its
+        # own Approve reminder, bound to one task id; or "go" typed in the note.
+        return ""
     if "run" not in channel.allow:
         return ""
     from . import handoff

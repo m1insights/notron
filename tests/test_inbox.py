@@ -293,3 +293,86 @@ def test_a_briefed_reminder_task_asks_for_approval_and_says_when_it_is_done(monk
     assert w.check_tasks()
     assert app.made[-1]["title"] == f"✅ Done: {BRIEF['goal']}"
     assert handoff.get(task.id).done_reminder
+
+
+# ------------------------------------------- review findings, 2026-09-23
+
+def test_a_reminder_that_got_no_answer_is_never_ticked_as_done(monkeypatch):
+    """Review: a run that finished with no write was ticked on the next pass."""
+    app = FakeReminders(monkeypatch, ask("r1", "hmm"))
+    _channel("Tasks", "tasks-note")
+    monkeypatch.setattr(watch.requests, "current", lambda: type("S", (), {
+        "get": lambda self, rid: type("R", (), {"status": "completed"})()})())
+    from notron import operations
+    monkeypatch.setattr(operations, "current", lambda: type("O", (), {"wrote": lambda self, rid: False})())
+    w = watch.Watcher(brain=Decides())
+    assert not w.check_inbox()
+    assert "r1" not in app.done and inbox.waiting() == []      # left open, no longer re-read
+
+
+def test_a_dictated_go_approves_nothing():
+    """Review: "go" said to Siri approved the newest brief in a model-picked note."""
+    ch = _channel("Tasks", "tasks-note")
+    handoff.propose(task_id="t" * 32, channel=ch, request="x", brief=BRIEF, prompt="p")
+    state = State(request="go", source_note_id="tasks-note", trigger="reminder")
+    assert nodes._task_turn_intent(state, ch) == ""
+
+
+def test_two_requests_dictated_in_a_row_do_not_cancel_each_other():
+    """Review: the second brief expired the first, whose Approve then did nothing."""
+    ch = _channel("Tasks", "tasks-note")
+    first = handoff.propose(task_id="a" * 32, channel=ch, request="x", brief=BRIEF, prompt="p",
+                            source_reminder="r1")
+    handoff.propose(task_id="b" * 32, channel=ch, request="y", brief={**BRIEF, "goal": "Other"}, prompt="p",
+                    source_reminder="r2")
+    assert handoff.get(first.id).status == "proposed"
+
+
+def test_a_tick_that_cannot_start_the_task_says_so_on_the_phone(monkeypatch):
+    app = FakeReminders(monkeypatch)
+    ch = _channel("Tasks", "tasks-note")
+    task = handoff.propose(task_id="t" * 32, channel=ch, request="x", brief=BRIEF, prompt="p")
+    app.done.add(inbox.ask_approval(task))
+    handoff._update(task.id, created=task.created - handoff.APPROVAL_TTL - 1)
+    inbox.sync_approvals()
+    inbox.sync_approvals()
+    assert [m["title"] for m in app.made].count(f"Didn't start: {BRIEF['goal']}") == 1
+
+
+def test_an_expired_brief_ticked_by_notron_is_not_read_as_the_users_go(monkeypatch):
+    app = FakeReminders(monkeypatch)
+    ch = _channel("Tasks", "tasks-note")
+    task = handoff.propose(task_id="t" * 32, channel=ch, request="x", brief=BRIEF, prompt="p")
+    inbox.ask_approval(task)
+    handoff._update(task.id, status="expired")
+    inbox.sync_approvals()                     # Notron ticks it so the phone stops asking
+    inbox.sync_approvals()
+    assert not any(m["title"].startswith("Didn't start") for m in app.made)
+
+
+def test_a_crash_between_claim_and_save_rebinds_the_reminder_it_made(monkeypatch):
+    """Review: an empty claim left by a crash blocked the Approve reminder forever."""
+    app = FakeReminders(monkeypatch)
+    monkeypatch.setattr(reminders, "find_by_operation", lambda key, caller=None: ["made-0"])
+    with inbox._editing() as data:
+        data["claimed"] = {"approve:k": 1.0}          # claimed long ago, no id
+    assert inbox._buzz("approve:k", "Approve: x", "n") == "made-0" and app.made == []
+
+
+def test_a_lost_done_reminder_is_retried(monkeypatch):
+    app = FakeReminders(monkeypatch)
+    ch = _channel("Tasks", "tasks-note")
+    task = handoff.propose(task_id="t" * 32, channel=ch, request="x", brief=BRIEF, prompt="p",
+                           source_reminder="r1")
+    handoff._update(task.id, status="reported", started=1.0, approve_reminder="gone")
+    app.done.add("gone")
+    watch.Watcher(brain=None).tend_reminders()
+    assert app.made[-1]["title"].startswith("✅ Done:")
+
+
+def test_a_tasks_note_without_its_grant_is_not_a_place_to_write():
+    ch = _channel("Tasks", "tasks-note")
+    lib = library.load()
+    lib.channels.discard(ch.note_id)
+    library.save(lib)
+    assert inbox.route("anything", brain=Decides())[0] is None

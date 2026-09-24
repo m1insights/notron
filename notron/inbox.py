@@ -41,7 +41,7 @@ BUZZ_AFTER = 60
 #: Titles Notron gives its own reminders. Recorded ids are the real check; the
 #: prefixes cover the one gap — a crash after EventKit saved one and before its
 #: id was written down — so it can never come back in as a request.
-OWN_PREFIXES = ("Approve: ", "✅ Done: ")
+OWN_PREFIXES = ("Approve: ", "✅ Done: ", "Didn't start: ")
 
 ROUTE_SYSTEM = """You are Notron. The user dictated a request to Siri as a reminder. Decide
 which of their notes it belongs in: one of the named projects if it is clearly
@@ -92,17 +92,27 @@ def target(*, caller=None) -> str | None:
 
 def waiting(*, caller=None) -> list[reminders.Reminder]:
     """Open reminders in the Notron list that the user made, oldest first as listed."""
-    ours = set(_ours())
+    data = securestore_read()
+    skip = set(data.get("ours", {})) | set(data.get("left", {}))
     return [r for r in reminders.open_items(caller=caller)
-            if r.list_name.casefold() == LIST.casefold() and r.id not in ours and not r.recurring
+            if r.list_name.casefold() == LIST.casefold() and r.id not in skip and not r.recurring
             and not r.title.startswith(OWN_PREFIXES)]
 
 
 # ---------------------------------------------------------------- routing
 
-def tasks_channel():
-    from . import channels
-    return next((c for c in channels.load() if c.name == TASKS), None)
+def tasks_channel(*, granted_only: bool = False):
+    from . import channels, policy
+    ch = next((c for c in channels.load() if c.name == TASKS), None)
+    if ch is not None and granted_only and ch.note_id not in policy.current().channels:
+        return None     # registered but its grant is gone: not a place she may write
+    return ch
+
+
+def leave(reminder_id: str) -> None:
+    """Stop looking at a reminder that finished without an answer; it stays open for the user."""
+    with _editing() as data:
+        data.setdefault("left", {})[reminder_id] = time.time()
 
 
 def route(title: str, *, brain):
@@ -111,7 +121,7 @@ def route(title: str, *, brain):
     from .outbound import Passage
     granted = policy.current().channels
     projects = [c for c in channels.load() if c.name != TASKS and c.note_id in granted]
-    fallback = tasks_channel()
+    fallback = tasks_channel(granted_only=True)
     if not projects:
         return fallback, "the only place it can go"
     menu = "\n".join(f"- {c.name}" + (f" (GitHub {c.github})" if c.github else "") for c in projects)
@@ -157,17 +167,34 @@ def take(reminder_id: str, *, caller=None) -> None:
     reminders.complete(reminder_id, caller=caller)
 
 
+#: A claim with no reminder id this old was cut short by a crash.
+CLAIM_STALE = 120
+
+
 def _buzz(key: str, title: str, notes: str, *, caller=None) -> str:
     """Make one reminder that alarms a minute from now. Once per key, ever.
 
-    The key is claimed before the reminder is made: a crash in between leaves a
-    reminder not made, never one made twice and buzzing twice.
+    The key is claimed before the reminder is made, and the reminder carries an
+    opaque reference to the key. A claim a crash left without an id is resolved
+    by looking that reference up: found, it is bound; not found, it is made.
     """
+    from .recovery import reference
     with _editing() as data:
         claimed = data.setdefault("claimed", {})
-        if key in claimed:
-            return claimed[key]
-        claimed[key] = ""
+        row = claimed.get(key)
+        if isinstance(row, str) and row:
+            return row
+        if isinstance(row, (int, float)) and time.time() - row < CLAIM_STALE:
+            return ""                      # another pass is making it right now
+        claimed[key] = time.time()
+    if row is not None:
+        found = reminders.find_by_operation(key, caller=caller)
+        if found:
+            with _editing() as data:
+                data["claimed"][key] = found[0]
+                data["ours"][found[0]] = time.time()
+            return found[0]
+    notes = f"{notes}\n{reference(key)}"
     try:
         list_id = target(caller=caller)
         if list_id is None:
@@ -217,24 +244,32 @@ def sync_approvals(*, caller=None) -> list:
     for task in handoff.all_tasks():
         if not task.approve_reminder:
             continue
-        if task.status == "proposed":
-            if reminders.is_completed(task.approve_reminder, caller=caller):
-                try:
-                    approved.append(handoff.approve(task.id, task.digest))
-                except handoff.TaskError:
-                    pass       # expired or changed: the note says so on the next look
-        else:
-            if open_ids is None:
-                open_ids = _open_ids(caller)
-            if task.approve_reminder not in open_ids:
+        if open_ids is None:
+            open_ids = _open_ids(caller)
+        ticked = task.approve_reminder not in open_ids
+        if task.status == "proposed" or (task.status == "expired" and ticked):
+            if not ticked:
                 continue
+            try:
+                approved.append(handoff.approve(task.id, task.digest))
+            except handoff.TaskError as exc:
+                # The user ticked and believes it is running. It is not, and the
+                # phone is where they will look: say so there. Then forget the
+                # binding, so this is said once and never re-checked.
+                _buzz(f"refused:{task.id}", f"Didn't start: {task.goal}",
+                      f"{exc} Ask again in Reminders for a fresh plan.", caller=caller)
+                handoff.remember(task.id, approve_reminder="")
+        elif not ticked:
             # Approved by a typed "go", cancelled or expired: the phone should
             # stop asking. Ticked, never deleted.
-            open_ids.discard(task.approve_reminder)
+            # Forgotten once ticked, so a tick made here is never read later
+            # as the user's own go on an expired brief.
             try:
                 reminders.complete(task.approve_reminder, caller=caller)
             except (LookupError, eventkit.EventKitError):
-                pass
+                continue
+            open_ids.discard(task.approve_reminder)
+            handoff.remember(task.id, approve_reminder="")
     return approved
 
 

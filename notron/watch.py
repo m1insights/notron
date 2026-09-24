@@ -131,6 +131,7 @@ class Watcher:
     _last_tasks: float = 0
     _last_inbox: float = 0
     _inbox_problem: str = ""
+    _inbox_said: set = field(default_factory=set)   # things said once, not every poll
     _dump_on_hold: bool = False
     # Set on a resume until one full tick has passed: a stamp from before the
     # sleep says nothing about whether a line was finished.
@@ -403,8 +404,9 @@ class Watcher:
             items, problem = [], f"can't read Reminders ({exc})"
         if problem != self._inbox_problem:
             # Said once when it starts and once when it clears, never per poll.
+            if problem or self._inbox_problem:
+                self._say(f"  Reminders inbox: {problem or 'reading the Notron list again'}")
             self._inbox_problem = problem
-            self._say(f"  Reminders inbox: {problem or 'reading the Notron list again'}")
         for r in items:
             request_id = f"reminder:{r.id}"
             key = f"rem:{r.id}"
@@ -412,17 +414,28 @@ class Watcher:
                 continue
             record = requests.current().get(request_id)
             if record is not None and record.status == 'completed':
-                # Answered before a crash stopped the tick: tick it, never re-answer.
-                self._take(r)
+                from . import operations
+                if operations.current().wrote(request_id):
+                    # Answered before a crash stopped the tick: tick it, never re-answer.
+                    self._take(r)
+                else:
+                    # Finished without a word in Notes. Ticking it would read as
+                    # done; it stays open for the user, and she stops looking.
+                    inbox.leave(r.id)
+                    self._say(f"  “{r.title[:40]}” finished without an answer — left open in Reminders")
                 continue
             if record is not None and record.status != 'prepared' and not recovery.available(record):
+                if key not in self._inbox_said:
+                    self._inbox_said.add(key)
+                    self._say(f"  “{r.title[:40]}” needs review before it can run again — `notron review`")
                 continue
             ch, why = inbox.remembered_route(r.id, r.title, brain=self.brain)
             if ch is None:
-                if self._inbox_problem != "no Tasks note":
-                    self._inbox_problem = "no Tasks note"
+                if "no-tasks" not in self._inbox_said:
+                    self._inbox_said.add("no-tasks")
                     self._say("  Reminders inbox: no Tasks note yet — run `notron tasks setup`")
                 return False
+            self._inbox_said.discard("no-tasks")
             self._say(f"\n> [Reminders] {r.title[:60]} → {ch.title}" + (f" ({why})" if why else ""))
             with policy.explicit_reply(ch.note_id):
                 state = graph.run(r.title, brain=self.brain, trigger="reminder",
@@ -449,10 +462,13 @@ class Watcher:
         try:
             for task in handoff.all_tasks():
                 if task.status == "proposed" and task.source_reminder and not task.approve_reminder:
-                    inbox.ask_approval(task)
-                    self._say(f"  asked for approval in Reminders: {task.goal[:60]}")
+                    if inbox.ask_approval(task):
+                        self._say(f"  asked for approval in Reminders: {task.goal[:60]}")
             for task in inbox.sync_approvals():
                 self._say(f"  approved in Reminders: {task.goal[:60]}")
+            for task in handoff.done_owed():
+                # Retried here: the report is already in the note, only the buzz is owed.
+                inbox.say_done(task)
         except (LookupError, eventkit.EventKitError, inbox.InboxError, handoff.TaskError) as exc:
             self._say(f"  Reminders approvals: {exc}")
 
@@ -500,7 +516,7 @@ class Watcher:
                 try:
                     inbox.say_done(task)
                 except (eventkit.EventKitError, inbox.InboxError) as exc:
-                    self._say(f"  could not add the Done reminder: {exc}")
+                    self._say(f"  could not add the Done reminder (will retry): {exc}")
         self._attempted(key, state.receipt_complete)
         return True
 

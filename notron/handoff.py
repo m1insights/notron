@@ -218,13 +218,17 @@ def propose(*, task_id: str, channel, request: str, brief: dict, prompt: str,
 
     Called by the executor only after the proposal reply landed in the note, so
     nothing can be approved that the user was never shown. An older proposal in
-    the same channel expires: "go" means the one just above it.
+    the same channel expires: "go" means the one just above it. A brief asked
+    for in Reminders neither expires others nor is expired: its approval is its
+    own Approve reminder, bound to its id, so there is no "which go" to settle —
+    and two requests dictated in a row must not cancel each other.
     """
     with _editing() as tasks:
         if task_id in tasks:
             return tasks[task_id]
         for other in tasks.values():
-            if other.channel == channel.name and other.status == "proposed":
+            if (other.channel == channel.name and other.status == "proposed"
+                    and not source_reminder and not other.source_reminder):
                 other.status = "expired"
         task = Task(id=task_id, channel=channel.name, note_id=channel.note_id, request=request,
                     brief=brief, digest=digest(brief), hand=channel.hand, prompt=prompt,
@@ -294,6 +298,12 @@ def remember(task_id: str, **reminders) -> Task:
     """Record the reminders Notron made for a task (approve_reminder / done_reminder)."""
     assert set(reminders) <= {"approve_reminder", "done_reminder"}
     return _update(task_id, **reminders)
+
+
+def done_owed() -> list[Task]:
+    """Reported tasks from Reminders whose Done reminder was never made."""
+    return [t for t in all_tasks() if t.status == "reported" and t.source_reminder and not t.done_reminder
+            and t.started]
 
 
 def by_approve_reminder(reminder_id: str) -> Task | None:

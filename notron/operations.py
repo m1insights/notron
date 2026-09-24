@@ -340,6 +340,12 @@ class OperationStore:
         return [record for record in records if record.payload_ref and
                 isinstance(json.loads(self.payload(record.operation_id)).get('action'), dict)]
 
+    def wrote(self, request_id: str) -> bool:
+        """Did this request land any write? (applied or receipted)"""
+        with self.connection() as db:
+            return db.execute("SELECT 1 FROM operations WHERE request_id=? AND status IN ('applied','receipted') "
+                              "LIMIT 1", (request_id,)).fetchone() is not None
+
     def pending(self) -> list[Operation]:
         with self.connection() as db:
             return [self._record(r) for r in db.execute(
