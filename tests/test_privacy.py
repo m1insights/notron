@@ -117,3 +117,11 @@ def test_supported_secret_patterns_are_removed_at_real_outbound_transports(outbo
     research.search(passages)
     transported = json.dumps([calls.chat, calls.embed, calls.search])
     assert all(secret not in transported for secret in secrets)
+
+
+def test_two_pin_plugs_in_a_packing_list_are_not_a_credential():
+    """2026-09-24: a Barcelona packing list was flagged "holds a credential"."""
+    from notron import privacy
+    assert not privacy.contains_secret("- [ ] Type C/F plug adapter (Spain uses 230V European two-pin plugs)")
+    assert privacy.contains_secret("bank pin 4821")
+    assert privacy.contains_secret("PIN: 0000")

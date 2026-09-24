@@ -89,6 +89,11 @@ def _blank(m: re.Match) -> str:
     label, value = m.group(1), m.group(2)
     if value.lower().strip("'\"") in _NOT_A_SECRET:
         return m.group(0)
+    if label.lower() == "pin" and not any(c.isdigit() for c in value):
+        # A PIN is digits. "Spain uses 230V European two-pin plugs" read as
+        # label=pin, value=plugs, and a packing list came back flagged as
+        # holding a credential (2026-09-24).
+        return m.group(0)
     return f"{label}: {REDACTED}"
 
 
