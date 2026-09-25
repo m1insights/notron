@@ -106,6 +106,8 @@ nor tell whether one is pinned; that screen instructs and opens
 .venv/bin/python -m notron tasks           # hand-off tasks; `tasks show|approve|cancel <id>`, `--json` for the task board
 .venv/bin/python -m notron tasks fence     # show macOS refusing the agent your secrets (no model involved)
 .venv/bin/python -m notron tasks setup     # the Notron Tasks note + check the "Notron" Reminders list (the task inbox)
+.venv/bin/python -m notron mail setup [--accounts a,b]  # the Notron Mail note; which Mail accounts she reads
+.venv/bin/python -m notron mail [--dry-run] [--hours 24]  # emails that need a reply → drafts in Mail (never sent); also runs in `morning`
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -140,7 +142,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 
 | Module | Responsibility |
 |---|---|
-| `applescript.py` | The only place that shells out to `osascript`. Holds the lock. |
+| `applescript.py` | The only place Notes is asked anything via `osascript`. Holds the lock. (`mail.py` has its own runner: Mail needs no Notes lock.) |
 | `eventkit.py` | Apple's calendar/reminder store, read directly. 700× faster than the apps. |
 | `notes.py` | Apple Notes read/write. Bulk queries only — see Performance. |
 | `reminders.py` | Create and complete reminders; never delete. |
@@ -169,6 +171,8 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `tools.py` | Fixed-argv, read-only git/gh tools a channel may use; the model names tools, never commands |
 | `handoff.py` | Nemotron-briefed tasks: digest-bound approval, a git worktree + `sandbox-exec` fence for Claude Code/Codex, branch-only results, Nemotron review. Never pushes |
 | `inbox.py` | The task inbox: a Reminders list "Notron". Nemotron routes each reminder to a channel (or `Notron Tasks`); the answer lands in that note; `Approve:` / `✅ Done:` reminders buzz the phone, and ticking Approve is the id-bound go. Channels without a repo are workspaces: the agent writes Markdown/CSV into `~/Documents/Notron` |
+| `mail.py` | Apple Mail via AppleScript: bulk inbox headers, bodies by index+id, reply drafts saved and closed. No script sends, deletes or moves (a test reads them all) |
+| `mailroom.py` | The morning mail: Super shortlists from sender+subject, Super reads the shortlist and drafts replies, code saves drafts (claimed first, never twice) and appends the list to `Notron Mail` |
 
 ## Invariants — do not break these
 

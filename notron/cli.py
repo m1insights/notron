@@ -214,6 +214,58 @@ def cmd_tasks(args):
     print()
 
 
+def cmd_mail(args):
+    """The morning mail: what needs a reply, with drafts saved in Mail. Never sends."""
+    from . import channels, credentials, mail, mailroom
+    if credentials._provider is None:
+        credentials.startup()
+    if args.action == 'setup':
+        try:
+            found = mail.accounts()
+        except mail.MailError as problem:
+            raise SystemExit(f"I can't read Mail from here: {problem}")
+        if args.accounts:
+            wanted = [a.strip() for a in args.accounts.split(',') if a.strip()]
+            missing = [a for a in wanted if a not in found]
+            if missing:
+                raise SystemExit(f"Mail has no account called {', '.join(missing)}. "
+                                 f"It has: {', '.join(found)}")
+            mailroom.choose_accounts(wanted)
+        ch = mailroom.channel()
+        if ch is None:
+            try:
+                ch, state = channels.add(mailroom.CHANNEL, allow=("research",))
+            except channels.ChannelError as problem:
+                raise SystemExit(str(problem))
+            print(f"\n  {state.capitalize()} “{ch.title}” in {workspace.FOLDER} — your morning mail list lands here.")
+        else:
+            print(f"\n  “{ch.title}” is ready.")
+        chosen = mailroom.chosen_accounts()
+        print(f"  Reading: {', '.join(chosen) if chosen else 'every account in Mail (' + ', '.join(found) + ')'}")
+        print("  Drafts go to each account's Drafts folder. Nothing is ever sent.")
+        print("  Try it now: notron mail --dry-run\n")
+        return
+    return _mail_run(args)
+
+
+@command('mail')
+def _mail_run(args):
+    from . import mail, mailroom
+    try:
+        out = mailroom.run(_brain(), dry_run=args.dry_run, hours=args.hours,
+                           on_step=lambda m: print(f"  · {m}"))
+    except (mailroom.MailroomError, mail.MailError) as problem:
+        # Returned, not raised: inside the listener's worker a SystemExit would stop it.
+        print(f"\n  {problem}\n")
+        return {"written": False, "reason": str(problem)}
+    print(f"\n{out['digest']}\n")
+    if args.dry_run:
+        print("  (dry run: no drafts saved, nothing written)\n")
+    elif not out['written']:
+        print(f"  The list was not written to Notes: {out['reason']}\n")
+    return out
+
+
 def _tasks_setup(args):
     """The Tasks note and the Reminders list: the two things the inbox needs."""
     from . import channels, eventkit, inbox
@@ -656,7 +708,7 @@ def cmd_graph(args):
 #: One-shot commands that can write. A write only queues its 📊 Log receipt
 #: (the listener's tick delivers it); without a listener nothing would, so these
 #: deliver their own on the way out. Best effort, like every receipt.
-WRITES = frozenset({'ask', 'plan', 'morning', 'file', 'care', 'reflect'})
+WRITES = frozenset({'ask', 'plan', 'morning', 'file', 'care', 'reflect', 'mail'})
 
 
 def _deliver_receipts():
@@ -783,6 +835,13 @@ def main(argv=None):
     tk.add_argument('--json', action='store_true')
     tk.add_argument('--limit', type=int, default=20)
     tk.set_defaults(fn=cmd_tasks)
+
+    ml = sub.add_parser('mail', help='the emails that need a reply, with drafts saved in Mail (never sent)')
+    ml.add_argument('action', nargs='?', choices=['run', 'setup'], default='run')
+    ml.add_argument('--accounts', help='setup: only these Mail accounts, comma-separated')
+    ml.add_argument('--hours', type=int, default=24, help='how far back to look (default 24)')
+    ml.add_argument('--dry-run', action="store_true", help='decide and show, but save no drafts and write nothing')
+    ml.set_defaults(fn=cmd_mail)
 
     rv = sub.add_parser('review', help='what is on hold, and dismissing it')
     rv.add_argument('action', nargs='?', choices=['list', 'dismiss'], default='list')
