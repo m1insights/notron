@@ -1,4 +1,4 @@
-"""Apple Mail, read in bulk and written to as drafts only.
+"""Apple Mail, read in bulk. Read only: nothing here writes to Mail.
 
 The user's Gmail accounts live in Mail.app on the Mac, so Mail is the one
 place Notron can see them without a Google login of its own. Everything here is
@@ -14,10 +14,10 @@ Indexes move when new mail arrives, so a message is always addressed by its
 index *and* its id together: the script checks the id it finds at that index and
 looks a little further down (new mail pushes older mail down) before giving up.
 
-**A message is never sent.** This module holds no script that sends, and a test
-reads every script in it to prove that stays true. A draft is a reply saved to
-the account's Drafts mailbox and closed; the user reads it, edits it and sends it
-themselves. Deleting is equally absent.
+**Mail is only ever read.** No script here sends, replies, saves, moves or
+deletes, and a test reads every script to keep it that way. (A first version
+saved reply drafts; the user found a draft written without their context was no
+help — what they need is to not lose track of what an email asks of them.)
 """
 
 from __future__ import annotations
@@ -53,6 +53,13 @@ class Header:
     subject: str
     age: int            # seconds since it arrived
     read: bool
+    message_id: str = ""    # the RFC 822 Message-ID: what a message:// link opens
+
+    @property
+    def link(self) -> str:
+        """Opens this email in Mail on the Mac, from a reminder or a note."""
+        from urllib.parse import quote
+        return f"message://%3C{quote(self.message_id.strip('<>'), safe='@.-_')}%3E" if self.message_id else ""
 
     @property
     def key(self) -> str:
@@ -105,12 +112,13 @@ on run argv
         set subjList to subject of messages 1 thru want of mb
         set rcvdList to date received of messages 1 thru want of mb
         set readList to read status of messages 1 thru want of mb
+        set midList to message id of messages 1 thru want of mb
         set now to current date
         set out to ""
         repeat with i from 1 to want
             set s to item i of subjList
             if s is missing value then set s to ""
-            set out to out & i & US & (item i of idList) & US & (item i of fromList) & US & s & US & ((now - (item i of rcvdList)) as integer) & US & (item i of readList) & RS
+            set out to out & i & US & (item i of idList) & US & (item i of fromList) & US & s & US & ((now - (item i of rcvdList)) as integer) & US & (item i of readList) & US & (item i of midList) & RS
         end repeat
         return out
     end tell
@@ -123,12 +131,12 @@ def headers(account: str, limit: int = 100) -> list[Header]:
     out = []
     for row in _osascript(HEADERS, account, str(limit)).split(RS):
         parts = row.split(US)
-        if len(parts) != 6:
+        if len(parts) != 7:
             continue
-        index, mid, sender, subject, age, read = parts
+        index, mid, sender, subject, age, read, message_id = parts
         try:
             out.append(Header(account, int(index), int(mid), sender.strip(), subject.strip(),
-                              int(age), read.strip() == "true"))
+                              int(age), read.strip() == "true", message_id.strip()))
         except ValueError:
             continue
     return out
@@ -194,29 +202,54 @@ def bodies(headers_: list[Header]) -> dict[str, str]:
     return found
 
 
-DRAFT = FIND + """
+SENT = """
 on run argv
     set acct to item 1 of argv
-    set idx to (item 2 of argv) as integer
-    set wanted to (item 3 of argv) as integer
-    set words_ to item 4 of argv
-    set slide to (item 5 of argv) as integer
+    set want to (item 2 of argv) as integer
+    set US to character id 31
+    set RS to character id 30
     tell application "Mail"
-        set mb to mailbox "INBOX" of account acct
-        set i to my findIt(mb, idx, wanted, slide)
-        if i = 0 then return "gone"
-        set r to reply (message i of mb) opening window false
-        set content of r to words_
-        save r
-        close r saving no
-        return "saved"
+        set mb to missing value
+        -- Gmail's sent mail is "[Gmail]/Sent Mail" by name; plain "Sent Mail" fails
+        -- (measured 2026-09-25). iCloud and others call it "Sent Messages".
+        repeat with nm in {"[Gmail]/Sent Mail", "Sent Mail", "Sent Messages", "Sent"}
+            try
+                set mb to mailbox (nm as text) of account acct
+                exit repeat
+            end try
+        end repeat
+        if mb is missing value then return "NOSENT"
+        set total to count of messages of mb
+        if total = 0 then return ""
+        if want > total then set want to total
+        set subjList to subject of messages 1 thru want of mb
+        set sentList to date sent of messages 1 thru want of mb
+        set toList to address of to recipient 1 of messages 1 thru want of mb
+        set now to current date
+        set out to ""
+        repeat with i from 1 to want
+            set s to item i of subjList
+            if s is missing value then set s to ""
+            set t to item i of toList
+            if t is missing value then set t to ""
+            set out to out & s & US & ((now - (item i of sentList)) as integer) & US & t & RS
+        end repeat
+        return out
     end tell
 end run
 """
 
 
-def save_draft(header: Header, text: str) -> bool:
-    """Save a reply to `header` in that account's Drafts. Threaded to the original,
-    addressed to its sender, not sent. False when the message is no longer there."""
-    return _osascript(DRAFT, header.account, str(header.index), str(header.id), text,
-                      str(SLIDE)) == "saved"
+def sent(account: str, limit: int = 200) -> list[tuple[str, int, str]]:
+    """(subject, seconds ago, first recipient) for the newest mail the user sent
+    from one account. Raises when the account has no sent mailbox Notron can find,
+    rather than reading as "you replied to nothing"."""
+    raw = _osascript(SENT, account, str(limit))
+    if raw == "NOSENT":
+        raise MailError(f"No sent mailbox found in {account}.")
+    out = []
+    for row in raw.split(RS):
+        parts = row.split(US)
+        if len(parts) == 3 and parts[1].strip().lstrip("-").isdigit():
+            out.append((parts[0].strip(), int(parts[1]), parts[2].strip().lower()))
+    return out

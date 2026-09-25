@@ -140,7 +140,8 @@ def summary(*, caller=None, limit: int = MAX_IN_PROMPT) -> str:
 
 def create(title: str, *, notes: str = "", list_name: str = "",
            when_iso: str | None = None, target_id: str | None = None, timezone_name: str | None = None, caller=None) -> str:
-    """Make a reminder. Returns its id. Called only by the Executor.
+    """Make a reminder. Returns its id. Called by the Executor for model-proposed
+    actions, and by `inbox` / `mailroom` for their own after their own checks.
 
     Timed reminders get an explicit alarm. Date-only reminders retain a due date
     without an explicit timed alarm; receipts explain that distinction.
@@ -223,6 +224,23 @@ def find_by_operation(operation_id: str, *, caller=None) -> list[str]:
 
 def is_completed(reminder_id: str, *, caller=None) -> bool:
     return (caller or eventkit.run)(_COMPLETED, data={'id': reminder_id}) is True
+
+
+_STATE = """
+if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('reminders unavailable: full access required');
+var store = $.EKEventStore.alloc.init;
+var item = store.calendarItemWithIdentifier(input.id);
+return JSON.stringify(item.isNil() ? 'gone' : (Boolean(item.completed) ? 'done' : 'open'));
+"""
+
+
+def state(reminder_id: str, *, caller=None) -> str:
+    """"open", "done" or "gone" — the user deleted it. `is_completed` reads a
+    deleted reminder as open, which would nag about it forever."""
+    out = (caller or eventkit.run)(_STATE, data={'id': reminder_id})
+    if out not in ('open', 'done', 'gone'):
+        raise eventkit.EventKitError('unexpected reminder state')
+    return out
 
 _TARGETS = """
 if (Number($.EKEventStore.authorizationStatusForEntityType($.EKEntityTypeReminder)) !== 3) throw new Error('full access required');
