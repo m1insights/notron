@@ -14,7 +14,7 @@ from . import credentials, operations, policy, requests, retention
 from .health import HealthStore, Heartbeat, WorkerLock
 from .securestore import EncryptedStore, StorageError
 
-KINDS = {'ask', 'plan', 'file', 'morning', 'index', 'care', 'reflect'}
+KINDS = {'ask', 'plan', 'file', 'morning', 'index', 'care', 'reflect', 'mail'}
 
 
 class QueuedPayloadError(StorageError):

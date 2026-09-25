@@ -64,6 +64,16 @@ def morning(brain, *, dry_run: bool = False, on_step=None, envelope=None) -> dic
     out["today"] = state.results
     out["plan"] = state.answer
 
+    # 2.5 The mail that needs a reply, drafted. Only once the user has set up
+    #     the Mail note; a Mail problem is reported, never a failed morning.
+    from . import mail, mailroom
+    if mailroom.channel(granted_only=True) is not None:
+        say("reading this morning's mail")
+        try:
+            out["mail"] = mailroom.run(brain, dry_run=dry_run, on_step=say)
+        except (mail.MailError, mailroom.MailroomError) as problem:
+            say(f"mail skipped: {problem}")
+
     # 3. Report her own upkeep.
     say("checking on herself")
     signals, body, result = care.run(brain, dry_run=dry_run)
