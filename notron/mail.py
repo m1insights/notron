@@ -8,7 +8,7 @@ the developer's Mac on 2026-09-25 (8,401 + 3,308 messages in two inboxes):
 | Doing it the obvious way | Doing it right |
 |---|---|
 | `first message whose id is n` — **2.7s**, and Gmail hands back the copy in All Mail, whose content then fails with `-1728` | `message i of mailbox "INBOX"` by index, id checked in the same request |
-| `content` of 40 messages — **92s** cold | headers first (**~4.5s** for 100 subject/sender/date/id), content only for the few worth reading (~0.5–1s each) |
+| `content` of 40 messages — **92s** cold | headers first (**~4.5s** for 100 subject/sender/date/id once synced; ~2 min while Gmail is still syncing a large inbox), content only for the few worth reading (~0.5–1s each synced) |
 
 Indexes move when new mail arrives, so a message is always addressed by its
 index *and* its id together: the script checks the id it finds at that index and
@@ -31,6 +31,11 @@ US, RS = "\x1f", "\x1e"
 
 #: How far below its old index a message may have slid by the time it is read.
 SLIDE = 50
+
+#: Bodies per request. Measured 2026-09-25 while Gmail was still syncing 85,846
+#: messages into one inbox: every request cost ~24s before it read anything and
+#: a body ~5s more, so a whole shortlist in one request could outrun the timeout.
+BODIES_PER_CALL = 4
 
 TIMEOUT = 240
 
@@ -62,7 +67,8 @@ def _osascript(script: str, *args: str, timeout: int = TIMEOUT) -> str:
     except subprocess.TimeoutExpired as e:
         raise MailError(f"Mail did not answer within {timeout}s") from e
     if proc.returncode != 0:
-        raise MailError(proc.stderr.strip() or "osascript failed")
+        # Mail's errors can list every message it was asked about; the first line is the point.
+        raise MailError((proc.stderr.strip() or "osascript failed")[:300])
     return proc.stdout.rstrip("\n")
 
 
@@ -92,18 +98,19 @@ on run argv
         set total to count of messages of mb
         if total = 0 then return ""
         if want > total then set want to total
-        set rng to messages 1 thru want of mb
-        set ids to id of rng
-        set froms to sender of rng
-        set subs to subject of rng
-        set dates to date received of rng
-        set reads to read status of rng
+        -- Asked of the range itself, every time: a range saved in a variable
+        -- becomes a list of All Mail references, and `id of` a list fails (-1728).
+        set idList to id of messages 1 thru want of mb
+        set fromList to sender of messages 1 thru want of mb
+        set subjList to subject of messages 1 thru want of mb
+        set rcvdList to date received of messages 1 thru want of mb
+        set readList to read status of messages 1 thru want of mb
         set now to current date
         set out to ""
         repeat with i from 1 to want
-            set s to item i of subs
+            set s to item i of subjList
             if s is missing value then set s to ""
-            set out to out & i & US & (item i of ids) & US & (item i of froms) & US & s & US & ((now - (item i of dates)) as integer) & US & (item i of reads) & RS
+            set out to out & i & US & (item i of idList) & US & (item i of fromList) & US & s & US & ((now - (item i of rcvdList)) as integer) & US & (item i of readList) & RS
         end repeat
         return out
     end tell
@@ -129,15 +136,18 @@ def headers(account: str, limit: int = 100) -> list[Header]:
 
 #: Finds a message by index and id; shared by every script that touches one.
 FIND = """
+-- The index where the message with id `wanted` now sits, or 0. Returns an index,
+-- never the message: a message reference that leaves this handler resolves to
+-- Gmail's All Mail copy, whose content Mail then refuses (-1728).
 on findIt(mb, idx, wanted, slide)
     tell application "Mail"
         set total to count of messages of mb
         repeat with i from idx to (idx + slide)
             if i > total then exit repeat
-            if i > 0 and (id of message i of mb) = wanted then return message i of mb
+            if i > 0 and (id of message i of mb) = wanted then return i
         end repeat
     end tell
-    return missing value
+    return 0
 end findIt
 """
 
@@ -152,11 +162,11 @@ on run argv
         set mb to mailbox "INBOX" of account acct
         repeat with k from 3 to (count of argv) by 2
             set wanted to (item (k + 1) of argv) as integer
-            set m to my findIt(mb, (item k of argv) as integer, wanted, slide)
-            if m is missing value then
+            set i to my findIt(mb, (item k of argv) as integer, wanted, slide)
+            if i = 0 then
                 set out to out & wanted & US & "" & RS
             else
-                set out to out & wanted & US & (content of m) & RS
+                set out to out & wanted & US & (content of message i of mb) & RS
             end if
         end repeat
     end tell
@@ -173,13 +183,14 @@ def bodies(headers_: list[Header]) -> dict[str, str]:
     for h in headers_:
         by_account.setdefault(h.account, []).append(h)
     for account, hs in by_account.items():
-        args = [account, str(SLIDE)]
-        for h in hs:
-            args += [str(h.index), str(h.id)]
-        for row in _osascript(BODIES, *args).split(RS):
-            mid, _, text = row.partition(US)
-            if mid.strip().isdigit() and text.strip():
-                found[f"{account}#{int(mid)}"] = text
+        for start in range(0, len(hs), BODIES_PER_CALL):
+            args = [account, str(SLIDE)]
+            for h in hs[start:start + BODIES_PER_CALL]:
+                args += [str(h.index), str(h.id)]
+            for row in _osascript(BODIES, *args).split(RS):
+                mid, _, text = row.partition(US)
+                if mid.strip().isdigit() and text.strip():
+                    found[f"{account}#{int(mid)}"] = text
     return found
 
 
@@ -192,9 +203,9 @@ on run argv
     set slide to (item 5 of argv) as integer
     tell application "Mail"
         set mb to mailbox "INBOX" of account acct
-        set m to my findIt(mb, idx, wanted, slide)
-        if m is missing value then return "gone"
-        set r to reply m opening window false
+        set i to my findIt(mb, idx, wanted, slide)
+        if i = 0 then return "gone"
+        set r to reply (message i of mb) opening window false
         set content of r to words_
         save r
         close r saving no

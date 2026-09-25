@@ -84,7 +84,7 @@ def test_no_script_in_the_mail_bridge_can_send_or_delete():
 
 
 def test_a_draft_is_saved_and_closed_never_left_open_on_screen():
-    assert "reply m opening window false" in mail.DRAFT
+    assert "reply (message i of mb) opening window false" in mail.DRAFT
     assert "save r" in mail.DRAFT and "close r saving no" in mail.DRAFT
 
 
@@ -105,6 +105,13 @@ def test_a_message_that_moved_away_has_no_body_rather_than_the_wrong_one(monkeyp
     assert found == {"info@m1labs.io#1001": "Please sign"}
     # index then id for each message, so the script can check the id at that index
     assert seen["args"][2:] == ("1", "1001", "2", "1002")
+
+
+def test_bodies_are_read_a_few_per_request_so_a_slow_mail_cannot_time_out_the_lot(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mail, "_osascript", lambda script, *a, **k: calls.append(a) or "")
+    mail.bodies([hdr(n) for n in range(1, 11)])
+    assert [len(a[2:]) // 2 for a in calls] == [4, 4, 2]
 
 
 # ----------------------------------------------------------- the decisions
