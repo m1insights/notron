@@ -53,13 +53,16 @@ class FakeReminders:
                             [{"id": f"list-{n}", "title": n} for n in self.lists if n == name])
         monkeypatch.setattr(reminders, "create", self.create)
         monkeypatch.setattr(reminders, "complete", lambda rid, caller=None: self.done.add(rid) or "t")
+        self.deleted = set()
         monkeypatch.setattr(reminders, "is_completed", lambda rid, caller=None: rid in self.done)
+        monkeypatch.setattr(reminders, "state", lambda rid, caller=None:
+                            "gone" if rid in self.deleted else "done" if rid in self.done else "open")
         monkeypatch.setattr(reminders, "find_by_operation", lambda op, caller=None: [
             rid for rid, r in self.made.items() if __import__("notron.recovery", fromlist=["x"]).reference(op) in r["notes"]])
 
     def create(self, title, *, notes="", when_iso=None, target_id=None, caller=None, **kw):
         if self.fail:
-            raise RuntimeError("EventKit said no")
+            raise self.fail if isinstance(self.fail, Exception) else RuntimeError("EventKit said no")
         rid = f"r{len(self.made)}"
         self.made[rid] = {"title": title, "notes": notes, "when": when_iso, "list": target_id}
         return rid
@@ -287,14 +290,14 @@ def test_a_to_do_ticked_in_reminders_is_done(monkeypatch):
 
 def test_answering_the_email_ticks_its_to_do(monkeypatch):
     rem, rid = _open(monkeypatch, age_days=2)
-    FakeMail(monkeypatch, {}, sent={"info@m1labs.io": [("Re: Invoice", 3600)]})
+    FakeMail(monkeypatch, {}, sent={"info@m1labs.io": [("Re: Invoice", 3600, "vivek@example.com")]})
     out = mailroom.follow_up()
     assert [r["reminder"] for r in out["replied"]] == [rid] and rid in rem.done
 
 
 def test_a_reply_sent_before_the_email_arrived_does_not_count(monkeypatch):
     rem, rid = _open(monkeypatch, age_days=1)
-    FakeMail(monkeypatch, {}, sent={"info@m1labs.io": [("Re: Invoice", 5 * 86400)]})
+    FakeMail(monkeypatch, {}, sent={"info@m1labs.io": [("Re: Invoice", 5 * 86400, "vivek@example.com")]})
     assert mailroom.follow_up()["replied"] == [] and rid not in rem.done
 
 
@@ -421,3 +424,79 @@ def test_a_mail_failure_never_stops_the_rest_of_the_morning(monkeypatch, mail_no
     monkeypatch.setattr(mailroom, "run", lambda *a, **k: (_ for _ in ()).throw(ValueError("model did not return usable JSON")))
     out = daily.morning(object(), dry_run=True, envelope=object())
     assert "ValueError" in out["mail"]["error"] and out["care_written"] is True
+
+
+
+# ------------------------------------------------ found in review #2, 2026-09-25
+
+@pytest.mark.parametrize("sent", [
+    ("Invoice", 3600, "vivek@example.com"),            # a new email, not a reply
+    ("Fwd: Invoice", 3600, "accountant@example.com"),  # forwarded to someone else
+    ("Re: Invoice", 3600, "bob@example.com"),          # a reply in another thread
+])
+def test_only_a_reply_to_that_sender_ticks_the_to_do(monkeypatch, sent):
+    rem, rid = _open(monkeypatch, age_days=2)
+    FakeMail(monkeypatch, {}, sent={"info@m1labs.io": [sent]})
+    assert mailroom.follow_up()["replied"] == [] and rid not in rem.done
+
+
+def test_a_reminder_the_user_deleted_stops_being_listed(monkeypatch):
+    FakeMail(monkeypatch, {})
+    rem, rid = _open(monkeypatch, age_days=5)
+    rem.deleted.add(rid)
+    assert mailroom.follow_up() == {"done": [], "replied": [], "stale": []}
+    assert mailroom.follow_up()["stale"] == []
+
+
+def test_gmails_sent_mail_is_looked_up_by_its_real_name():
+    assert '"[Gmail]/Sent Mail"' in mail.SENT
+
+
+def test_an_account_with_no_sent_mailbox_is_an_error_not_no_replies(monkeypatch):
+    monkeypatch.setattr(mail, "_osascript", lambda *a, **k: "NOSENT")
+    with pytest.raises(mail.MailError):
+        mail.sent("info@m1labs.io")
+
+
+def test_an_email_whose_reminder_failed_is_read_again_next_pass(monkeypatch, mail_note):
+    rem = FakeReminders(monkeypatch)
+    rem.fail = True
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1)]})
+    answers = lambda: Decides({"maybe": [1]}, {"todos": [{"n": 1, "todo": "Approve it", "when": "today"}]})
+    mailroom.run(answers())
+    rem.fail = False
+    assert mailroom.run(answers())["added"] == 1
+
+
+def test_a_deadline_already_past_becomes_a_today_to_do_not_a_refused_reminder():
+    out = mailroom.todos([hdr(1)], {hdr(1).key: "x"}, brain=Decides({"todos": [
+        {"n": 1, "todo": "Pay the invoice", "when": "this week", "due": "2020-01-01"}]}))
+    assert (out[0].due, out[0].when) == ("", "today")
+
+
+def test_a_timed_out_reminder_keeps_its_claim_and_is_found_not_made_twice(monkeypatch):
+    from notron import eventkit
+    rem = FakeReminders(monkeypatch)
+    real_create = rem.create
+
+    def slow(title, **kw):
+        real_create(title, **kw)                      # EventKit saved it…
+        raise eventkit.EventKitError("EventKit did not answer within 30s")   # …then timed out
+    monkeypatch.setattr(reminders, "create", slow)
+    with pytest.raises(eventkit.EventKitError):
+        mailroom.make(todo())
+    with mailroom._editing() as data:
+        data["todos"][hdr(1).key]["claimed"] = 0      # past the claim's grace
+    monkeypatch.setattr(reminders, "create", real_create)
+    assert mailroom.make(todo()) == "r0" and len(rem.made) == 1
+
+
+def test_to_dos_past_the_daily_cap_wait_for_the_next_pass(monkeypatch, mail_note):
+    FakeReminders(monkeypatch)
+    n = mailroom.MAX_TODOS + 2
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(i) for i in range(1, n + 1)]})
+    brain = Decides({"maybe": list(range(1, n + 1))},
+                    {"todos": [{"n": i, "todo": f"Do {i}", "when": "whenever"} for i in range(1, n + 1)]})
+    monkeypatch.setattr(mailroom, "SHORTLIST", n)
+    mailroom.run(brain)
+    assert len(mailroom.fresh()) == 2

@@ -259,7 +259,10 @@ def todos(hs: list[mail.Header], bodies: dict[str, str], *, brain) -> list[Todo]
         when = item.get("when") if item.get("when") in ("today", "this week", "whenever") else "whenever"
         due = str(item.get("due") or "")
         try:
-            date.fromisoformat(due)
+            if date.fromisoformat(due) < date.today():
+                # A deadline already passed is the most urgent kind, not a reason
+                # for the Guard to refuse a reminder in the past.
+                due, when = "", "today"
         except ValueError:
             due = ""
         h = readable[n - 1]
@@ -313,18 +316,29 @@ def make(todo: Todo, *, caller=None) -> str:
         if list_id is None:
             raise MailroomError(f"There is no single Reminders list called “{LIST}”.")
         rid = reminders.create(title, notes=notes, when_iso=when_iso, target_id=list_id, caller=caller)
-    except Exception:
-        with _editing() as data:
-            data["todos"].pop(key, None)
+    except Exception as problem:
+        if not _uncertain(problem):
+            # Known not made: release the claim so the next pass can try again.
+            with _editing() as data:
+                data["todos"].pop(key, None)
+        # Unknown (a timeout may come after EventKit saved it): keep the claim, and
+        # the reference in its notes lets the next pass find it instead of making two.
         raise
     _bind(key, rid, todo)
     return rid
+
+
+def _uncertain(problem: Exception) -> bool:
+    from . import eventkit
+    return isinstance(problem, eventkit.EventKitError) and any(
+        s in str(problem) for s in ("did not answer", "returned nothing"))
 
 
 def _bind(key: str, rid: str, todo: Todo) -> None:
     with _editing() as data:
         data["todos"][key] = {
             "reminder": rid, "text": todo.text, "sender": _who(todo.header.sender),
+            "address": _address(todo.header.sender),
             "subject": todo.header.subject, "account": todo.header.account,
             "arrived": time.time() - todo.header.age, "key_person": todo.key_person,
             "status": "open"}
@@ -332,6 +346,17 @@ def _bind(key: str, rid: str, todo: Todo) -> None:
 
 def _topic(subject: str) -> str:
     return re.sub(r"^((re|fwd?|fw)\s*:\s*)+", "", subject.strip(), flags=re.I).casefold()
+
+
+def _answered(row: dict, waited: float, sent: list[tuple[str, int, str]]) -> bool:
+    """A reply, to that sender, on that subject, sent after the email arrived.
+    A forward, a new email that happens to share a subject like "Invoice", or a
+    message to someone else is not the user answering this email."""
+    topic, to = _topic(row.get("subject", "")), row.get("address", "")
+    if not topic or not to:
+        return False
+    return any(re.match(r"\s*re\s*:", s, re.I) and _topic(s) == topic and addr == to and age < waited
+               for s, age, addr in sent)
 
 
 def follow_up(*, caller=None) -> dict[str, list[dict]]:
@@ -342,14 +367,17 @@ def follow_up(*, caller=None) -> dict[str, list[dict]]:
     done, replied, stale = [], [], []
     if not open_rows:
         return {"done": done, "replied": replied, "stale": stale}
-    sent_by_account: dict[str, list[tuple[str, int]]] = {}
+    sent_by_account: dict[str, list[tuple[str, int, str]]] = {}
     now = time.time()
     for key, row in open_rows.items():
         try:
-            ticked = reminders.is_completed(row["reminder"], caller=caller)
+            where = reminders.state(row["reminder"], caller=caller)
         except Exception:
             continue                          # Reminders unreadable: ask again next pass
-        if ticked:
+        if where == "gone":
+            _close(key, "gone")               # the user deleted it: that is an answer too
+            continue
+        if where == "done":
             done.append(row)
             _close(key, "done")
             continue
@@ -360,8 +388,7 @@ def follow_up(*, caller=None) -> dict[str, list[dict]]:
             except mail.MailError:
                 sent_by_account[account] = []
         waited = now - row.get("arrived", now)
-        topic = _topic(row.get("subject", ""))
-        if topic and any(_topic(s) == topic and age < waited for s, age in sent_by_account[account]):
+        if _answered(row, waited, sent_by_account[account]):
             try:
                 reminders.complete(row["reminder"], caller=caller)
             except Exception:
@@ -471,7 +498,8 @@ def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None
     picked = shortlist(hs, brain=brain)
     say(f"Nemotron opened {len(picked)}")
     bodies = mail.bodies(picked) if picked else {}
-    new = todos(picked, bodies, brain=brain)[:MAX_TODOS] if picked else []
+    found = todos(picked, bodies, brain=brain) if picked else []
+    new, later = found[:MAX_TODOS], found[MAX_TODOS:]
     made: dict[str, str] = {}
     if not dry_run:
         for t in new:
@@ -484,7 +512,9 @@ def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None
     result = _post(ch, body, dry_run=dry_run)
     if not dry_run and result.ok:
         # A shortlisted email Mail could not open was never read: try it next pass.
-        remember([h for h in hs if h not in picked or h.key in bodies])
+        # A to-do that did not reach Reminders, or past today's cap, is read again next pass.
+        retry = {k for k, rid in made.items() if not rid} | {t.header.key for t in later}
+        remember([h for h in hs if (h not in picked or h.key in bodies) and h.key not in retry])
     say(f"{len(new)} new to-dos, {len(follow['stale'])} still waiting, "
         f"{len(follow['done']) + len(follow['replied'])} done ({time.time() - started:.0f}s)")
     return {"new": len(hs), "opened": len(picked), "todos": len(new),

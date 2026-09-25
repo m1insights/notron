@@ -210,24 +210,29 @@ on run argv
     set RS to character id 30
     tell application "Mail"
         set mb to missing value
-        repeat with nm in {"Sent Mail", "Sent Messages", "Sent"}
+        -- Gmail's sent mail is "[Gmail]/Sent Mail" by name; plain "Sent Mail" fails
+        -- (measured 2026-09-25). iCloud and others call it "Sent Messages".
+        repeat with nm in {"[Gmail]/Sent Mail", "Sent Mail", "Sent Messages", "Sent"}
             try
                 set mb to mailbox (nm as text) of account acct
                 exit repeat
             end try
         end repeat
-        if mb is missing value then return ""
+        if mb is missing value then return "NOSENT"
         set total to count of messages of mb
         if total = 0 then return ""
         if want > total then set want to total
         set subjList to subject of messages 1 thru want of mb
         set sentList to date sent of messages 1 thru want of mb
+        set toList to address of to recipient 1 of messages 1 thru want of mb
         set now to current date
         set out to ""
         repeat with i from 1 to want
             set s to item i of subjList
             if s is missing value then set s to ""
-            set out to out & s & US & ((now - (item i of sentList)) as integer) & RS
+            set t to item i of toList
+            if t is missing value then set t to ""
+            set out to out & s & US & ((now - (item i of sentList)) as integer) & US & t & RS
         end repeat
         return out
     end tell
@@ -235,11 +240,16 @@ end run
 """
 
 
-def sent(account: str, limit: int = 60) -> list[tuple[str, int]]:
-    """(subject, seconds ago) for the newest mail the user sent from one account."""
+def sent(account: str, limit: int = 200) -> list[tuple[str, int, str]]:
+    """(subject, seconds ago, first recipient) for the newest mail the user sent
+    from one account. Raises when the account has no sent mailbox Notron can find,
+    rather than reading as "you replied to nothing"."""
+    raw = _osascript(SENT, account, str(limit))
+    if raw == "NOSENT":
+        raise MailError(f"No sent mailbox found in {account}.")
     out = []
-    for row in _osascript(SENT, account, str(limit)).split(RS):
-        subject, _, age = row.partition(US)
-        if age.strip().lstrip("-").isdigit():
-            out.append((subject.strip(), int(age)))
+    for row in raw.split(RS):
+        parts = row.split(US)
+        if len(parts) == 3 and parts[1].strip().lstrip("-").isdigit():
+            out.append((parts[0].strip(), int(parts[1]), parts[2].strip().lower()))
     return out
