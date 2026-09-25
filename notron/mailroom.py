@@ -79,6 +79,7 @@ class Verdict:
     when: str
     draft: str
     saved: bool = False
+    earlier: bool = False     # drafted by an earlier run whose list never reached Notes
 
 
 # ------------------------------------------------------------------- store
@@ -210,7 +211,7 @@ def save_drafts(verdicts: list[Verdict], *, dry_run: bool = False) -> list[Verdi
             continue
         with _editing() as data:
             if v.header.key in data["drafted"]:
-                out.append(v)
+                out.append(Verdict(v.header, v.why, v.when, v.draft, earlier=True))
                 continue
             data["drafted"][v.header.key] = time.time()
         try:
@@ -240,6 +241,22 @@ def remember(hs: list[mail.Header]) -> None:
 
 # ----------------------------------------------------------------- digest
 
+def _flat(text: str) -> str:
+    """One line. Email and model text never carries a line break into the list."""
+    return " ".join(str(text).split())
+
+
+def _inert(line: str) -> str:
+    """A draft line that reads like a turn marker would end her turn in the note,
+    and the rest of the list would read as the user's request."""
+    from . import conversation
+    bare = line.strip()
+    if bare in (conversation.RULE, conversation.QA_RULE, "New topic") or bare.startswith(
+            ("**" + conversation.SIGNATURE, conversation.SIGNATURE)):
+        return "· " + bare
+    return line
+
+
 def _who(sender: str) -> str:
     """"Vivek Patel <vivek@x.com>" → "Vivek Patel"; a bare address stays an address."""
     name = sender.split("<")[0].strip().strip('"')
@@ -254,12 +271,14 @@ def digest(verdicts: list[Verdict], *, looked_at: int, now: datetime | None = No
         return f"**Mail · {stamp}**\n\n{looked_at} new, nothing needs a reply from you."
     lines = [f"**Mail · {stamp}** — {looked_at} new, {len(verdicts)} need a reply\n"]
     for v in verdicts:
-        tail = "draft in Mail → Drafts" if v.saved else ("draft below" if v.draft else "")
-        lines.append(f"- ☐ **{_who(v.header.sender)}** — {v.header.subject or '(no subject)'} "
-                     f"({v.when}) · {v.why}" + (f" · {tail}" if tail else ""))
-        if v.draft and not v.saved:
+        tail = ("draft in Mail → Drafts" if v.saved else
+                "drafted earlier — check Mail → Drafts" if v.earlier else
+                "draft below" if v.draft else "")
+        lines.append(f"- ☐ **{_flat(_who(v.header.sender))}** — {_flat(v.header.subject) or '(no subject)'} "
+                     f"({v.when}) · {_flat(v.why)}" + (f" · {tail}" if tail else ""))
+        if v.draft and not v.saved and not v.earlier:
             lines.append("")
-            lines += v.draft.splitlines()
+            lines += [_inert(line) for line in v.draft.splitlines()]
             lines.append("")
     lines.append("\nNothing was sent. Open Mail, check the draft, and send it yourself.")
     return "\n".join(lines)
@@ -268,10 +287,12 @@ def digest(verdicts: list[Verdict], *, looked_at: int, now: datetime | None = No
 def _post(ch, markdown: str, *, dry_run: bool):
     """Add the list to the bottom of the Mail note as her turn, through the Guard."""
     from dataclasses import replace
-    from . import conversation, workspace
+    from . import conversation, policy, workspace
     from .executor import Executor, capture_write
-    target = capture_write(ch.title, folder=workspace.FOLDER, note_id=ch.note_id, mode="append")
-    return Executor(dry_run=dry_run).apply_write(replace(target, markdown=conversation.turn(markdown)))
+    # A channel note is written only as a reply; the Mail note is hers to answer in.
+    with policy.explicit_reply(ch.note_id):
+        target = capture_write(ch.title, folder=workspace.FOLDER, note_id=ch.note_id, mode="append")
+        return Executor(dry_run=dry_run).apply_write(replace(target, markdown=conversation.turn(markdown)))
 
 
 # -------------------------------------------------------------------- run
@@ -290,12 +311,15 @@ def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None
     say(f"{len(hs)} new emails in the last {hours}h")
     picked = shortlist(hs, brain=brain)
     say(f"Nemotron shortlisted {len(picked)}")
-    verdicts = decide(picked, mail.bodies(picked), brain=brain) if picked else []
+    bodies = mail.bodies(picked) if picked else {}
+    verdicts = decide(picked, bodies, brain=brain) if picked else []
     verdicts = save_drafts(verdicts, dry_run=dry_run)
     body = digest(verdicts, looked_at=len(hs))
     result = _post(ch, body, dry_run=dry_run)
     if not dry_run and result.ok:
-        remember(hs)
+        # A shortlisted email Mail could not open (archived, or slid out of reach)
+        # was never judged: leave it for the next pass rather than forget it.
+        remember([h for h in hs if h not in picked or h.key in bodies])
     say(f"{len(verdicts)} need a reply, {sum(v.saved for v in verdicts)} drafts saved "
         f"({time.time() - started:.0f}s)")
     return {"new": len(hs), "shortlisted": len(picked), "need_reply": len(verdicts),

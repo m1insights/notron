@@ -66,13 +66,18 @@ def morning(brain, *, dry_run: bool = False, on_step=None, envelope=None) -> dic
 
     # 2.5 The mail that needs a reply, drafted. Only once the user has set up
     #     the Mail note; a Mail problem is reported, never a failed morning.
-    from . import mail, mailroom
+    from . import mailroom
     if mailroom.channel(granted_only=True) is not None:
         say("reading this morning's mail")
         try:
             out["mail"] = mailroom.run(brain, dry_run=dry_run, on_step=say)
-        except (mail.MailError, mailroom.MailroomError) as problem:
-            say(f"mail skipped: {problem}")
+        except (CredentialUnavailable, StorageError, PolicyError):
+            raise
+        except Exception as problem:
+            # Mail slow, Notes busy, a garbled model answer: the rest of the
+            # morning still runs, and the reason is in the morning's report.
+            out["mail"] = {"error": f"{type(problem).__name__}: {problem}"[:200]}
+            say(f"mail skipped: {out['mail']['error']}")
 
     # 3. Report her own upkeep.
     say("checking on herself")

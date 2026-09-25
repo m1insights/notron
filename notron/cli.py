@@ -255,7 +255,9 @@ def _mail_run(args):
         out = mailroom.run(_brain(), dry_run=args.dry_run, hours=args.hours,
                            on_step=lambda m: print(f"  · {m}"))
     except (mailroom.MailroomError, mail.MailError) as problem:
-        raise SystemExit(str(problem))
+        # Returned, not raised: inside the listener's worker a SystemExit would stop it.
+        print(f"\n  {problem}\n")
+        return {"written": False, "reason": str(problem)}
     print(f"\n{out['digest']}\n")
     if args.dry_run:
         print("  (dry run: no drafts saved, nothing written)\n")

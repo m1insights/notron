@@ -142,7 +142,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 
 | Module | Responsibility |
 |---|---|
-| `applescript.py` | The only place that shells out to `osascript`. Holds the lock. |
+| `applescript.py` | The only place Notes is asked anything via `osascript`. Holds the lock. (`mail.py` has its own runner: Mail needs no Notes lock.) |
 | `eventkit.py` | Apple's calendar/reminder store, read directly. 700× faster than the apps. |
 | `notes.py` | Apple Notes read/write. Bulk queries only — see Performance. |
 | `reminders.py` | Create and complete reminders; never delete. |
