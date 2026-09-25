@@ -431,8 +431,8 @@ def test_a_mail_failure_never_stops_the_rest_of_the_morning(monkeypatch, mail_no
 
 @pytest.mark.parametrize("sent", [
     ("Invoice", 3600, "vivek@example.com"),            # a new email, not a reply
-    ("Fwd: Invoice", 3600, "accountant@example.com"),  # forwarded to someone else
     ("Re: Invoice", 3600, "bob@example.com"),          # a reply in another thread
+    ("Fwd: Invoice", 5 * 86400, "accountant@example.com"),  # forwarded before it arrived
 ])
 def test_only_a_reply_to_that_sender_ticks_the_to_do(monkeypatch, sent):
     rem, rid = _open(monkeypatch, age_days=2)
@@ -500,3 +500,35 @@ def test_to_dos_past_the_daily_cap_wait_for_the_next_pass(monkeypatch, mail_note
     monkeypatch.setattr(mailroom, "SHORTLIST", n)
     mailroom.run(brain)
     assert len(mailroom.fresh()) == 2
+
+
+
+# ------------------------------------------- found live, 2026-09-25 (first run)
+
+def test_an_email_already_answered_before_the_pass_becomes_no_to_do(monkeypatch, mail_note):
+    """Live: "Provide Shift ID for Rosella Pinto" was listed although the user had
+    replied to ShiftPosts an hour after their email arrived."""
+    rem = FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1, subject="Shift ID", age=9 * 3600)]},
+             sent={"info@m1labs.io": [("Re: Shift ID", 8 * 3600, "vivek@example.com")]})
+    brain = Decides()
+    out = mailroom.run(brain)
+    assert brain.calls == [] and rem.made == {} and out["new"] == 1
+    assert mailroom.fresh() == []                      # handled mail is remembered, not re-read
+
+
+def test_forwarding_an_email_on_counts_as_handling_it(monkeypatch, mail_note):
+    """Live: "Ask employee to sign the TD1 forms" was listed although the user had
+    forwarded that email to the employee a minute after it arrived."""
+    FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1, subject="RE: Payroll deductions", age=29 * 3600)]},
+             sent={"info@m1labs.io": [("Fwd: Payroll deductions", 28 * 3600, "employee@example.com")]})
+    brain = Decides()
+    mailroom.run(brain)
+    assert brain.calls == []
+
+
+def test_forwarding_an_open_to_do_ticks_it(monkeypatch):
+    rem, rid = _open(monkeypatch, age_days=2)
+    FakeMail(monkeypatch, {}, sent={"info@m1labs.io": [("Fwd: Invoice", 3600, "accountant@example.com")]})
+    assert [r["reminder"] for r in mailroom.follow_up()["replied"]] == [rid] and rid in rem.done

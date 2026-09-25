@@ -348,18 +348,41 @@ def _topic(subject: str) -> str:
     return re.sub(r"^((re|fwd?|fw)\s*:\s*)+", "", subject.strip(), flags=re.I).casefold()
 
 
-def _answered(row: dict, waited: float, sent: list[tuple[str, int, str]]) -> bool:
-    """A reply, to that sender, on that subject, sent after the email arrived.
-    A forward, a new email that happens to share a subject like "Invoice", or a
-    message to someone else is not the user answering this email."""
-    topic, to = _topic(row.get("subject", "")), row.get("address", "")
-    if not topic or not to:
+def _handled(subject: str, sender: str, waited: float, sent: list[tuple[str, int, str]]) -> bool:
+    """The user already acted on this email: after it arrived they sent a reply to
+    that sender on that subject, or forwarded it (to anyone — passing it on is how
+    a lot of work gets done: the first live run listed "ask the employee to sign
+    the TD1 forms" when the user had forwarded that email a minute after it came).
+    A new email that merely shares a subject like "Invoice", or a reply to
+    someone else, does not count."""
+    topic, to = _topic(subject), sender.strip().lower()
+    if not topic:
         return False
-    return any(re.match(r"\s*re\s*:", s, re.I) and _topic(s) == topic and addr == to and age < waited
-               for s, age, addr in sent)
+    for s, age, addr in sent:
+        if age >= waited or _topic(s) != topic:
+            continue
+        if re.match(r"\s*(fwd?|fw)\s*:", s, re.I):
+            return True
+        if re.match(r"\s*re\s*:", s, re.I) and to and addr == to:
+            return True
+    return False
 
 
-def follow_up(*, caller=None) -> dict[str, list[dict]]:
+def _answered(row: dict, waited: float, sent: list[tuple[str, int, str]]) -> bool:
+    return _handled(row.get("subject", ""), row.get("address", ""), waited, sent)
+
+
+def _sent(account: str, cache: dict) -> list[tuple[str, int, str]]:
+    """What the user sent from one account, read once per pass."""
+    if account not in cache:
+        try:
+            cache[account] = mail.sent(account)
+        except mail.MailError:
+            cache[account] = []
+    return cache[account]
+
+
+def follow_up(*, caller=None, sent_cache: dict | None = None) -> dict[str, list[dict]]:
     """No model. Ticked in Reminders → done. Answered in Mail → ticked for them.
     Open for STALE_DAYS or more → back on top of the list."""
     open_rows = {k: r for k, r in _read().get("todos", {}).items()
@@ -367,7 +390,7 @@ def follow_up(*, caller=None) -> dict[str, list[dict]]:
     done, replied, stale = [], [], []
     if not open_rows:
         return {"done": done, "replied": replied, "stale": stale}
-    sent_by_account: dict[str, list[tuple[str, int, str]]] = {}
+    sent_cache = {} if sent_cache is None else sent_cache
     now = time.time()
     for key, row in open_rows.items():
         try:
@@ -381,14 +404,8 @@ def follow_up(*, caller=None) -> dict[str, list[dict]]:
             done.append(row)
             _close(key, "done")
             continue
-        account = row.get("account", "")
-        if account not in sent_by_account:
-            try:
-                sent_by_account[account] = mail.sent(account)
-            except mail.MailError:
-                sent_by_account[account] = []
         waited = now - row.get("arrived", now)
-        if _answered(row, waited, sent_by_account[account]):
+        if _answered(row, waited, _sent(row.get("account", ""), sent_cache)):
             try:
                 reminders.complete(row["reminder"], caller=caller)
             except Exception:
@@ -462,7 +479,7 @@ def digest(new: list[Todo], follow: dict[str, list[dict]], *, looked_at: int,
     if finished:
         lines += ["", "**Done**"]
         for r in follow.get("replied", []):
-            lines.append(f"- ✅ {_flat(r.get('text', ''))} — you replied, so I ticked it off")
+            lines.append(f"- ✅ {_flat(r.get('text', ''))} — you replied or passed it on, so I ticked it off")
         for r in follow.get("done", []):
             lines.append(f"- ✅ {_flat(r.get('text', ''))}")
     lines += ["", f"Tick them off in Reminders → {LIST}. Tapping one on the Mac opens the email."]
@@ -492,10 +509,15 @@ def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None
     if ch is None:
         raise MailroomError("No Notron Mail note yet — run `notron mail setup`.")
     started = time.time()
-    follow = {"done": [], "replied": [], "stale": []} if dry_run else follow_up()
+    sent_cache: dict = {}
+    follow = {"done": [], "replied": [], "stale": []} if dry_run else follow_up(sent_cache=sent_cache)
     hs = fresh(hours=hours)
     say(f"{len(hs)} new emails in the last {hours}h")
-    picked = shortlist(hs, brain=brain)
+    # No model: an email the user already answered or forwarded is not a to-do.
+    handled = [h for h in hs if _handled(h.subject, _address(h.sender), h.age, _sent(h.account, sent_cache))]
+    if handled:
+        say(f"{len(handled)} already handled by you")
+    picked = shortlist([h for h in hs if h not in handled], brain=brain)
     say(f"Nemotron opened {len(picked)}")
     bodies = mail.bodies(picked) if picked else {}
     found = todos(picked, bodies, brain=brain) if picked else []
