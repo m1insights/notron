@@ -215,10 +215,24 @@ def cmd_tasks(args):
 
 
 def cmd_mail(args):
-    """The morning mail: what needs a reply, with drafts saved in Mail. Never sends."""
-    from . import channels, credentials, mail, mailroom
+    """Email to-dos: what each email asks of you, kept in Reminders until it is done."""
+    from . import channels, credentials, eventkit, mail, mailroom
     if credentials._provider is None:
         credentials.startup()
+    if args.action == 'people':
+        try:
+            if args.who and args.remove:
+                keys = mailroom.remove_person(args.who)
+            elif args.who:
+                keys = mailroom.add_person(args.who)
+            else:
+                keys = mailroom.people()
+        except mailroom.MailroomError as problem:
+            raise SystemExit(str(problem))
+        print("\n  Key people — their email is always read, and their to-dos come first:")
+        print("".join(f"\n    ⭐ {k}" for k in keys) or "\n    (none yet: notron mail people vivek@example.com)")
+        print()
+        return
     if args.action == 'setup':
         try:
             found = mail.accounts()
@@ -242,8 +256,18 @@ def cmd_mail(args):
             print(f"\n  “{ch.title}” is ready.")
         chosen = mailroom.chosen_accounts()
         print(f"  Reading: {', '.join(chosen) if chosen else 'every account in Mail (' + ', '.join(found) + ')'}")
-        print("  Drafts go to each account's Drafts folder. Nothing is ever sent.")
-        print("  Try it now: notron mail --dry-run\n")
+        print("  Mail is only read: nothing is sent, drafted, moved or deleted.")
+        try:
+            found_list = mailroom.target()
+        except eventkit.EventKitError as problem:
+            print(f"  I can't read Reminders from here: {problem}\n")
+            return
+        if found_list:
+            print(f"  To-dos go into the “{mailroom.LIST}” list in Reminders.")
+            print("  Mark who matters: notron mail people vivek@example.com")
+            print("  Try it now: notron mail\n")
+        else:
+            print(f"  One step left: in Reminders, make a list called “{mailroom.LIST}” (exactly one).\n")
         return
     return _mail_run(args)
 
@@ -836,8 +860,10 @@ def main(argv=None):
     tk.add_argument('--limit', type=int, default=20)
     tk.set_defaults(fn=cmd_tasks)
 
-    ml = sub.add_parser('mail', help='the emails that need a reply, with drafts saved in Mail (never sent)')
-    ml.add_argument('action', nargs='?', choices=['run', 'setup'], default='run')
+    ml = sub.add_parser('mail', help='email to-dos: what each email asks of you, in Reminders until done')
+    ml.add_argument('action', nargs='?', choices=['run', 'setup', 'people'], default='run')
+    ml.add_argument('who', nargs='?', help='people: an email address, or @domain.com')
+    ml.add_argument('--remove', action='store_true', help='people: take this one off the list')
     ml.add_argument('--accounts', help='setup: only these Mail accounts, comma-separated')
     ml.add_argument('--hours', type=int, default=24, help='how far back to look (default 24)')
     ml.add_argument('--dry-run', action="store_true", help='decide and show, but save no drafts and write nothing')

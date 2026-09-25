@@ -1,30 +1,24 @@
-# Morning mail: needs-a-reply list + drafts (2026-09-25)
+# Email to-dos (2026-09-25, revised same day)
 
-**Goal.** Show Notron powering the user's real admin day: each morning, the emails
-that need a reply, with the replies already drafted in Mail. Nothing is ever sent.
+**Goal.** Keep the user on top of what their email asks of them. They forget an
+email for days and forget the thing it asked. Drafting replies was built first and
+dropped: "There's no way I can give Notron enough context to reply to my emails."
 
-**Where mail comes from.** The user's two Gmail accounts, added to Mail.app on the
-Mac (System Settings → Internet Accounts). Pharmacy mail is out of scope by the
-user's decision; these accounts carry no patient information.
+**Flow (once a day in `notron morning`, or `notron mail`).**
+1. Code: newest 100 inbox headers per account → new, in window, not seen, not a
+   machine sender (key people exempt).
+2. Super: shortlist ≤12 from sender+subject. Key people's mail is always read.
+3. Super: one verb-first to-do per email that asks something (+ when, + a stated
+   deadline only).
+4. Code: Guard `check_action`, claim, then a reminder in Reminders "Email" with a
+   `message://` link to the email; today/deadline items get an alarm.
+5. Code, no model, every pass: ticked → done; a sent "Re:" of that subject newer
+   than the email → ticked for them; open ≥3 days → "Still waiting on you".
+6. The list is appended to `Notron Mail` as her turn (explicit reply capability).
 
-**Measured 2026-09-25** (8,401 + 3,308 messages):
-- Counting every mailbox: 1.7 s. Headers (id, sender, subject, date, read) for the
-  newest 200 of two inboxes: 9.3 s, one bulk request per account.
-- `content` is fetched from Gmail on demand: 40 bodies took 92 s cold; 10 took
-  11.6 s cold, 5.2 s warm. So bodies only for a shortlist.
-- `first message whose id is n`: 2.7 s, and returns the All Mail copy whose
-  content then fails (-1728). Messages are addressed by INBOX index + id check.
-- `reply m opening window false` → set content → `save` → `close saving no`
-  leaves a threaded draft (In-Reply-To present) in the account's Drafts.
+**Mail is read only.** No script sends, replies, saves, moves or deletes (test).
 
-**Flow.** headers (code) → drop seen, out-of-window, machine senders (code) →
-Super shortlists ≤12 from sender+subject → bodies for the shortlist (code) →
-Super decides reply/why/when and drafts → code claims then saves ≤6 drafts →
-the list is appended to `Notron Mail` as her turn through the Guard/Executor →
-headers remembered (14 days) only once the list landed.
-
-**Safety.** No send/delete/move in any Mail script (test-enforced). Email text is
-`Passage(origin='mail')` through `outbound.py` (policy + redaction). A draft is
-claimed before saving; an ambiguous Mail error keeps the claim (missed > twice).
-
-**Later.** Reply in the note ("make 2 shorter"); m1insights account; WhatsApp inbox.
+**Measured 2026-09-25.** Headers 100/inbox: ~4 s synced, ~2 min while Gmail
+syncs 85k messages. Bodies ~0.5–1 s each synced (read ≤4 per request).
+`whose id is` returns All Mail copies whose content fails; address by index+id.
+First live pass: 44 new → 4 flagged in 5.7 min (during sync).

@@ -106,8 +106,9 @@ nor tell whether one is pinned; that screen instructs and opens
 .venv/bin/python -m notron tasks           # hand-off tasks; `tasks show|approve|cancel <id>`, `--json` for the task board
 .venv/bin/python -m notron tasks fence     # show macOS refusing the agent your secrets (no model involved)
 .venv/bin/python -m notron tasks setup     # the Notron Tasks note + check the "Notron" Reminders list (the task inbox)
-.venv/bin/python -m notron mail setup [--accounts a,b]  # the Notron Mail note; which Mail accounts she reads
-.venv/bin/python -m notron mail [--dry-run] [--hours 24]  # emails that need a reply → drafts in Mail (never sent); also runs in `morning`
+.venv/bin/python -m notron mail setup [--accounts a,b]  # the Notron Mail note + check the "Email" Reminders list
+.venv/bin/python -m notron mail people [addr|@domain] [--remove]  # key people: always read, listed first
+.venv/bin/python -m notron mail [--dry-run] [--hours 24]  # email to-dos → Reminders "Email"; stale ones resurface; also runs in `morning`
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.
@@ -171,8 +172,8 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `tools.py` | Fixed-argv, read-only git/gh tools a channel may use; the model names tools, never commands |
 | `handoff.py` | Nemotron-briefed tasks: digest-bound approval, a git worktree + `sandbox-exec` fence for Claude Code/Codex, branch-only results, Nemotron review. Never pushes |
 | `inbox.py` | The task inbox: a Reminders list "Notron". Nemotron routes each reminder to a channel (or `Notron Tasks`); the answer lands in that note; `Approve:` / `✅ Done:` reminders buzz the phone, and ticking Approve is the id-bound go. Channels without a repo are workspaces: the agent writes Markdown/CSV into `~/Documents/Notron` |
-| `mail.py` | Apple Mail via AppleScript: bulk inbox headers, bodies by index+id, reply drafts saved and closed. No script sends, deletes or moves (a test reads them all) |
-| `mailroom.py` | The morning mail: Super shortlists from sender+subject, Super reads the shortlist and drafts replies, code saves drafts (claimed first, never twice) and appends the list to `Notron Mail` |
+| `mail.py` | Apple Mail via AppleScript, read only: bulk inbox headers, bodies by index+id, sent subjects. No script sends, replies, saves, moves or deletes (a test reads them all) |
+| `mailroom.py` | Email to-dos: Super shortlists from sender+subject (key people always read), Super writes what each email asks; code puts each in Reminders "Email" (Guard-checked, claimed first), ticks it when the user has replied, resurfaces it after 3 days, and appends the list to `Notron Mail` |
 
 ## Invariants — do not break these
 
