@@ -618,3 +618,44 @@ def test_an_unreadable_to_do_answer_leaves_its_emails_for_next_time(monkeypatch,
     FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1)]})
     mailroom.run(Garbled({2}, {"maybe": [1]}))
     assert [h.index for h in mailroom.fresh()] == [1]
+
+
+
+# ------------------------------------ found live, 2026-09-25 (week's catch-up)
+
+def test_a_catch_up_to_do_sets_no_alarm_even_if_nemotron_calls_it_today():
+    """Live: six alarms were set for five minutes' time, most for flights already flown."""
+    old = mailroom.Todo(hdr(1, age=3 * 86400), "Check in for the flight", "today")
+    assert mailroom._due(old) is None
+    fresh_ = mailroom.Todo(hdr(1, age=3600), "Reply to Vivek", "today")
+    assert mailroom._due(fresh_) is not None
+
+
+def test_nemotron_is_told_how_old_each_email_is_and_what_is_never_a_to_do():
+    brain = Decides({"todos": []})
+    mailroom.todos([hdr(1, age=3 * 86400)], {hdr(1).key: "x"}, brain=brain)
+    assert "Arrived: 3 days ago" in brain.calls[0]["user"][0].text
+    for word in ("marketing", "verification codes", "already passed"):
+        assert word in mailroom.TODO_SYSTEM
+
+
+def test_a_list_notes_refused_is_recorded_with_its_reason(monkeypatch, mail_note):
+    """Live: the week's to-dos reached Reminders but not the note, and nothing said why."""
+    FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1)]})
+    monkeypatch.setattr(mailroom, "_post", lambda ch, md, dry_run: (_ for _ in ()).throw(RuntimeError("Notes busy")))
+    out = mailroom.run(Decides({"maybe": []}))
+    assert out["written"] is False
+    last = mailroom._read()["last"]
+    assert last["written"] is False and "Notes busy" in last["reason"]
+
+
+
+def test_an_email_whose_to_do_was_dismissed_is_not_listed_as_new_again(monkeypatch, mail_note):
+    rem = FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1)]})
+    mailroom.make(todo())
+    with mailroom._editing() as d:
+        d["todos"][hdr(1).key]["status"] = "dismissed"
+    out = mailroom.run(Decides({"maybe": [1]}, {"todos": [{"n": 1, "todo": "Approve it", "when": "today"}]}))
+    assert out["todos"] == 0 and len(rem.made) == 1
