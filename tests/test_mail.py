@@ -312,7 +312,7 @@ def test_a_to_do_open_for_three_days_comes_back_to_the_top(monkeypatch):
 def test_a_fresh_open_to_do_is_left_alone(monkeypatch):
     FakeMail(monkeypatch, {})
     _open(monkeypatch, age_days=1)
-    assert mailroom.follow_up() == {"done": [], "replied": [], "stale": []}
+    assert mailroom.follow_up() == {"done": [], "replied": [], "stale": [], "settled": []}
 
 
 # ---------------------------------------------------------- the whole pass
@@ -445,7 +445,7 @@ def test_a_reminder_the_user_deleted_stops_being_listed(monkeypatch):
     FakeMail(monkeypatch, {})
     rem, rid = _open(monkeypatch, age_days=5)
     rem.deleted.add(rid)
-    assert mailroom.follow_up() == {"done": [], "replied": [], "stale": []}
+    assert mailroom.follow_up() == {"done": [], "replied": [], "stale": [], "settled": []}
     assert mailroom.follow_up()["stale"] == []
 
 
@@ -659,3 +659,80 @@ def test_an_email_whose_to_do_was_dismissed_is_not_listed_as_new_again(monkeypat
         d["todos"][hdr(1).key]["status"] = "dismissed"
     out = mailroom.run(Decides({"maybe": [1]}, {"todos": [{"n": 1, "todo": "Approve it", "when": "today"}]}))
     assert out["todos"] == 0 and len(rem.made) == 1
+
+
+
+# ------------------------------------------ found live, 2026-09-25 (the user's list)
+
+def test_a_bulk_read_that_shifted_under_it_is_read_again(monkeypatch):
+    """Live: Sean's "RE: BMW i4" came back paired with a calendar reminder's subject."""
+    outs = iter(["SHIFTED", _rows(1, 3)])
+    monkeypatch.setattr(mail, "_osascript", lambda *a, **k: next(outs))
+    assert [h.index for h in mail.headers("x", 3)] == [1, 2, 3]
+    assert 'is not idList then return "SHIFTED"' in mail.HEADERS
+
+
+def test_a_mailbox_that_never_holds_still_is_an_error_not_a_guess(monkeypatch):
+    monkeypatch.setattr(mail, "_osascript", lambda *a, **k: "SHIFTED")
+    with pytest.raises(mail.MailError):
+        mail.headers("x", 3)
+
+
+def _payment_row():
+    return {"key": "info@m1labs.io#1001", "text": "Send Interac e-Transfer of $480 to Muhammad Jah",
+            "sender": "Muhammad Jah", "subject": "Invoice for Relief Shift", "address": "m@x.com",
+            "arrived": __import__("time").time() - 109 * 3600}
+
+
+def test_later_mail_about_the_same_person_is_shown_as_evidence_and_the_email_itself_is_not():
+    row = _payment_row()
+    confirm = Header("info@m1labs.io", 1, 2000, "TD <catch@payments.interac.ca>",
+                     "Interac e-Transfer: Your $480.00 transfer to Muhammad Shaheer Jah has been deposited", 7 * 3600, True)
+    itself = Header("info@m1labs.io", 9, 1001, "Muhammad Jah <m@x.com>", "Invoice for Relief Shift", 109 * 3600, True)
+    unrelated = Header("info@m1labs.io", 2, 2001, "Shop <s@shop.com>", "Big sale", 3600, True)
+    ev = mailroom.evidence(row, [confirm, itself, unrelated], [])
+    assert len(ev) == 1 and "Muhammad Shaheer Jah" in ev[0]
+
+
+def test_an_open_to_do_later_mail_shows_done_is_ticked_with_the_reason(monkeypatch):
+    """Live: the $480 Interac e-Transfer was listed although TD had confirmed it deposited."""
+    rem = FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {})
+    h = hdr(1, sender="Muhammad Jah <m@x.com>", subject="Invoice for Relief Shift", age=109 * 3600)
+    rid = mailroom.make(mailroom.Todo(h, "Send Interac e-Transfer of $480 to Muhammad Jah", "whenever"))
+    confirm = hdr(2, sender="TD <catch@payments.interac.ca>",
+                  subject="Interac e-Transfer: Your $480.00 transfer to Muhammad Shaheer Jah has been deposited", age=7 * 3600)
+    out = mailroom.follow_up(brain=Decides({"done": [{"n": 1, "why": "TD confirmed the transfer"}]}), later=[confirm])
+    assert rid in rem.done and out["settled"][0]["why"] == "TD confirmed the transfer"
+    assert "looks done: TD confirmed the transfer" in mailroom.digest([], out, looked_at=0)
+
+
+def test_without_later_mail_nothing_is_asked_and_nothing_is_closed(monkeypatch):
+    rem = FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {})
+    rid = mailroom.make(todo())
+    brain = Decides({"done": [{"n": 1, "why": "guess"}]})
+    mailroom.follow_up(brain=brain, later=[])
+    assert brain.calls == [] and rid not in rem.done
+
+
+def test_an_unreadable_verdict_closes_nothing(monkeypatch):
+    rem = FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {})
+    rid = mailroom.make(todo())
+    later = [hdr(2, sender="Vivek Patel <vivek@example.com>", subject="Re: Invoice", age=60 * 5)]
+    with mailroom._editing() as d:
+        d["todos"][hdr(1).key]["arrived"] -= 3600
+    mailroom.follow_up(brain=Garbled({1}), later=later)
+    assert rid not in rem.done
+
+
+def test_a_new_to_do_later_mail_shows_done_is_never_made(monkeypatch, mail_note):
+    rem = FakeReminders(monkeypatch)
+    email = hdr(1, sender="Joe <joe@td.com>", subject="Share certificates", age=34 * 3600)
+    reply = hdr(2, sender="Pratik Patel <p@x.com>", subject="Re: Share certificates", age=33 * 3600)
+    FakeMail(monkeypatch, {"info@m1labs.io": [reply, email]})
+    brain = Decides({"maybe": [2]}, {"todos": [{"n": 1, "todo": "Confirm signing authorities to Joe", "when": "whenever"}]},
+                    {"done": [{"n": 1, "why": "Pratik answered on the thread"}]})
+    out = mailroom.run(brain, hours=48)
+    assert rem.made == {} and out["todos"] == 0
