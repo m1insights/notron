@@ -577,3 +577,44 @@ def test_a_short_inbox_ends_the_read(monkeypatch):
     monkeypatch.setattr(mail, "_osascript", lambda script, account, first, last, timeout:
                         calls.append(first) or _rows(int(first), min(int(last), 30)))
     assert len(mail.headers("x", 700)) == 30 and calls == ["1"]
+
+
+
+# ------------------------------------------ found live, 2026-09-25 (catch-up)
+
+class Garbled(Decides):
+    """Nemotron returning something `ask_json` cannot read, for the calls listed."""
+
+    def __init__(self, bad, *outs):
+        super().__init__(*outs)
+        self.bad = set(bad)
+
+    def ask_json(self, **kw):
+        self.calls.append(kw)
+        if len(self.calls) in self.bad:
+            raise ValueError("model did not return usable JSON")
+        return self.outs.pop(0) if self.outs else {}
+
+
+def test_a_long_shortlist_is_asked_in_batches(monkeypatch):
+    """Live: 142 senders+subjects in one request came back as unusable JSON."""
+    monkeypatch.setattr(mailroom, "SHORTLIST_BATCH", 2)
+    hs = [hdr(i) for i in range(1, 6)]
+    brain = Decides({"maybe": [1]}, {"maybe": [2]}, {"maybe": [1]})
+    picked = mailroom.shortlist(hs, brain=brain, cap=6)
+    assert len(brain.calls) == 3 and [h.index for h in picked] == [1, 4, 5]
+
+
+def test_an_unreadable_answer_leaves_those_emails_for_next_time_not_lost(monkeypatch, mail_note):
+    monkeypatch.setattr(mailroom, "SHORTLIST_BATCH", 1)
+    FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1), hdr(2)]})
+    out = mailroom.run(Garbled({1}, {"maybe": []}))
+    assert out["written"] and [h.index for h in mailroom.fresh()] == [1]
+
+
+def test_an_unreadable_to_do_answer_leaves_its_emails_for_next_time(monkeypatch, mail_note):
+    FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1)]})
+    mailroom.run(Garbled({2}, {"maybe": [1]}))
+    assert [h.index for h in mailroom.fresh()] == [1]

@@ -49,6 +49,9 @@ SHORTLIST = 12
 MAX_TODOS = 8
 #: Emails per to-do request: a week's catch-up must not become one enormous prompt.
 TODO_BATCH = 10
+#: Senders+subjects per shortlist request. Live, 142 in one request came back as
+#: unusable JSON: Nemotron spent its budget reasoning over the whole list.
+SHORTLIST_BATCH = 40
 #: The caps above are per day of window, up to these, so `--hours 168` (a week's
 #: catch-up) reads a week of mail instead of the newest day's worth of it.
 MAX_SCAN, MAX_SHORTLIST, MAX_TODOS_CATCHUP = 700, 40, 25
@@ -217,24 +220,38 @@ def _listing(hs: list[mail.Header]) -> str:
                      + ("" if h.read else " | unread") for n, h in enumerate(hs, 1))
 
 
-def shortlist(hs: list[mail.Header], *, brain, cap: int | None = None) -> list[mail.Header]:
-    """Nemotron picks, from senders and subjects, the few worth opening. Key
-    people's mail is always opened and takes no place in the model's shortlist."""
-    from .outbound import Passage
+def shortlist(hs: list[mail.Header], *, brain, cap: int | None = None,
+              unsure: list | None = None) -> list[mail.Header]:
+    """Nemotron picks, from senders and subjects, the few worth opening, a batch
+    at a time. Key people's mail is always opened and takes no place in the
+    model's shortlist. A batch Nemotron could not answer goes into `unsure`, to
+    be read again next pass rather than counted as asking nothing."""
     keys = people()
     always = [h for h in hs if is_key(h.sender, keys)]
     rest = [h for h in hs if h not in always]
     cap = cap or SHORTLIST
+    batches = [rest[i:i + SHORTLIST_BATCH] for i in range(0, len(rest), SHORTLIST_BATCH)]
+    each = max(1, -(-cap // max(1, len(batches))))
     picked: list[mail.Header] = []
-    if rest:
-        out = brain.ask_json(system=SHORTLIST_SYSTEM.replace("{cap}", str(cap)), purpose="route",
-                             tier="smart", max_tokens=600,
-                             user=[Passage(_listing(rest), "mail")])
-        for n in out.get("maybe", []) if isinstance(out, dict) else []:
-            if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= len(rest) \
-                    and rest[n - 1] not in picked:
-                picked.append(rest[n - 1])
+    for batch in batches:
+        try:
+            picked += _shortlist_batch(batch, brain=brain, cap=each)
+        except ValueError:
+            if unsure is not None:
+                unsure.extend(batch)
     return always + picked[:cap]
+
+
+def _shortlist_batch(batch: list[mail.Header], *, brain, cap: int) -> list[mail.Header]:
+    from .outbound import Passage
+    out = brain.ask_json(system=SHORTLIST_SYSTEM.replace("{cap}", str(cap)), purpose="route",
+                         tier="smart", max_tokens=1500, user=[Passage(_listing(batch), "mail")])
+    picked: list[mail.Header] = []
+    for n in out.get("maybe", []) if isinstance(out, dict) else []:
+        if isinstance(n, int) and not isinstance(n, bool) and 1 <= n <= len(batch) \
+                and batch[n - 1] not in picked:
+            picked.append(batch[n - 1])
+    return picked[:cap]
 
 
 def _trim(text: str) -> str:
@@ -247,12 +264,18 @@ def _trim(text: str) -> str:
     return "\n".join(kept).strip()[:MAX_BODY]
 
 
-def todos(hs: list[mail.Header], bodies: dict[str, str], *, brain) -> list[Todo]:
+def todos(hs: list[mail.Header], bodies: dict[str, str], *, brain, unsure: list | None = None) -> list[Todo]:
     """Nemotron reads the shortlist and writes what each email asks the user to do,
-    a batch at a time."""
+    a batch at a time. A batch it could not answer goes into `unsure`."""
     readable = [h for h in hs if bodies.get(h.key)]
-    found = [t for start in range(0, len(readable), TODO_BATCH)
-             for t in _todo_batch(readable[start:start + TODO_BATCH], bodies, brain=brain)]
+    found = []
+    for start in range(0, len(readable), TODO_BATCH):
+        batch = readable[start:start + TODO_BATCH]
+        try:
+            found += _todo_batch(batch, bodies, brain=brain)
+        except ValueError:
+            if unsure is not None:
+                unsure.extend(batch)
     order = {"today": 0, "this week": 1, "whenever": 2}
     return sorted(found, key=lambda t: (not t.key_person, order[t.when]))
 
@@ -534,11 +557,14 @@ def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None
     if handled:
         say(f"{len(handled)} already handled by you")
     days = _days(hours)
+    unsure: list[mail.Header] = []
     picked = shortlist([h for h in hs if h not in handled], brain=brain,
-                       cap=min(SHORTLIST * days, MAX_SHORTLIST))
+                       cap=min(SHORTLIST * days, MAX_SHORTLIST), unsure=unsure)
     say(f"Nemotron opened {len(picked)}")
     bodies = mail.bodies(picked) if picked else {}
-    found = todos(picked, bodies, brain=brain) if picked else []
+    found = todos(picked, bodies, brain=brain, unsure=unsure) if picked else []
+    if unsure:
+        say(f"{len(unsure)} emails left for next time: Nemotron's answer was unreadable")
     cap = min(MAX_TODOS * days, MAX_TODOS_CATCHUP)
     new, later = found[:cap], found[cap:]
     made: dict[str, str] = {}
@@ -554,7 +580,8 @@ def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None
     if not dry_run and result.ok:
         # A shortlisted email Mail could not open was never read: try it next pass.
         # A to-do that did not reach Reminders, or past today's cap, is read again next pass.
-        retry = {k for k, rid in made.items() if not rid} | {t.header.key for t in later}
+        retry = ({k for k, rid in made.items() if not rid} | {t.header.key for t in later}
+                 | {h.key for h in unsure})
         remember([h for h in hs if (h not in picked or h.key in bodies) and h.key not in retry])
     say(f"{len(new)} new to-dos, {len(follow['stale'])} still waiting, "
         f"{len(follow['done']) + len(follow['replied'])} done ({time.time() - started:.0f}s)")
