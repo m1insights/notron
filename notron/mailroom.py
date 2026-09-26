@@ -482,7 +482,7 @@ def follow_up(*, caller=None, sent_cache: dict | None = None, brain=None,
             except Exception:
                 continue
             settled_rows.append({**row, "why": why})
-            _close(key, "settled")
+            _close(key, "settled", why)
         still = [s for i, s in enumerate(still) if i not in verdicts]
     for _, row, waited in still:
         if waited >= STALE_DAYS * 86400:
@@ -551,10 +551,12 @@ def settled(items: list[tuple[dict, list[str]]], *, brain) -> dict[int, str]:
     return found
 
 
-def _close(key: str, status: str) -> None:
+def _close(key: str, status: str, why: str = "") -> None:
     with _editing() as data:
         if key in data["todos"]:
             data["todos"][key]["status"] = status
+            if why:
+                data["todos"][key]["why"] = why
             data["todos"][key]["closed"] = time.time()
 
 
