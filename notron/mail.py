@@ -129,7 +129,9 @@ end run
 def headers(account: str, limit: int = 100) -> list[Header]:
     """The newest `limit` messages in one account's inbox: who, what, how old. No bodies."""
     out = []
-    for row in _osascript(HEADERS, account, str(limit)).split(RS):
+    # 100 headers took ~2 min while Gmail synced 85k messages; give a week's
+    # catch-up room in proportion rather than failing it at the default timeout.
+    for row in _osascript(HEADERS, account, str(limit), timeout=max(TIMEOUT, 2 * limit)).split(RS):
         parts = row.split(US)
         if len(parts) != 7:
             continue
