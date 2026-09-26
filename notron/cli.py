@@ -219,6 +219,16 @@ def cmd_mail(args):
     from . import channels, credentials, eventkit, mail, mailroom
     if credentials._provider is None:
         credentials.startup()
+    if args.action == 'status':
+        import time as _time
+        last = mailroom._read().get("last")
+        if not last:
+            print("\n  No mail pass has run yet.\n")
+            return
+        age = int((_time.time() - last["at"]) / 60)
+        state = "list written to Notron Mail" if last["written"] else f"list NOT written: {last['reason']}"
+        print(f"\n  Last pass {age} min ago, {last['hours']}h window: {last['todos']} to-dos, {state}.\n")
+        return
     if args.action == 'people':
         try:
             if args.who and args.remove:
@@ -861,7 +871,7 @@ def main(argv=None):
     tk.set_defaults(fn=cmd_tasks)
 
     ml = sub.add_parser('mail', help='email to-dos: what each email asks of you, in Reminders until done')
-    ml.add_argument('action', nargs='?', choices=['run', 'setup', 'people'], default='run')
+    ml.add_argument('action', nargs='?', choices=['run', 'setup', 'people', 'status'], default='run')
     ml.add_argument('who', nargs='?', help='people: an email address, or @domain.com')
     ml.add_argument('--remove', action='store_true', help='people: take this one off the list')
     ml.add_argument('--accounts', help='setup: only these Mail accounts, comma-separated')
