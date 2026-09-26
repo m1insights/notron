@@ -704,6 +704,8 @@ def test_an_open_to_do_later_mail_shows_done_is_ticked_with_the_reason(monkeypat
                   subject="Interac e-Transfer: Your $480.00 transfer to Muhammad Shaheer Jah has been deposited", age=7 * 3600)
     out = mailroom.follow_up(brain=Decides({"done": [{"n": 1, "why": "TD confirmed the transfer"}]}), later=[confirm])
     assert rid in rem.done and out["settled"][0]["why"] == "TD confirmed the transfer"
+    [row] = [r for r in mailroom._read()["todos"].values() if r.get("reminder") == rid]
+    assert row["why"] == "TD confirmed the transfer"          # kept, so the user can ask why
     assert "looks done: TD confirmed the transfer" in mailroom.digest([], out, looked_at=0)
 
 
