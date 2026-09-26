@@ -79,6 +79,19 @@ def _osascript(script: str, *args: str, timeout: int = TIMEOUT) -> str:
     return proc.stdout.rstrip("\n")
 
 
+def _unshifted(script: str, *args: str, timeout: int = TIMEOUT, tries: int = 3) -> str:
+    """Run a bulk read until the mailbox held still for the whole of it.
+
+    Found live 2026-09-25: while Gmail was syncing, Sean's "RE: BMW i4" came back
+    with a calendar reminder's subject, the to-do was filed under the wrong email,
+    and the user's actual reply to him could never match it."""
+    for _ in range(tries):
+        out = _osascript(script, *args, timeout=timeout)
+        if out != "SHIFTED":
+            return out
+    raise MailError("Mail kept changing while it was being read; try again in a minute.")
+
+
 ACCOUNTS = """
 tell application "Mail"
     set out to ""
@@ -116,6 +129,10 @@ on run argv
         set rcvdList to date received of messages first_ thru want of mb
         set readList to read status of messages first_ thru want of mb
         set midList to message id of messages first_ thru want of mb
+        -- Each list above is its own request, seconds apart; mail arriving or being
+        -- archived in between shifts the range, and item k of one list is then a
+        -- different email from item k of the next. Checked, not assumed.
+        if (id of messages first_ thru want of mb) is not idList then return "SHIFTED"
         set now to current date
         set out to ""
         repeat with k from 1 to (want - first_ + 1)
@@ -141,7 +158,7 @@ def headers(account: str, limit: int = 100, *, max_age: int | None = None) -> li
     out: list[Header] = []
     for first in range(1, limit + 1, HEADER_CHUNK):
         last = min(first + HEADER_CHUNK - 1, limit)
-        rows = _osascript(HEADERS, account, str(first), str(last), timeout=max(TIMEOUT, 660)).split(RS)
+        rows = _unshifted(HEADERS, account, str(first), str(last), timeout=max(TIMEOUT, 660)).split(RS)
         chunk = []
         for row in rows:
             parts = row.split(US)
@@ -246,6 +263,7 @@ on run argv
         set subjList to subject of messages 1 thru want of mb
         set sentList to date sent of messages 1 thru want of mb
         set toList to address of to recipient 1 of messages 1 thru want of mb
+        if (subject of messages 1 thru want of mb) is not subjList then return "SHIFTED"
         set now to current date
         set out to ""
         repeat with i from 1 to want
@@ -266,7 +284,7 @@ def sent(account: str, limit: int = 200) -> list[tuple[str, int, str]]:
     """(subject, seconds ago, first recipient) for the newest mail the user sent
     from one account. Raises when the account has no sent mailbox Notron can find,
     rather than reading as "you replied to nothing"."""
-    raw = _osascript(SENT, account, str(limit))
+    raw = _unshifted(SENT, account, str(limit))
     if raw == "NOSENT":
         raise MailError(f"No sent mailbox found in {account}.")
     out = []
