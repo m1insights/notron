@@ -97,50 +97,66 @@ def accounts() -> list[str]:
 HEADERS = """
 on run argv
     set acct to item 1 of argv
-    set want to (item 2 of argv) as integer
+    set first_ to (item 2 of argv) as integer
+    set want to (item 3 of argv) as integer
     set US to character id 31
     set RS to character id 30
+    -- Mail's own limit on one request is two minutes; a syncing inbox can need more.
+    with timeout of 600 seconds
     tell application "Mail"
         set mb to mailbox "INBOX" of account acct
         set total to count of messages of mb
-        if total = 0 then return ""
+        if total < first_ then return ""
         if want > total then set want to total
         -- Asked of the range itself, every time: a range saved in a variable
         -- becomes a list of All Mail references, and `id of` a list fails (-1728).
-        set idList to id of messages 1 thru want of mb
-        set fromList to sender of messages 1 thru want of mb
-        set subjList to subject of messages 1 thru want of mb
-        set rcvdList to date received of messages 1 thru want of mb
-        set readList to read status of messages 1 thru want of mb
-        set midList to message id of messages 1 thru want of mb
+        set idList to id of messages first_ thru want of mb
+        set fromList to sender of messages first_ thru want of mb
+        set subjList to subject of messages first_ thru want of mb
+        set rcvdList to date received of messages first_ thru want of mb
+        set readList to read status of messages first_ thru want of mb
+        set midList to message id of messages first_ thru want of mb
         set now to current date
         set out to ""
-        repeat with i from 1 to want
-            set s to item i of subjList
+        repeat with k from 1 to (want - first_ + 1)
+            set s to item k of subjList
             if s is missing value then set s to ""
-            set out to out & i & US & (item i of idList) & US & (item i of fromList) & US & s & US & ((now - (item i of rcvdList)) as integer) & US & (item i of readList) & US & (item i of midList) & RS
+            set out to out & (first_ + k - 1) & US & (item k of idList) & US & (item k of fromList) & US & s & US & ((now - (item k of rcvdList)) as integer) & US & (item k of readList) & US & (item k of midList) & RS
         end repeat
         return out
     end tell
+    end timeout
 end run
 """
 
+#: Headers per request. One request for 700 hit Mail's two-minute AppleEvent
+#: limit (-1712) on an inbox still syncing 85k messages; 100 took ~2 min there.
+HEADER_CHUNK = 100
 
-def headers(account: str, limit: int = 100) -> list[Header]:
-    """The newest `limit` messages in one account's inbox: who, what, how old. No bodies."""
-    out = []
-    # 100 headers took ~2 min while Gmail synced 85k messages; give a week's
-    # catch-up room in proportion rather than failing it at the default timeout.
-    for row in _osascript(HEADERS, account, str(limit), timeout=max(TIMEOUT, 2 * limit)).split(RS):
-        parts = row.split(US)
-        if len(parts) != 7:
-            continue
-        index, mid, sender, subject, age, read, message_id = parts
-        try:
-            out.append(Header(account, int(index), int(mid), sender.strip(), subject.strip(),
-                              int(age), read.strip() == "true", message_id.strip()))
-        except ValueError:
-            continue
+
+def headers(account: str, limit: int = 100, *, max_age: int | None = None) -> list[Header]:
+    """The newest `limit` messages in one account's inbox: who, what, how old. No
+    bodies. Read a chunk at a time, stopping at the first chunk that reaches past
+    `max_age` seconds — a week's catch-up need not read a busy inbox's whole limit."""
+    out: list[Header] = []
+    for first in range(1, limit + 1, HEADER_CHUNK):
+        last = min(first + HEADER_CHUNK - 1, limit)
+        rows = _osascript(HEADERS, account, str(first), str(last), timeout=max(TIMEOUT, 660)).split(RS)
+        chunk = []
+        for row in rows:
+            parts = row.split(US)
+            if len(parts) != 7:
+                continue
+            index, mid, sender, subject, age, read, message_id = parts
+            try:
+                chunk.append(Header(account, int(index), int(mid), sender.strip(), subject.strip(),
+                                    int(age), read.strip() == "true", message_id.strip()))
+            except ValueError:
+                continue
+        out += chunk
+        if not chunk or len(chunk) < last - first + 1 or (
+                max_age is not None and max(h.age for h in chunk) > max_age):
+            break
     return out
 
 
@@ -168,6 +184,7 @@ on run argv
     set RS to character id 30
     set US to character id 31
     set out to ""
+    with timeout of 600 seconds
     tell application "Mail"
         set mb to mailbox "INBOX" of account acct
         repeat with k from 3 to (count of argv) by 2
@@ -180,6 +197,7 @@ on run argv
             end if
         end repeat
     end tell
+    end timeout
     return out
 end run
 """
@@ -210,6 +228,7 @@ on run argv
     set want to (item 2 of argv) as integer
     set US to character id 31
     set RS to character id 30
+    with timeout of 600 seconds
     tell application "Mail"
         set mb to missing value
         -- Gmail's sent mail is "[Gmail]/Sent Mail" by name; plain "Sent Mail" fails
@@ -238,6 +257,7 @@ on run argv
         end repeat
         return out
     end tell
+    end timeout
 end run
 """
 

@@ -39,7 +39,7 @@ class FakeMail:
         self.sent_mail = sent if sent is not None else {}
         monkeypatch.setattr(mail, "accounts", lambda: sorted({h.account for a in inbox.values() for h in a}
                                                              | set(inbox)))
-        monkeypatch.setattr(mail, "headers", lambda account, limit=100: inbox.get(account, [])[:limit])
+        monkeypatch.setattr(mail, "headers", lambda account, limit=100, max_age=None: inbox.get(account, [])[:limit])
         monkeypatch.setattr(mail, "bodies", lambda hs: {h.key: self.body.get(h.key, "Can you sign this off?")
                                                         for h in hs if h.key not in self.gone})
         monkeypatch.setattr(mail, "sent", lambda account, limit=60: self.sent_mail.get(account, []))
@@ -103,7 +103,8 @@ def test_mail_is_only_ever_read():
 def test_headers_are_parsed_from_one_bulk_request(monkeypatch):
     row = mail.US.join(["1", "8778", "Vivek <v@x.com>", "Invoice", "120", "false", "abc@mail.gmail.com"])
     bad = mail.US.join(["2", "not-a-number", "x", "y", "1", "true", ""])
-    monkeypatch.setattr(mail, "_osascript", lambda script, *a, **k: row + mail.RS + bad + mail.RS)
+    monkeypatch.setattr(mail, "_osascript", lambda script, *a, **k: row + mail.RS + bad + mail.RS
+                        if a[1] == "1" else "")
     [h] = mail.headers("info@m1labs.io", 50)
     assert (h.index, h.id, h.subject, h.age, h.read) == (1, 8778, "Invoice", 120, False)
     assert h.key == "info@m1labs.io#8778"
@@ -539,7 +540,7 @@ def test_forwarding_an_open_to_do_ticks_it(monkeypatch):
 def test_a_weeks_catch_up_reads_a_weeks_mail_not_just_the_newest_day(monkeypatch, mail_note):
     asked = []
     FakeMail(monkeypatch, {"info@m1labs.io": []})
-    monkeypatch.setattr(mail, "headers", lambda account, limit=100: asked.append(limit) or [])
+    monkeypatch.setattr(mail, "headers", lambda account, limit=100, max_age=None: asked.append(limit) or [])
     mailroom.run(Decides(), hours=168)
     assert asked == [700]
 
@@ -550,3 +551,29 @@ def test_many_emails_are_read_by_nemotron_a_batch_at_a_time(monkeypatch):
     brain = Decides(*[{"todos": [{"n": 1, "todo": f"Do {i}", "when": "whenever"}]} for i in range(3)])
     out = mailroom.todos(hs, {h.key: "x" for h in hs}, brain=brain)
     assert len(brain.calls) == 3 and [t.header.index for t in out] == [1, 3, 5]
+
+
+
+def _rows(first, last, age_per=3600):
+    return mail.RS.join(mail.US.join([str(i), str(1000 + i), "a <a@b.c>", "s", str(i * age_per), "false", ""])
+                        for i in range(first, last + 1))
+
+
+def test_a_long_read_is_asked_a_chunk_at_a_time_and_stops_past_the_window(monkeypatch):
+    """Live: one request for 700 headers hit Mail's two-minute AppleEvent limit (-1712)."""
+    calls = []
+
+    def fake(script, account, first, last, timeout):
+        calls.append((int(first), int(last)))
+        return _rows(int(first), int(last))
+    monkeypatch.setattr(mail, "_osascript", fake)
+    hs = mail.headers("x", 700, max_age=150 * 3600)
+    assert calls == [(1, 100), (101, 200)] and len(hs) == 200
+    assert 'with timeout of 600 seconds' in mail.HEADERS
+
+
+def test_a_short_inbox_ends_the_read(monkeypatch):
+    calls = []
+    monkeypatch.setattr(mail, "_osascript", lambda script, account, first, last, timeout:
+                        calls.append(first) or _rows(int(first), min(int(last), 30)))
+    assert len(mail.headers("x", 700)) == 30 and calls == ["1"]

@@ -203,7 +203,7 @@ def fresh(*, hours: int = WINDOW_HOURS) -> list[mail.Header]:
     seen, keys = data.get("seen", {}), data.get("people", [])
     out = []
     for account in names:
-        for h in mail.headers(account, min(SCAN * _days(hours), MAX_SCAN)):
+        for h in mail.headers(account, min(SCAN * _days(hours), MAX_SCAN), max_age=hours * 3600):
             if h.age > hours * 3600 or h.key in seen:
                 continue
             if MACHINE.search(h.sender) and not is_key(h.sender, keys):
