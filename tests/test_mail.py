@@ -498,6 +498,7 @@ def test_to_dos_past_the_daily_cap_wait_for_the_next_pass(monkeypatch, mail_note
     brain = Decides({"maybe": list(range(1, n + 1))},
                     {"todos": [{"n": i, "todo": f"Do {i}", "when": "whenever"} for i in range(1, n + 1)]})
     monkeypatch.setattr(mailroom, "SHORTLIST", n)
+    monkeypatch.setattr(mailroom, "TODO_BATCH", n)
     mailroom.run(brain)
     assert len(mailroom.fresh()) == 2
 
@@ -532,3 +533,20 @@ def test_forwarding_an_open_to_do_ticks_it(monkeypatch):
     rem, rid = _open(monkeypatch, age_days=2)
     FakeMail(monkeypatch, {}, sent={"info@m1labs.io": [("Fwd: Invoice", 3600, "accountant@example.com")]})
     assert [r["reminder"] for r in mailroom.follow_up()["replied"]] == [rid] and rid in rem.done
+
+
+
+def test_a_weeks_catch_up_reads_a_weeks_mail_not_just_the_newest_day(monkeypatch, mail_note):
+    asked = []
+    FakeMail(monkeypatch, {"info@m1labs.io": []})
+    monkeypatch.setattr(mail, "headers", lambda account, limit=100: asked.append(limit) or [])
+    mailroom.run(Decides(), hours=168)
+    assert asked == [700]
+
+
+def test_many_emails_are_read_by_nemotron_a_batch_at_a_time(monkeypatch):
+    monkeypatch.setattr(mailroom, "TODO_BATCH", 2)
+    hs = [hdr(i) for i in range(1, 6)]
+    brain = Decides(*[{"todos": [{"n": 1, "todo": f"Do {i}", "when": "whenever"}]} for i in range(3)])
+    out = mailroom.todos(hs, {h.key: "x" for h in hs}, brain=brain)
+    assert len(brain.calls) == 3 and [t.header.index for t in out] == [1, 3, 5]
