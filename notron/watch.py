@@ -10,7 +10,9 @@ Either way she answers directly underneath what you wrote, and draws no more
 attention to herself than that.
 
 A third surface is quieter still: lines thrown into `🧠 Brain Dump` are filed
-into the right notes once the dump has been left alone for a while.
+into the right notes once the dump has been left alone for a while. And every
+half hour she goes through the inbox: email that asks something of the user
+becomes a reminder in the "Email" list (`mailroom`).
 
 Three things this has to get right, all learned the hard way:
 
@@ -26,11 +28,15 @@ Three things this has to get right, all learned the hard way:
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 
 from . import attachments, conversation, filer, graph, mentions, notes, workspace, policy, requests
 from .applescript import AppleScriptError, NotesBusy
+from .credentials import CredentialUnavailable
+from .policy import PolicyError
+from .securestore import StorageError
 from .markup import to_text
 
 ASK_POLL = 5           # seconds between checks of the Ask note
@@ -55,6 +61,11 @@ CHANNEL_SETTLE = 3
 INBOX_POLL = 5
 MIN_PAUSE = 0.25      # never spin: a due line is looked at again this soon at most
 DUMP_POLL = 60         # seconds between looks at the Brain Dump (one cheap read)
+# Email to-dos: a pass every half hour, so "always on" means an email that asks
+# something is in Reminders within the half hour, not tomorrow morning. The Mail
+# reads run on a thread of their own (`mailroom.gather`, minutes on a busy inbox);
+# the model and every write stay on this loop, the queue's one owner.
+MAIL_EVERY = 1800
 
 HERE_CHARS = 40_000    # how much of the note she was tagged in the model sees
 ELIDED = "\n\n[… a part of this note is not shown …]\n\n"
@@ -117,6 +128,7 @@ class Watcher:
     channel_poll: float = CHANNEL_POLL
     channel_settle: float = CHANNEL_SETTLE
     inbox_poll: float = INBOX_POLL
+    mail_every: float = MAIL_EVERY
     on_event: object = None
     scanner: mentions.Scanner = field(default_factory=mentions.Scanner)
 
@@ -133,6 +145,10 @@ class Watcher:
     _inbox_problem: str = ""
     _inbox_said: set = field(default_factory=set)   # things said once, not every poll
     _dump_on_hold: bool = False
+    _last_mail: float = 0
+    _mail_reading: object = None                    # the thread reading Mail, while it runs
+    _mail_read: list = field(default_factory=list)  # what it read (or why it could not)
+    _mail_problem: str = ""
     # Set on a resume until one full tick has passed: a stamp from before the
     # sleep says nothing about whether a line was finished.
     _just_resumed: bool = False
@@ -520,6 +536,53 @@ class Watcher:
         self._attempted(key, state.receipt_complete)
         return True
 
+    def check_mail(self, now: float) -> bool:
+        """Every `mail_every` seconds: email → to-dos in Reminders. True if a pass
+        ran on this tick. Only once the user has set up the Mail note; a Mail
+        problem is said once and tried again next half hour, never a stopped
+        listener."""
+        from . import mailroom
+        if self._mail_reading is not None:
+            if self._mail_reading.is_alive():
+                return False
+            self._mail_reading = None
+            read = self._mail_read.pop() if self._mail_read else RuntimeError("Mail read nothing")
+            if isinstance(read, Exception):
+                self._mail_trouble(read)
+                return False
+            try:
+                out = mailroom.run(self.brain, gathered=read, on_step=lambda m: self._say(f"  mail: {m}"))
+            except (CredentialUnavailable, StorageError, PolicyError):
+                raise
+            except Exception as problem:
+                self._mail_trouble(problem)
+                return True
+            self._mail_problem = ""
+            if out.get("todos"):
+                self._say(f"  mail: {out['todos']} new to-do(s) in Reminders → {mailroom.LIST}")
+            return True
+        if now - self._last_mail < self.mail_every:
+            return False
+        self._last_mail = now
+        if mailroom.channel(granted_only=True) is None:
+            return False            # not set up: `notron mail setup` switches this on
+
+        def read():
+            try:
+                self._mail_read.append(mailroom.gather())
+            except Exception as problem:     # handed back to the loop, never lost
+                self._mail_read.append(problem)
+        self._mail_read.clear()
+        self._mail_reading = threading.Thread(target=read, name="notron-mail", daemon=True)
+        self._mail_reading.start()
+        return False
+
+    def _mail_trouble(self, problem: Exception) -> None:
+        said = f"{type(problem).__name__}: {problem}"[:200]
+        if said != self._mail_problem:
+            self._mail_problem = said
+            self._say(f"  mail skipped, trying again in {self.mail_every / 60:.0f} min: {said}")
+
     def sweep_mentions(self) -> None:
         from . import retention
         live = retention.reconcile()
@@ -770,6 +833,8 @@ class Watcher:
                 self._last_tasks = now
                 if self.check_tasks():
                     return
+            if self.check_mail(now):
+                return
             if store.paused or store.row()['stop_requested']:
                 return
             if now - self._last_sweep >= self.sweep_every:
