@@ -738,3 +738,60 @@ def test_a_new_to_do_later_mail_shows_done_is_never_made(monkeypatch, mail_note)
                     {"done": [{"n": 1, "why": "Pratik answered on the thread"}]})
     out = mailroom.run(brain, hours=48)
     assert rem.made == {} and out["todos"] == 0
+
+
+# ------------------------------------------- always on: the listener, 2026-09-30
+
+def _watcher():
+    from notron import watch
+    said = []
+    return watch.Watcher(brain=Decides({"maybe": [1]}, {"todos": [{"n": 1, "todo": "Approve it", "when": "today"}]}),
+                         on_event=said.append), said
+
+
+def _settle(w):
+    w._mail_reading.join(5)
+
+
+def test_a_pass_with_mail_read_ahead_reads_nothing_from_mail_itself(monkeypatch, mail_note):
+    rem = FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1)]}, sent={"info@m1labs.io": []})
+    read = mailroom.gather()
+    monkeypatch.setattr(mail, "headers", lambda *a, **k: pytest.fail("Mail read twice"))
+    monkeypatch.setattr(mail, "sent", lambda *a, **k: pytest.fail("Mail read twice"))
+    out = mailroom.run(Decides({"maybe": [1]}, {"todos": [{"n": 1, "todo": "Approve it", "when": "today"}]}),
+                       gathered=read)
+    assert out["added"] == 1 and len(rem.made) == 1
+
+
+def test_the_listener_turns_new_email_into_reminders_every_half_hour(monkeypatch, mail_note):
+    rem = FakeReminders(monkeypatch)
+    FakeMail(monkeypatch, {"info@m1labs.io": [hdr(1)]})
+    w, said = _watcher()
+    assert w.check_mail(10_000) is False          # Mail is read off the loop first…
+    _settle(w)
+    assert w.check_mail(10_001) is True           # …then the model and writes run on it
+    assert len(rem.made) == 1 and any("1 new to-do" in s for s in said)
+    assert w.check_mail(10_002) is False and w._mail_reading is None
+    assert w.check_mail(10_000 + w.mail_every - 1) is False and w._mail_reading is None
+    w.check_mail(10_000 + w.mail_every)
+    assert w._mail_reading is not None            # half an hour on, she looks again
+    _settle(w)
+
+
+def test_the_listener_leaves_mail_alone_until_it_is_set_up(monkeypatch):
+    monkeypatch.setattr(mail, "accounts", lambda: pytest.fail("Mail read before setup"))
+    w, _ = _watcher()
+    assert w.check_mail(10_000) is False and w._mail_reading is None
+
+
+def test_mail_that_cannot_be_read_is_said_once_and_the_listener_carries_on(monkeypatch, mail_note):
+    def broken():
+        raise mail.MailError("Mail is not responding")
+    monkeypatch.setattr(mail, "accounts", broken)
+    w, said = _watcher()
+    for at in (10_000, 10_000 + w.mail_every):
+        w.check_mail(at)
+        _settle(w)
+        assert w.check_mail(at + 1) is False
+    assert sum("Mail is not responding" in s for s in said) == 1 and mail_note == []

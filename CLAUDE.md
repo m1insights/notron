@@ -108,7 +108,7 @@ nor tell whether one is pinned; that screen instructs and opens
 .venv/bin/python -m notron tasks setup     # the Notron Tasks note + check the "Notron" Reminders list (the task inbox)
 .venv/bin/python -m notron mail setup [--accounts a,b]  # the Notron Mail note + check the "Email" Reminders list
 .venv/bin/python -m notron mail people [addr|@domain] [--remove]  # key people: always read, listed first
-.venv/bin/python -m notron mail [--dry-run] [--hours 24]  # email to-dos → Reminders "Email"; stale ones resurface; also runs in `morning`
+.venv/bin/python -m notron mail [--dry-run] [--hours 24]  # email to-dos → Reminders "Email"; stale ones resurface; also runs in `morning`, and every 30 min inside `listen` (Mail read on a side thread, model + writes on the loop)
 ```
 
 `--dry-run` on `ask`, `plan`, `care` and `morning` walks the graph and writes nothing.

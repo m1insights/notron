@@ -204,10 +204,14 @@ def target(*, caller=None) -> str | None:
 
 # ------------------------------------------------------------------ steps
 
+def _accounts() -> list[str]:
+    wanted = chosen_accounts()
+    return [a for a in mail.accounts() if wanted is None or a in wanted]
+
+
 def recent(*, hours: int = WINDOW_HOURS) -> list[mail.Header]:
     """Every inbox header from the chosen accounts in the window. No model."""
-    wanted = chosen_accounts()
-    names = [a for a in mail.accounts() if wanted is None or a in wanted]
+    names = _accounts()
     return [h for account in names
             for h in mail.headers(account, min(SCAN * _days(hours), MAX_SCAN), max_age=hours * 3600)
             if h.age <= hours * 3600]
@@ -636,8 +640,30 @@ def _post(ch, markdown: str, *, dry_run: bool):
 
 # -------------------------------------------------------------------- run
 
-def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None) -> dict:
-    """The whole pass. Returns what happened, for the morning report."""
+@dataclass(frozen=True)
+class Gathered:
+    """The slow half of a pass, read ahead: the window's inbox and what was sent."""
+    hours: int
+    window: list
+    sent: dict
+
+
+def gather(*, hours: int = WINDOW_HOURS) -> Gathered:
+    """Mail reads only — no model, no Notes, no Reminders — so the listener can do
+    them on a thread of their own. Measured 2026-09-30: one busy Gmail inbox took
+    175 s to hand over a day's headers; the listener answering Notes cannot wait
+    that long every half hour, but it can take the model's part of a pass."""
+    window = recent(hours=hours)
+    sent: dict = {}
+    for account in _accounts():
+        _sent(account, sent)
+    return Gathered(hours, window, sent)
+
+
+def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None,
+        gathered: Gathered | None = None) -> dict:
+    """The whole pass. Returns what happened, for the morning report. With
+    `gathered`, Mail's slow reads were done already (`gather`)."""
     def say(msg: str) -> None:
         if on_step:
             on_step(msg)
@@ -646,8 +672,10 @@ def run(brain, *, dry_run: bool = False, hours: int = WINDOW_HOURS, on_step=None
     if ch is None:
         raise MailroomError("No Notron Mail note yet — run `notron mail setup`.")
     started = time.time()
-    sent_cache: dict = {}
-    window = recent(hours=hours)
+    if gathered is not None:
+        hours, window, sent_cache = gathered.hours, gathered.window, dict(gathered.sent)
+    else:
+        sent_cache, window = {}, recent(hours=hours)
     follow = ({"done": [], "replied": [], "stale": [], "settled": []} if dry_run
               else follow_up(sent_cache=sent_cache, brain=brain, later=window))
     hs = fresh(hours=hours, headers=window)
