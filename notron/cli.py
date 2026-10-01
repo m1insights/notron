@@ -236,6 +236,38 @@ def cmd_tasks(args):
     print()
 
 
+def _mail_address(args):
+    """Notron's own email address: a Mail account whose mail from approved senders
+    becomes requests in the Notron Reminders list."""
+    from . import letterbox, mail
+    if args.account or args.allow:
+        current = letterbox.settings()
+        account = args.account or current.get("account")
+        allow = ([a for a in args.allow.split(',')] if args.allow else current.get("senders", []))
+        if not account:
+            raise SystemExit("Which Mail account is Notron's? --account \"Notron\"")
+        try:
+            found = mail.accounts()
+        except mail.MailError as problem:
+            raise SystemExit(f"I can't read Mail from here: {problem}")
+        if account not in found:
+            raise SystemExit(f"Mail has no account called {account}. It has: {', '.join(found)}")
+        try:
+            letterbox.setup(account, allow)
+        except letterbox.LetterboxError as problem:
+            raise SystemExit(str(problem))
+    data = letterbox.settings()
+    if not data.get("account"):
+        print("\n  No address yet. Add one to Mail as its own account, then:"
+              "\n    notron mail address --account \"Notron\" --allow you@example.com,manager@example.com\n")
+        return
+    print(f"\n  Notron's address: the Mail account “{data['account']}” — checked every "
+          f"{letterbox.EVERY // 60} min while `notron listen` runs.")
+    print("  Who may send requests (and only when their mail server proves it was them):")
+    print("".join(f"\n    ✉️  {s}" for s in data.get("senders", [])))
+    print("\n  Their email becomes a request in Reminders → Notron. Nothing runs until you tick Approve.\n")
+
+
 def cmd_mail(args):
     """Email to-dos: what each email asks of you, kept in Reminders until it is done."""
     from . import channels, credentials, eventkit, mail, mailroom
@@ -250,6 +282,9 @@ def cmd_mail(args):
         age = int((_time.time() - last["at"]) / 60)
         state = "list written to Notron Mail" if last["written"] else f"list NOT written: {last['reason']}"
         print(f"\n  Last pass {age} min ago, {last['hours']}h window: {last['todos']} to-dos, {state}.\n")
+        return
+    if args.action == 'address':
+        _mail_address(args)
         return
     if args.action == 'people':
         try:
@@ -896,10 +931,12 @@ def main(argv=None):
     tk.set_defaults(fn=cmd_tasks)
 
     ml = sub.add_parser('mail', help='email to-dos: what each email asks of you, in Reminders until done')
-    ml.add_argument('action', nargs='?', choices=['run', 'setup', 'people', 'status'], default='run')
+    ml.add_argument('action', nargs='?', choices=['run', 'setup', 'people', 'status', 'address'], default='run')
     ml.add_argument('who', nargs='?', help='people: an email address, or @domain.com')
     ml.add_argument('--remove', action='store_true', help='people: take this one off the list')
     ml.add_argument('--accounts', help='setup: only these Mail accounts, comma-separated')
+    ml.add_argument('--account', help="address: the Mail account that is Notron's own address")
+    ml.add_argument('--allow', help='address: who may email Notron requests, comma-separated addresses')
     ml.add_argument('--hours', type=int, default=24, help='how far back to look (default 24)')
     ml.add_argument('--dry-run', action="store_true", help='decide and show, but save no drafts and write nothing')
     ml.set_defaults(fn=cmd_mail)

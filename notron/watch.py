@@ -149,6 +149,10 @@ class Watcher:
     _mail_reading: object = None                    # the thread reading Mail, while it runs
     _mail_read: list = field(default_factory=list)  # what it read (or why it could not)
     _mail_problem: str = ""
+    _last_letters: float = 0
+    _letters_reading: object = None                 # the thread reading Notron's own address
+    _letters_read: list = field(default_factory=list)
+    _letters_problem: str = ""
     # Set on a resume until one full tick has passed: a stamp from before the
     # sleep says nothing about whether a line was finished.
     _just_resumed: bool = False
@@ -577,6 +581,49 @@ class Watcher:
         self._mail_reading.start()
         return False
 
+    def check_letters(self, now: float) -> bool:
+        """Every `letterbox.EVERY` seconds: email to Notron's own address → requests
+        in the Notron Reminders list, which `check_inbox` then answers. Mail is read
+        on a side thread; the reminders are made here. True if any were made."""
+        from . import inbox, letterbox
+        if self._letters_reading is not None:
+            if self._letters_reading.is_alive():
+                return False
+            self._letters_reading = None
+            read = self._letters_read.pop() if self._letters_read else RuntimeError("Mail read nothing")
+            try:
+                if isinstance(read, Exception):
+                    raise read
+                out = letterbox.file(read)
+            except (CredentialUnavailable, StorageError, PolicyError):
+                raise
+            except Exception as problem:
+                said = f"{type(problem).__name__}: {problem}"[:200]
+                if said != self._letters_problem:
+                    self._letters_problem = said
+                    self._say(f"  Notron's email address skipped, trying again in 2 min: {said}")
+                return False
+            self._letters_problem = ""
+            if out["filed"] or out["held"]:
+                self._say(f"  email to Notron: {out['filed']} request(s) → Reminders {inbox.LIST}"
+                          + (f", {out['held']} held for you" if out["held"] else ""))
+            return bool(out["filed"] or out["held"])
+        if now - self._last_letters < letterbox.EVERY:
+            return False
+        self._last_letters = now
+        if not letterbox.account():
+            return False            # not set up: `notron mail address` switches this on
+
+        def read():
+            try:
+                self._letters_read.append(letterbox.gather())
+            except Exception as problem:     # handed back to the loop, never lost
+                self._letters_read.append(problem)
+        self._letters_read.clear()
+        self._letters_reading = threading.Thread(target=read, name="notron-letters", daemon=True)
+        self._letters_reading.start()
+        return False
+
     def _mail_trouble(self, problem: Exception) -> None:
         said = f"{type(problem).__name__}: {problem}"[:200]
         if said != self._mail_problem:
@@ -834,6 +881,8 @@ class Watcher:
                 if self.check_tasks():
                     return
             if self.check_mail(now):
+                return
+            if self.check_letters(now):
                 return
             if store.paused or store.row()['stop_requested']:
                 return

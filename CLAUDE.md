@@ -104,10 +104,12 @@ nor tell whether one is pinned; that screen instructs and opens
 .venv/bin/python -m notron review          # what is on hold; `review dismiss <id>` lets it go
 .venv/bin/python -m notron channel set Synqology --allow read,research,run --hand claude  # let Nemotron hand approved work to your coding agent
 .venv/bin/python -m notron tasks           # hand-off tasks; `tasks show|approve|cancel <id>`, `--json` for the task board
+.venv/bin/python -m notron channel set Vyvid --test ".venv/bin/python -m pytest tests -q"  # Notron runs these after each hand-off, fenced, network off
 .venv/bin/python -m notron tasks fence     # show macOS refusing the agent your secrets (no model involved)
 .venv/bin/python -m notron tasks setup     # the Notron Tasks note + check the "Notron" Reminders list (the task inbox)
 .venv/bin/python -m notron mail setup [--accounts a,b]  # the Notron Mail note + check the "Email" Reminders list
 .venv/bin/python -m notron mail people [addr|@domain] [--remove]  # key people: always read, listed first
+.venv/bin/python -m notron mail address --account "Notron" --allow a@x.com,b@y.com  # Notron's own email address: proven mail from these becomes requests in Reminders "Notron"
 .venv/bin/python -m notron mail [--dry-run] [--hours 24]  # email to-dos → Reminders "Email"; stale ones resurface; also runs in `morning`, and every 30 min inside `listen` (Mail read on a side thread, model + writes on the loop)
 ```
 
@@ -170,9 +172,10 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `reflect.py` | The self-improvement loop — lessons from answers that missed |
 | `channels.py` | Project channels: `Notron <Project>` notes, every new line a request (Siri can append one). Grants live in the registry, never the note |
 | `tools.py` | Fixed-argv, read-only git/gh tools a channel may use; the model names tools, never commands |
-| `handoff.py` | Nemotron-briefed tasks: digest-bound approval, a git worktree + `sandbox-exec` fence for Claude Code/Codex, branch-only results, Nemotron review. Never pushes |
+| `handoff.py` | Nemotron-briefed tasks: digest-bound approval, a git worktree + `sandbox-exec` fence for Claude Code/Codex, branch-only results, the channel's own tests run by Notron afterwards (fenced, network off), Nemotron review. Failing tests are never "Done". Never pushes |
 | `inbox.py` | The task inbox: a Reminders list "Notron". Nemotron routes each reminder to a channel (or `Notron Tasks`); the answer lands in that note; `Approve:` / `✅ Done:` reminders buzz the phone, and ticking Approve is the id-bound go. Channels without a repo are workspaces: the agent writes Markdown/CSV into `~/Documents/Notron` |
 | `mail.py` | Apple Mail via AppleScript, read only: bulk inbox headers, bodies by index+id, sent subjects. No script sends, replies, saves, moves or deletes (a test reads them all) |
+| `letterbox.py` | Notron's own email address (a Mail account of its own): mail from approved senders, proven by the top `Authentication-Results` (DMARC, or DKIM/SPF for the sender's domain), becomes a request in Reminders "Notron"; unproven or patient-shaped mail becomes a `Held email:` reminder and reaches no model. Every 2 min in `listen` |
 | `mailroom.py` | Email to-dos: Super shortlists from sender+subject (key people always read), Super writes what each email asks; code puts each in Reminders "Email" (Guard-checked, claimed first), ticks it when the user has replied, resurfaces it after 3 days, and appends the list to `Notron Mail` |
 
 ## Invariants — do not break these
