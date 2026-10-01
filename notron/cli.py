@@ -253,7 +253,8 @@ def _mail_address(args):
         if account not in found:
             raise SystemExit(f"Mail has no account called {account}. It has: {', '.join(found)}")
         try:
-            letterbox.setup(account, allow, servers=args.server.split(',') if args.server else None)
+            letterbox.setup(account, allow, servers=args.server.split(',') if args.server else None,
+                            to=args.to)
         except letterbox.LetterboxError as problem:
             raise SystemExit(str(problem))
     data = letterbox.settings()
@@ -261,8 +262,9 @@ def _mail_address(args):
         print("\n  No address yet. Add one to Mail as its own account, then:"
               "\n    notron mail address --account \"Notron\" --allow you@example.com,manager@example.com\n")
         return
-    print(f"\n  Notron's address: the Mail account “{data['account']}” — checked every "
-          f"{letterbox.EVERY // 60} min while `notron listen` runs.")
+    where = (f"{data['to']} (in your Mail account “{data['account']}”)" if data.get("to")
+             else f"the Mail account “{data['account']}”")
+    print(f"\n  Notron's address: {where} — checked every {letterbox.EVERY // 60} min while `notron listen` runs.")
     print("  Who may send requests (and only when their mail server proves it was them):")
     print("".join(f"\n    ✉️  {s}" for s in data.get("senders", [])))
     print("\n  Their email becomes a request in Reminders → Notron. Nothing runs until you tick Approve.\n")
@@ -937,6 +939,8 @@ def main(argv=None):
     ml.add_argument('--accounts', help='setup: only these Mail accounts, comma-separated')
     ml.add_argument('--account', help="address: the Mail account that is Notron's own address")
     ml.add_argument('--allow', help='address: who may email Notron requests, comma-separated addresses')
+    ml.add_argument('--to', help='address: only mail sent to this address is for Notron, '
+                                 'e.g. a plus address like you+notron@example.com in your own account')
     ml.add_argument('--server', help="address: your mail server's name in Authentication-Results "
                                      "(default mx.google.com, for Gmail / Google Workspace)")
     ml.add_argument('--hours', type=int, default=24, help='how far back to look (default 24)')

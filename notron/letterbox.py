@@ -8,7 +8,10 @@ dictated to Siri goes (`inbox.py`): Nemotron routes it, answers it in Notes or
 writes a brief, and nothing runs until the user ticks Approve.
 
 Chosen over a WhatsApp number (2026-10-01): no relay server, no Meta account,
-and anyone can set one up with the Mail app they already have.
+and anyone can set one up with the Mail app they already have. It need not be
+an account of its own: a plus address (`info+notron@m1labs.io`) lands in the
+user's existing inbox, and `to` makes Notron take only mail addressed there —
+everything else in that inbox stays the user's email, for `mailroom` as before.
 
 Anyone can email an address and anyone can type a name into From, so in plain
 code, before any model sees a word:
@@ -102,7 +105,7 @@ def _editing():
 
 
 def setup(account: str, senders: list[str], *, now: float | None = None,
-          servers: list[str] | None = None) -> dict:
+          servers: list[str] | None = None, to: str | None = None) -> dict:
     """Point Notron at one Mail account and name who may write to it.
 
     Only mail arriving from now on counts: setting up an address must not turn
@@ -117,6 +120,11 @@ def setup(account: str, senders: list[str], *, now: float | None = None,
         if data.get("account") != account:
             data["since"] = time.time() if now is None else now
         data.update(account=account, senders=senders)
+        if to is not None:
+            to = to.strip().lower()
+            if to and not re.fullmatch(r"[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+", to):
+                raise LetterboxError(f"Not an email address: {to}")
+            data["to"] = to
         if servers is not None:
             data["servers"] = sorted({s.strip().lower() for s in servers if s.strip()}) or list(SERVERS)
         return dict(data)
@@ -176,6 +184,22 @@ def proven(raw_headers: str, sender: str, servers=SERVERS) -> bool:
     return False
 
 
+def addressed_to(raw_headers: str, address: str) -> bool:
+    """Was this mail sent to `address`? Delivered-To is the mail server's own record
+    of where it delivered; To and Cc are what the sender wrote."""
+    for line in _unfold(raw_headers):
+        name, _, value = line.partition(":")
+        if name.strip().lower() in ("delivered-to", "to", "cc", "x-original-to") and \
+                re.search(rf"(?<![\w.+-]){re.escape(address)}(?![\w.-])", value, re.I):
+            return True
+    return False
+
+
+def requests() -> dict:
+    """Mail Notron took as a request or held: not email for the user's own to-dos."""
+    return dict(_read().get("requests", {}))
+
+
 def holds_patient_details(text: str) -> bool:
     return bool(PATIENT.search(text))
 
@@ -211,6 +235,10 @@ def gather(*, now: float | None = None) -> list[Letter]:
         raw, body = mail.message(h)
         if not raw and not body:
             continue                    # moved or gone: looked at again next time, never guessed
+        if data.get("to") and not addressed_to(raw, data["to"]):
+            # Sent to the user, not to Notron: theirs, and `mailroom`'s.
+            letters.append(Letter(h, addr, _name(h.sender), "", "ignored"))
+            continue
         verdict = ("" if proven(raw, addr, data.get("servers") or SERVERS) else "unproven")
         # Screened as it would be sent: the subject and the new part of the body.
         if not verdict and holds_patient_details(f"{h.subject}\n{_trim(body)[:MAX_BODY]}"):
@@ -266,6 +294,10 @@ def file(letters: list[Letter], *, caller=None) -> dict:
             out["filed"] += 1
         with _editing() as data:
             data.setdefault("seen", {})[h.key] = time.time()
+            if letter.verdict != "ignored":
+                data.setdefault("requests", {})[h.key] = time.time()
+                data["requests"] = {k: v for k, v in data["requests"].items()
+                                    if v >= time.time() - FORGET_AFTER}
             cutoff = time.time() - FORGET_AFTER
             data["seen"] = {k: v for k, v in data["seen"].items() if v >= cutoff}
     return out
