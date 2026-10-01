@@ -406,7 +406,13 @@ def tests_profile(run_dir: Path, repo_top: str) -> str:
     readable = [run_dir, *(home / t for t in TOOLCHAINS), *(Path(repo_top) / r for r in REPO_READS)]
     may_read = " ".join(f"(subpath {_quote(p)})" for p in readable)
     may_write = " ".join(f"(subpath {_quote(p)})" for p in (run_dir, tmp, "/private/var/folders"))
-    return "".join(["(version 1)", "(allow default)", "(deny network*)",
+    # A `.env` anywhere outside the run is not just unreadable but invisible.
+    # Measured 2026-10-01: Vyvid's tests walk up from the copy looking for one,
+    # found ~/.env (it exists; only its contents were refused) and every test
+    # module crashed on the PermissionError. Hidden, it reads as "no .env".
+    hidden = (f'(deny file-read* (require-all (regex #"/\\.env[^/]*$")'
+              f" (require-not (subpath {_quote(run_dir)}))))")
+    return "".join(["(version 1)", "(allow default)", "(deny network*)", hidden,
                     f"(deny file-read-data (require-all (subpath {_quote(home)}) (require-not (require-any {may_read}))))",
                     f"(deny file-read-data (require-all (subpath {_quote(repo_top)}) (require-not (require-any {may_read}))))",
                     f'(deny file-write* (require-not (require-any {may_write} (subpath "/dev"))))'])

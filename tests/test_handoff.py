@@ -700,3 +700,10 @@ def test_work_the_agent_committed_itself_is_still_tested(repo, monkeypatch):
         return "" if args[0] == "status" else original(args, cwd, check=check)
     monkeypatch.setattr(handoff, "_git", clean_status)
     assert handoff.poll() == [] and handoff.get(task.id).phase == "tests"
+
+
+def test_a_dotenv_outside_the_run_is_invisible_to_the_tests(tmp_path):
+    """Measured 2026-10-01: Vyvid's tests walked up to ~/.env, which the cage
+    refused to open, and all eleven test modules crashed. Hidden, it is absent."""
+    profile = handoff.tests_profile(tmp_path / "run", "/tmp/synq")
+    assert '(deny file-read* (require-all (regex #"/\\.env[^/]*$")' in profile
