@@ -88,9 +88,14 @@ def test_a_spoofed_sender_is_held_not_answered(monkeypatch, box):
 
 @pytest.mark.parametrize("raw, ok", [
     (PASS, True),
-    ("Authentication-Results: mx; dkim=pass header.d=pharmacy.co.uk; dmarc=none\n", True),
-    ("Authentication-Results: mx; spf=pass smtp.mailfrom=vivek@pharmacy.co.uk\n", True),
-    ("Authentication-Results: mx; dkim=pass header.d=gmail.com; spf=pass smtp.mailfrom=x@gmail.com\n", False),
+    ("Authentication-Results: mx.google.com; dkim=pass header.d=pharmacy.co.uk; dmarc=none\n", True),
+    # SPF alone: shared senders can pass it for each other's domains.
+    ("Authentication-Results: mx.google.com; spf=pass smtp.mailfrom=vivek@pharmacy.co.uk\n", False),
+    # DMARC passed — for some other domain than the sender's.
+    ("Authentication-Results: mx.google.com; dmarc=pass header.from=evil.example\n", False),
+    # The topmost verdict is not the user's server's: the sender may have written it.
+    ("Authentication-Results: evil.example; dmarc=pass header.from=pharmacy.co.uk\n", False),
+    ("Authentication-Results: mx.google.com; dkim=pass header.d=gmail.com; spf=pass smtp.mailfrom=x@gmail.com\n", False),
     ("Received: by mx\n", False),
     ("", False),
 ])
@@ -178,3 +183,31 @@ def test_without_an_address_the_listener_reads_no_mail(monkeypatch):
     monkeypatch.setattr(mail, "headers", lambda *a, **k: pytest.fail("read Mail with no address set up"))
     w = watch.Watcher(brain=None, settle=0)
     assert w.check_letters(1_000_000.0) is False and w._letters_reading is None
+
+
+def test_another_server_can_be_named_at_setup():
+    raw = "Authentication-Results: mx.icloud.com; dmarc=pass header.from=pharmacy.co.uk\n"
+    assert not letterbox.proven(raw, "vivek@pharmacy.co.uk")
+    assert letterbox.proven(raw, "vivek@pharmacy.co.uk", ["mx.icloud.com"])
+
+
+def test_a_forger_gets_one_held_alert_a_day_not_a_flood(monkeypatch, box):
+    forged = "Authentication-Results: mx.google.com; dmarc=fail header.from=pharmacy.co.uk\n"
+    FakeMail(monkeypatch, hdr(1), hdr(2), hdr(3), raw=forged)
+    rem = FakeReminders(monkeypatch)
+    out = letterbox.file(letterbox.gather(now=10_000.0))
+    assert out["held"] == 1 and len(rem.made) == 1
+
+
+def test_an_email_whose_claim_is_in_flight_is_not_marked_seen(monkeypatch, box):
+    """Review 2026-10-01: a crash between claim and create, then a quick restart,
+    marked the email seen with no reminder ever made."""
+    FakeMail(monkeypatch, hdr(1))
+    rem = FakeReminders(monkeypatch)
+    import time as _t
+    with inbox._editing() as data:
+        data.setdefault("claimed", {})["letter:<m1@pharmacy.co.uk>"] = _t.time()
+    assert letterbox.file(letterbox.gather(now=10_000.0))["filed"] == 0
+    with inbox._editing() as data:
+        data["claimed"].pop("letter:<m1@pharmacy.co.uk>")
+    assert letterbox.file(letterbox.gather(now=10_120.0))["filed"] == 1 and len(rem.made) == 1

@@ -253,7 +253,7 @@ def _mail_address(args):
         if account not in found:
             raise SystemExit(f"Mail has no account called {account}. It has: {', '.join(found)}")
         try:
-            letterbox.setup(account, allow)
+            letterbox.setup(account, allow, servers=args.server.split(',') if args.server else None)
         except letterbox.LetterboxError as problem:
             raise SystemExit(str(problem))
     data = letterbox.settings()
@@ -937,6 +937,8 @@ def main(argv=None):
     ml.add_argument('--accounts', help='setup: only these Mail accounts, comma-separated')
     ml.add_argument('--account', help="address: the Mail account that is Notron's own address")
     ml.add_argument('--allow', help='address: who may email Notron requests, comma-separated addresses')
+    ml.add_argument('--server', help="address: your mail server's name in Authentication-Results "
+                                     "(default mx.google.com, for Gmail / Google Workspace)")
     ml.add_argument('--hours', type=int, default=24, help='how far back to look (default 24)')
     ml.add_argument('--dry-run', action="store_true", help='decide and show, but save no drafts and write nothing')
     ml.set_defaults(fn=cmd_mail)

@@ -16,9 +16,11 @@ code, before any model sees a word:
 1. Only mail that arrived after setup, in that one account, is looked at.
 2. The sender's address must be on the user's list. Everyone else is ignored.
 3. The receiving server's verdict must prove the sender: the topmost
-   `Authentication-Results` header (the one the user's own mail server added;
-   anything below it the sender could have written) must show DMARC pass, or
-   DKIM / SPF pass for the sender's own domain. Unproven mail is held.
+   `Authentication-Results` header must be the user's own mail server's (its
+   name is checked — anything else the sender could have written) and show
+   DMARC pass for the sender's domain, or DKIM pass signed by that domain. SPF
+   alone is not enough: shared senders can pass it for each other's domains.
+   Unproven mail is held; at most one held alert per sender a day.
 4. Anything shaped like patient details (an NHS number, a date of birth, the
    word "patient") is held, never sent to a model: the user's staff are asked to
    strip those, and this is the check that does not rely on them remembering.
@@ -45,6 +47,9 @@ SCAN = 20
 MAX_BODY = 500
 #: How long a looked-at message is remembered.
 FORGET_AFTER = 30 * 86400
+#: Whose `Authentication-Results` count, unless the user names their own server
+#: at setup (`--server`). Google adds its own on top of every message it receives.
+SERVERS = ("mx.google.com",)
 
 #: Patient-shaped text. Narrow and conservative: a held admin email costs the
 #: user one tap; patient details at a cloud model cannot be taken back.
@@ -96,7 +101,8 @@ def _editing():
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def setup(account: str, senders: list[str], *, now: float | None = None) -> dict:
+def setup(account: str, senders: list[str], *, now: float | None = None,
+          servers: list[str] | None = None) -> dict:
     """Point Notron at one Mail account and name who may write to it.
 
     Only mail arriving from now on counts: setting up an address must not turn
@@ -111,6 +117,8 @@ def setup(account: str, senders: list[str], *, now: float | None = None) -> dict
         if data.get("account") != account:
             data["since"] = time.time() if now is None else now
         data.update(account=account, senders=senders)
+        if servers is not None:
+            data["servers"] = sorted({s.strip().lower() for s in servers if s.strip()}) or list(SERVERS)
         return dict(data)
 
 
@@ -145,23 +153,24 @@ def _unfold(raw: str) -> list[str]:
     return lines
 
 
-def proven(raw_headers: str, sender: str) -> bool:
+def proven(raw_headers: str, sender: str, servers=SERVERS) -> bool:
     """Did the user's own mail server prove `sender` sent this?
 
-    Only the topmost Authentication-Results counts: servers add theirs on top,
-    so every one below it travelled with the message and may be forged."""
+    Only the topmost Authentication-Results counts, and only when it names the
+    user's server: servers add theirs on top, so every other one travelled with
+    the message and may be forged."""
     domain = sender.rpartition("@")[2].lower()
     top = next((ln.split(":", 1)[1] for ln in _unfold(raw_headers)
                 if ln.lower().startswith("authentication-results:")), "")
     if not top or not domain:
         return False
     top = top.lower()
-    if re.search(r"\bdmarc=pass\b", top):
-        return True
-    for d in re.findall(r"\bdkim=pass\b[^;]*?header\.(?:d|i)=@?([\w.-]+)", top):
-        if d.rpartition("@")[2] == domain:
+    if top.split(";", 1)[0].strip().split()[:1] not in ([s] for s in servers):
+        return False
+    for d in re.findall(r"\bdmarc=pass\b[^;]*?header\.from=([\w.-]+)", top):
+        if d == domain:
             return True
-    for d in re.findall(r"\bspf=pass\b[^;]*?smtp\.mailfrom=([\w.@+-]+)", top):
+    for d in re.findall(r"\bdkim=pass\b[^;]*?header\.(?:d|i)=@?([\w.@-]+)", top):
         if d.rpartition("@")[2] == domain:
             return True
     return False
@@ -202,7 +211,7 @@ def gather(*, now: float | None = None) -> list[Letter]:
         raw, body = mail.message(h)
         if not raw and not body:
             continue                    # moved or gone: looked at again next time, never guessed
-        verdict = ("" if proven(raw, addr) else "unproven")
+        verdict = ("" if proven(raw, addr, data.get("servers") or SERVERS) else "unproven")
         # Screened as it would be sent: the subject and the new part of the body.
         if not verdict and holds_patient_details(f"{h.subject}\n{_trim(body)[:MAX_BODY]}"):
             verdict = "patient"
@@ -233,18 +242,27 @@ def file(letters: list[Letter], *, caller=None) -> dict:
     for letter in letters:
         h = letter.header
         key = f"letter:{h.message_id or h.key}"
+        today = time.strftime("%Y-%m-%d")
         if letter.verdict == "ignored":
             out["ignored"] += 1
+        elif letter.verdict and _read().get("held_on", {}).get(letter.sender) == today:
+            pass        # one held alert per sender a day: a forger cannot flood the phone
         elif letter.verdict:
-            inbox._buzz(f"held:{key}", f"Held email: {h.subject[:80] or 'from ' + letter.name}",
-                        f"From {letter.name} <{letter.sender}>. "
-                        + HELD[letter.verdict].format(who=letter.sender)
-                        + (f"\nOpen it: {h.link}" if h.link else ""), caller=caller)
+            rid = inbox._buzz(f"held:{key}", f"Held email: {h.subject[:80] or 'from ' + letter.name}",
+                              f"From {letter.name} <{letter.sender}>. "
+                              + HELD[letter.verdict].format(who=letter.sender)
+                              + (f"\nOpen it: {h.link}" if h.link else ""), caller=caller)
+            if not rid:
+                continue            # another pass is making it: looked at again, never lost
+            with _editing() as data:
+                data.setdefault("held_on", {})[letter.sender] = today
             out["held"] += 1
         else:
-            inbox._buzz(key, request_text(letter),
-                        f"Emailed to Notron by {letter.name} <{letter.sender}>."
-                        + (f"\nOpen it: {h.link}" if h.link else ""), caller=caller, request=True)
+            rid = inbox._buzz(key, request_text(letter),
+                              f"Emailed to Notron by {letter.name} <{letter.sender}>."
+                              + (f"\nOpen it: {h.link}" if h.link else ""), caller=caller, request=True)
+            if not rid:
+                continue            # a claim cut short by a crash: looked at again, never lost
             out["filed"] += 1
         with _editing() as data:
             data.setdefault("seen", {})[h.key] = time.time()

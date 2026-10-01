@@ -365,13 +365,11 @@ def _quote(path) -> str:
     return '"' + str(Path(path).resolve()).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def sandbox_profile(run_dir: Path, repo_top: str = "", *, network: bool = True) -> str:
+def sandbox_profile(run_dir: Path, repo_top: str = "") -> str:
     """Deny the user's secrets, Notron's own state and writes to their real checkout.
 
     Everything else stays allowed: the agent's own login, caches and network
     to its provider. Only reading and writing the listed places is refused.
-    The project's tests get the same profile with `network=False`: a test suite
-    edited by the agent is the agent's code, and it has no provider to reach.
     """
     home = Path(os.environ.get("HOME", str(Path.home())))
     secret = " ".join(f"(subpath {_quote(home / p)})" for p in SECRET_PATHS)
@@ -385,9 +383,33 @@ def sandbox_profile(run_dir: Path, repo_top: str = "", *, network: bool = True) 
         # where the throwaway copy's index lives, so that stays writable.
         rules.append(f"(deny file-write* (require-all (subpath {_quote(repo_top)})"
                      f" (require-not (subpath {_quote(Path(repo_top) / '.git')}))))")
-    if not network:
-        rules.append("(deny network*)")
     return "".join(rules)
+
+
+#: Under the home folder, the only places a test run may read besides its own
+#: copy: where language toolchains live (a venv's python can point into these).
+TOOLCHAINS = (".local", ".pyenv", ".cache", ".cargo", ".rustup", ".nvm", ".bun", ".npm", ".deno")
+#: In the user's checkout, the only places a test run may read: installed
+#: dependencies and git's metadata. Never their `.env` or uncommitted work.
+REPO_READS = (".venv", "venv", "node_modules", ".git")
+
+
+def tests_profile(run_dir: Path, repo_top: str) -> str:
+    """The cage for the project's tests — code the agent may have written, so
+    tighter than the agent's own (review, 2026-10-01): no network at all; no
+    reads under the home folder but the run, the checkout's dependencies and
+    the toolchains; no writes anywhere but the run and the temporary folder.
+    Then nothing it could read can leave: no network, and the copy is reset
+    after the run so nothing it wrote can ride into the branch."""
+    home = Path(os.environ.get("HOME", str(Path.home())))
+    tmp = os.environ.get("TMPDIR") or "/private/var/folders"
+    readable = [run_dir, *(home / t for t in TOOLCHAINS), *(Path(repo_top) / r for r in REPO_READS)]
+    may_read = " ".join(f"(subpath {_quote(p)})" for p in readable)
+    may_write = " ".join(f"(subpath {_quote(p)})" for p in (run_dir, tmp, "/private/var/folders"))
+    return "".join(["(version 1)", "(allow default)", "(deny network*)",
+                    f"(deny file-read-data (require-all (subpath {_quote(home)}) (require-not (require-any {may_read}))))",
+                    f"(deny file-read-data (require-all (subpath {_quote(repo_top)}) (require-not (require-any {may_read}))))",
+                    f'(deny file-write* (require-not (require-any {may_write} (subpath "/dev"))))'])
 
 
 def argv(hand: str, run_dir: Path, cwd: Path, repo_top: str = "", *, rules: str = RULES) -> list[str]:
@@ -414,13 +436,16 @@ def argv(hand: str, run_dir: Path, cwd: Path, repo_top: str = "", *, rules: str 
     raise TaskError(f"Unknown coding agent {hand}.")
 
 
-def _spawn(cmd: list[str], *, cwd: Path, stdin: Path, stdout: Path, stderr: Path) -> int:
+def _spawn(cmd: list[str], *, cwd: Path, stdin: Path, stdout: Path, stderr: Path, home: Path | None = None) -> int:
     """Start the agent in its own process group; return its pid. Tests replace it."""
-    exe = shutil.which(cmd[0], path=_env().get("PATH"))
+    env = _env()
+    if home is not None:
+        env["HOME"] = str(home)          # the test run gets an empty home of its own
+    exe = shutil.which(cmd[0], path=env.get("PATH"))
     if exe is None:
         raise TaskError(f"{cmd[0]} is not installed.")
     with open(stdin, "rb") as i, open(stdout, "wb") as o, open(stderr, "wb") as e:
-        proc = subprocess.Popen([exe, *cmd[1:]], cwd=cwd, env=_env(), stdin=i, stdout=o, stderr=e,
+        proc = subprocess.Popen([exe, *cmd[1:]], cwd=cwd, env=env, stdin=i, stdout=o, stderr=e,
                                 start_new_session=True)
     _procs[proc.pid] = proc
     return proc.pid
@@ -646,55 +671,60 @@ def _fenced() -> bool:
 def _start_tests(task: Task, now: float) -> bool:
     """Run the channel's tests in the agent's copy, fenced, network off. True if started.
 
-    Only when the agent changed something: no change, nothing to test. The
-    command is the user's, from the registry; the agent cannot name it.
+    Only when the agent changed something (in the working tree, or committed —
+    Codex has a shell). The agent's work is committed first, so the branch is
+    exactly what the agent did, never what the tests wrote. The command is the
+    user's, from the registry; the agent cannot name it.
     """
     ch = _channel_for(task)
     if ch is None or not ch.test:
         return False
     run_dir = Path(task.run_dir)
     wt = run_dir / "repo"
+    command = " ".join(ch.test)
     try:
-        if not wt.exists() or not _git(["status", "--porcelain"], wt):
+        if not wt.exists():
+            return False
+        if _git(["status", "--porcelain"], wt):
+            _commit(task, wt)
+        if _git(["rev-parse", "HEAD"], wt) == task.base:
             return False
         top = _toplevel(task)
         rel = os.path.relpath(Path(ch.repo).resolve(), Path(top).resolve()) if top else "."
         cwd = wt / rel if rel != "." else wt
-        if not _fenced():
+        if not _fenced() or not top:
             # Tests the agent may have edited never run unfenced.
-            _update(task.id, tests={"command": " ".join(ch.test), "status": "not run",
+            _update(task.id, tests={"command": command, "status": "not run",
                                     "output": "no kernel fence on this Mac"})
             return False
-        exit_file = run_dir / "tests.exit"
-        # `sh` only joins output and records the exit code; the command itself is
-        # argv, never parsed by a shell.
-        cmd = [SANDBOX_EXEC, "-p", sandbox_profile(run_dir, top, network=False),
-               "/bin/sh", "-c", '"$@" 2>&1; echo $? > "$0"', str(exit_file), *ch.test]
+        home = run_dir / "home"
+        home.mkdir(mode=0o700, exist_ok=True)
         empty = run_dir / "tests.in"
         empty.write_bytes(b"")
-        pid = _spawn(cmd, cwd=cwd, stdin=empty, stdout=run_dir / "tests.txt", stderr=run_dir / "tests.err")
+        pid = _spawn([SANDBOX_EXEC, "-p", tests_profile(run_dir, top), *ch.test], cwd=cwd, stdin=empty,
+                     stdout=run_dir / "tests.txt", stderr=run_dir / "tests.err", home=home)
     except (TaskError, OSError, subprocess.SubprocessError) as exc:
-        _update(task.id, tests={"command": " ".join(ch.test), "status": "not run", "output": str(exc)[:300]})
+        _update(task.id, tests={"command": command, "status": "not run", "output": str(exc)[:300]})
         return False
     _update(task.id, phase="tests", pid=pid, pid_started=_started_at(pid),
-            tests={"command": " ".join(ch.test), "started": now})
+            tests={"command": command, "started": now})
     return True
 
 
+def _commit(task: Task, wt: Path) -> None:
+    _git(["add", "-A"], wt)
+    _git(["-c", "user.name=Notron", "-c", "user.email=notron@localhost", "commit", "-q",
+          "--no-verify", "-m", f"notron: {task.goal[:60] or 'task ' + task.id[:8]}"], wt)
+
+
 def _tests_done(task: Task, now: float) -> Task:
-    """Read what the tests said. The exit code decides passed/failed, not the output."""
+    """Read what the tests said. Only this process's own record of the exit code
+    counts — never a file or output the code under test could write. After a
+    listener restart there is no such record, so the result is "not run"."""
     run_dir = Path(task.run_dir)
     tests = dict(task.tests)
-    try:
-        raw = (run_dir / "tests.exit").read_text().strip()
-        code = int(raw) if raw.lstrip("-").isdigit() else None
-    except OSError:
-        code = None
     proc = _procs.pop(task.pid, None) if task.pid else None
-    if proc is not None and proc.poll() is not None and code is not None:
-        # This process's own record beats a file the code under test could also
-        # write. (`sandbox-exec` passes the shell's status through.)
-        code = proc.returncode
+    code = proc.returncode if proc is not None and proc.poll() is not None else None
     out = ""
     for name in ("tests.txt", "tests.err"):
         if (run_dir / name).exists():
@@ -703,9 +733,16 @@ def _tests_done(task: Task, now: float) -> Task:
     if len(out) > MAX_TEST_OUTPUT:
         out = "[…]\n" + out[-MAX_TEST_OUTPUT:]
     if tests.get("status") != "timed out":
-        tests["status"] = "passed" if code == 0 else ("failed" if code is not None else "not run")
+        tests["status"] = "passed" if code == 0 else "failed" if code is not None else "not run"
+        if code is None:
+            out = "Notron restarted while the tests ran, so their result is unknown. " + out[-500:]
     tests.update(exit=code, output=out, took=round(now - tests.get("started", now), 1))
     tests.pop("started", None)
+    # Whatever the tests wrote is thrown away: the branch holds the agent's work only.
+    wt = run_dir / "repo"
+    if wt.exists():
+        _git(["reset", "-q", "--hard", "HEAD"], wt, check=False)
+        _git(["clean", "-qfdx"], wt, check=False)
     return _update(task.id, phase="", pid=None, tests=tests)
 
 
