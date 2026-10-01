@@ -281,7 +281,7 @@ def test_a_briefed_reminder_task_asks_for_approval_and_says_when_it_is_done(monk
     w = watch.Watcher(brain=None)
     w.tend_reminders()
     assert app.made[0]["title"].startswith("Approve:")
-    handoff._update(task.id, status="finished", started=1.0, finished=2.0)
+    handoff._update(task.id, status="finished", started=1.0, finished=2.0, review={"verdict": "done"})
     monkeypatch.setattr(handoff, "poll", lambda: [])
 
     def run(request, **kw):
@@ -367,7 +367,19 @@ def test_a_lost_done_reminder_is_retried(monkeypatch):
     handoff._update(task.id, status="reported", started=1.0, approve_reminder="gone")
     app.done.add("gone")
     watch.Watcher(brain=None).tend_reminders()
-    assert app.made[-1]["title"].startswith("✅ Done:")
+    assert app.made[-1]["title"].startswith("⚠️ Check:")        # never reviewed: not "Done"
+
+
+def test_the_phone_never_says_done_over_failing_tests(monkeypatch):
+    """Review 2026-10-01: the note said Partly done while the phone said Done."""
+    app = FakeReminders(monkeypatch)
+    ch = _channel("Tasks", "tasks-note")
+    task = handoff.propose(task_id="t" * 32, channel=ch, request="x", brief=BRIEF, prompt="p",
+                           source_reminder="r1")
+    handoff._update(task.id, status="reported", started=1.0, review={"verdict": "done"},
+                    tests={"status": "failed", "exit": 1})
+    inbox.say_done(handoff.get(task.id))
+    assert app.made[-1]["title"] == f"⚠️ Check: {BRIEF['goal']}"
 
 
 def test_a_tasks_note_without_its_grant_is_not_a_place_to_write():

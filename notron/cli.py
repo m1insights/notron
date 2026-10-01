@@ -122,6 +122,8 @@ def cmd_channel(args):
             where = ", ".join(x for x in (c.repo, c.github and f"github {c.github}") if x) or "no project linked"
             hand = f" · hands work to {c.hand}" if "run" in c.allow else ""
             print(f"  {c.title:28} {where}  [{', '.join(c.allow)}]{hand}")
+            if c.test:
+                print(f"  {'':28} tests: {' '.join(c.test)}")
             print(f"  {'':28} tools: {', '.join(t.name for t in tools.available(c)) or 'none'}")
         print()
         return
@@ -134,12 +136,30 @@ def cmd_channel(args):
     if args.action == 'set':
         allow = tuple(a.strip() for a in args.allow.split(',') if a.strip()) if args.allow else None
         try:
-            ch = channels.update(" ".join(args.name), github=args.github, allow=allow, hand=args.hand)
+            name = " ".join(args.name)
+            test = None
+            if args.test is not None:
+                old = next((c for c in channels.load() if c.name.lower() == name.strip().lower()), None)
+                test = _test_argv(args.test, old.repo if old else "")
+            ch = channels.update(name, github=args.github, allow=allow, hand=args.hand, test=test)
         except channels.ChannelError as problem:
             _setup_failure(problem)
-        print(f"\n  {ch.title}: [{', '.join(ch.allow)}]" + (f" · hands work to {ch.hand}" if ch.hand else "") + "\n")
+        print(f"\n  {ch.title}: [{', '.join(ch.allow)}]" + (f" · hands work to {ch.hand}" if ch.hand else "")
+              + (f"\n  tests after each hand-off: {' '.join(ch.test)}" if ch.test else "") + "\n")
         return
     _add_channel(args)
+
+
+def _test_argv(command: str, repo: str) -> tuple[str, ...]:
+    """`--test ".venv/bin/python -m pytest -q"` as argv. A relative program path is
+    the user's checkout's: the throwaway copy the tests run in has no `.venv`."""
+    import shlex
+    argv = shlex.split(command)
+    if not argv:
+        return ()
+    if "/" in argv[0] and not argv[0].startswith("/") and repo:
+        argv[0] = str(pathlib.Path(repo) / argv[0])
+    return tuple(argv)
 
 
 @maintenance
@@ -147,8 +167,10 @@ def _add_channel(args):
     from . import channels
     allow = tuple(a.strip() for a in (args.allow or 'read,research').split(',') if a.strip())
     try:
-        ch, state = channels.add(" ".join(args.name), repo=args.repo or "", github=args.github or "",
-                                 allow=allow, hand=args.hand or "")
+        repo = str(pathlib.Path(args.repo).expanduser().resolve()) if args.repo else ""
+        ch, state = channels.add(" ".join(args.name), repo=repo, github=args.github or "",
+                                 allow=allow, hand=args.hand or "",
+                                 test=_test_argv(args.test, repo) if args.test else ())
     except channels.ChannelError as problem:
         _setup_failure(problem)
     print(f"\n  {state:8} {ch.title}  (in {workspace.FOLDER})")
@@ -214,6 +236,38 @@ def cmd_tasks(args):
     print()
 
 
+def _mail_address(args):
+    """Notron's own email address: a Mail account whose mail from approved senders
+    becomes requests in the Notron Reminders list."""
+    from . import letterbox, mail
+    if args.account or args.allow:
+        current = letterbox.settings()
+        account = args.account or current.get("account")
+        allow = ([a for a in args.allow.split(',')] if args.allow else current.get("senders", []))
+        if not account:
+            raise SystemExit("Which Mail account is Notron's? --account \"Notron\"")
+        try:
+            found = mail.accounts()
+        except mail.MailError as problem:
+            raise SystemExit(f"I can't read Mail from here: {problem}")
+        if account not in found:
+            raise SystemExit(f"Mail has no account called {account}. It has: {', '.join(found)}")
+        try:
+            letterbox.setup(account, allow, servers=args.server.split(',') if args.server else None)
+        except letterbox.LetterboxError as problem:
+            raise SystemExit(str(problem))
+    data = letterbox.settings()
+    if not data.get("account"):
+        print("\n  No address yet. Add one to Mail as its own account, then:"
+              "\n    notron mail address --account \"Notron\" --allow you@example.com,manager@example.com\n")
+        return
+    print(f"\n  Notron's address: the Mail account “{data['account']}” — checked every "
+          f"{letterbox.EVERY // 60} min while `notron listen` runs.")
+    print("  Who may send requests (and only when their mail server proves it was them):")
+    print("".join(f"\n    ✉️  {s}" for s in data.get("senders", [])))
+    print("\n  Their email becomes a request in Reminders → Notron. Nothing runs until you tick Approve.\n")
+
+
 def cmd_mail(args):
     """Email to-dos: what each email asks of you, kept in Reminders until it is done."""
     from . import channels, credentials, eventkit, mail, mailroom
@@ -228,6 +282,9 @@ def cmd_mail(args):
         age = int((_time.time() - last["at"]) / 60)
         state = "list written to Notron Mail" if last["written"] else f"list NOT written: {last['reason']}"
         print(f"\n  Last pass {age} min ago, {last['hours']}h window: {last['todos']} to-dos, {state}.\n")
+        return
+    if args.action == 'address':
+        _mail_address(args)
         return
     if args.action == 'people':
         try:
@@ -858,6 +915,9 @@ def main(argv=None):
                          'run (hand an approved brief to a coding agent). Default read,research')
     ch.add_argument('--hand', choices=['claude', 'codex'], default=None,
                     help='the coding agent `run` hands work to: your own Claude Code or Codex install')
+    ch.add_argument('--test', default=None,
+                    help='the project\'s test command; Notron runs it after each hand-off, network off '
+                         '(e.g. ".venv/bin/python -m pytest -q"; "" removes it)')
     ch.set_defaults(fn=cmd_channel)
 
     tk = sub.add_parser('tasks', help='hand-off tasks: briefed by Nemotron, run by your coding agent')
@@ -871,10 +931,14 @@ def main(argv=None):
     tk.set_defaults(fn=cmd_tasks)
 
     ml = sub.add_parser('mail', help='email to-dos: what each email asks of you, in Reminders until done')
-    ml.add_argument('action', nargs='?', choices=['run', 'setup', 'people', 'status'], default='run')
+    ml.add_argument('action', nargs='?', choices=['run', 'setup', 'people', 'status', 'address'], default='run')
     ml.add_argument('who', nargs='?', help='people: an email address, or @domain.com')
     ml.add_argument('--remove', action='store_true', help='people: take this one off the list')
     ml.add_argument('--accounts', help='setup: only these Mail accounts, comma-separated')
+    ml.add_argument('--account', help="address: the Mail account that is Notron's own address")
+    ml.add_argument('--allow', help='address: who may email Notron requests, comma-separated addresses')
+    ml.add_argument('--server', help="address: your mail server's name in Authentication-Results "
+                                     "(default mx.google.com, for Gmail / Google Workspace)")
     ml.add_argument('--hours', type=int, default=24, help='how far back to look (default 24)')
     ml.add_argument('--dry-run', action="store_true", help='decide and show, but save no drafts and write nothing')
     ml.set_defaults(fn=cmd_mail)

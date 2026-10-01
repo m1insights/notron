@@ -205,8 +205,10 @@ def target(*, caller=None) -> str | None:
 # ------------------------------------------------------------------ steps
 
 def _accounts() -> list[str]:
-    wanted = chosen_accounts()
-    return [a for a in mail.accounts() if wanted is None or a in wanted]
+    from . import letterbox
+    wanted, own = chosen_accounts(), letterbox.account()
+    # Notron's own address holds requests for her, not email for the user.
+    return [a for a in mail.accounts() if (wanted is None or a in wanted) and a != own]
 
 
 def recent(*, hours: int = WINDOW_HOURS) -> list[mail.Header]:

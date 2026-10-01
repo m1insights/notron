@@ -293,3 +293,29 @@ def sent(account: str, limit: int = 200) -> list[tuple[str, int, str]]:
         if len(parts) == 3 and parts[1].strip().lstrip("-").isdigit():
             out.append((parts[0].strip(), int(parts[1]), parts[2].strip().lower()))
     return out
+
+
+MESSAGE = FIND + """
+on run argv
+    set acct to item 1 of argv
+    set slide to (item 2 of argv) as integer
+    set wanted to (item 4 of argv) as integer
+    set US to character id 31
+    with timeout of 600 seconds
+    tell application "Mail"
+        set mb to mailbox "INBOX" of account acct
+        set i to my findIt(mb, (item 3 of argv) as integer, wanted, slide)
+        if i = 0 then return ""
+        return (all headers of message i of mb) & US & (content of message i of mb)
+    end tell
+    end timeout
+end run
+"""
+
+
+def message(h: Header) -> tuple[str, str]:
+    """(raw headers, plain-text body) of one message, or ("", "") if it has moved
+    or gone. The raw headers are what proves who really sent it."""
+    raw = _osascript(MESSAGE, h.account, str(SLIDE), str(h.index), str(h.id))
+    headers_, _, body = raw.partition(US)
+    return headers_, body

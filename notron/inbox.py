@@ -41,7 +41,7 @@ BUZZ_AFTER = 60
 #: Titles Notron gives its own reminders. Recorded ids are the real check; the
 #: prefixes cover the one gap — a crash after EventKit saved one and before its
 #: id was written down — so it can never come back in as a request.
-OWN_PREFIXES = ("Approve: ", "✅ Done: ", "Didn't start: ")
+OWN_PREFIXES = ("Approve: ", "✅ Done: ", "Didn't start: ", "Held email: ", "⚠️ Check: ")
 
 ROUTE_SYSTEM = """You are Notron. The user dictated a request to Siri as a reminder. Decide
 which of their notes it belongs in: one of the named projects if it is clearly
@@ -169,10 +169,17 @@ def take(reminder_id: str, *, caller=None) -> None:
 
 #: A claim with no reminder id this old was cut short by a crash.
 CLAIM_STALE = 120
+#: The longest request title: an emailed request carries its body in the title,
+#: because the title is what the graph is asked.
+MAX_REQUEST = 700
 
 
-def _buzz(key: str, title: str, notes: str, *, caller=None) -> str:
+def _buzz(key: str, title: str, notes: str, *, caller=None, request: bool = False) -> str:
     """Make one reminder that alarms a minute from now. Once per key, ever.
+
+    `request=True` makes a request instead: no alarm, and not recorded as
+    Notron's own, so `waiting()` picks it up like one the user dictated. Only
+    `letterbox` does that, for an email from a sender the user approved.
 
     The key is claimed before the reminder is made, and the reminder carries an
     opaque reference to the key. A claim a crash left without an id is resolved
@@ -192,15 +199,18 @@ def _buzz(key: str, title: str, notes: str, *, caller=None) -> str:
         if found:
             with _editing() as data:
                 data["claimed"][key] = found[0]
-                data["ours"][found[0]] = time.time()
+                if not request:
+                    data["ours"][found[0]] = time.time()
             return found[0]
     notes = f"{notes}\n{reference(key)}"
     try:
         list_id = target(caller=caller)
         if list_id is None:
             raise InboxError(f"There is no single Reminders list called {LIST}.")
-        at = (datetime.now() + timedelta(seconds=BUZZ_AFTER)).strftime("%Y-%m-%dT%H:%M")
-        rid = reminders.create(title[:120], notes=notes, when_iso=at, target_id=list_id, caller=caller)
+        at = (None if request else
+              (datetime.now() + timedelta(seconds=BUZZ_AFTER)).strftime("%Y-%m-%dT%H:%M"))
+        rid = reminders.create(title[:MAX_REQUEST if request else 120], notes=notes, when_iso=at,
+                               target_id=list_id, caller=caller)
     except Exception:
         # Known not made: release the claim so the next pass can try again.
         with _editing() as data:
@@ -208,7 +218,8 @@ def _buzz(key: str, title: str, notes: str, *, caller=None) -> str:
         raise
     with _editing() as data:
         data["claimed"][key] = rid
-        data["ours"][rid] = time.time()
+        if not request:
+            data["ours"][rid] = time.time()
     return rid
 
 
@@ -224,8 +235,13 @@ def ask_approval(task, *, caller=None) -> str:
 
 
 def say_done(task, *, caller=None) -> str:
+    """`✅ Done: …` only when the note says Done — never over failed tests or a
+    verdict that asks for a careful look (review 2026-10-01)."""
     from . import handoff
-    rid = _buzz(f"done:{task.id}", f"✅ Done: {task.goal}",
+    task = handoff.get(task.id)
+    clean = (task.review.get("verdict") == "done" and not task.outside and not task.secret_in_diff
+             and (not task.tests or task.tests.get("status") == "passed"))
+    rid = _buzz(f"done:{task.id}", f"{'✅ Done' if clean else '⚠️ Check'}: {task.goal}",
                 f"The result is in your Notron {task.channel} note.", caller=caller)
     if rid:
         handoff.remember(task.id, done_reminder=rid)
