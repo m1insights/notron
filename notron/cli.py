@@ -122,6 +122,8 @@ def cmd_channel(args):
             where = ", ".join(x for x in (c.repo, c.github and f"github {c.github}") if x) or "no project linked"
             hand = f" · hands work to {c.hand}" if "run" in c.allow else ""
             print(f"  {c.title:28} {where}  [{', '.join(c.allow)}]{hand}")
+            if c.test:
+                print(f"  {'':28} tests: {' '.join(c.test)}")
             print(f"  {'':28} tools: {', '.join(t.name for t in tools.available(c)) or 'none'}")
         print()
         return
@@ -134,12 +136,30 @@ def cmd_channel(args):
     if args.action == 'set':
         allow = tuple(a.strip() for a in args.allow.split(',') if a.strip()) if args.allow else None
         try:
-            ch = channels.update(" ".join(args.name), github=args.github, allow=allow, hand=args.hand)
+            name = " ".join(args.name)
+            test = None
+            if args.test is not None:
+                old = next((c for c in channels.load() if c.name.lower() == name.strip().lower()), None)
+                test = _test_argv(args.test, old.repo if old else "")
+            ch = channels.update(name, github=args.github, allow=allow, hand=args.hand, test=test)
         except channels.ChannelError as problem:
             _setup_failure(problem)
-        print(f"\n  {ch.title}: [{', '.join(ch.allow)}]" + (f" · hands work to {ch.hand}" if ch.hand else "") + "\n")
+        print(f"\n  {ch.title}: [{', '.join(ch.allow)}]" + (f" · hands work to {ch.hand}" if ch.hand else "")
+              + (f"\n  tests after each hand-off: {' '.join(ch.test)}" if ch.test else "") + "\n")
         return
     _add_channel(args)
+
+
+def _test_argv(command: str, repo: str) -> tuple[str, ...]:
+    """`--test ".venv/bin/python -m pytest -q"` as argv. A relative program path is
+    the user's checkout's: the throwaway copy the tests run in has no `.venv`."""
+    import shlex
+    argv = shlex.split(command)
+    if not argv:
+        return ()
+    if "/" in argv[0] and not argv[0].startswith("/") and repo:
+        argv[0] = str(pathlib.Path(repo) / argv[0])
+    return tuple(argv)
 
 
 @maintenance
@@ -147,8 +167,10 @@ def _add_channel(args):
     from . import channels
     allow = tuple(a.strip() for a in (args.allow or 'read,research').split(',') if a.strip())
     try:
-        ch, state = channels.add(" ".join(args.name), repo=args.repo or "", github=args.github or "",
-                                 allow=allow, hand=args.hand or "")
+        repo = str(pathlib.Path(args.repo).expanduser().resolve()) if args.repo else ""
+        ch, state = channels.add(" ".join(args.name), repo=repo, github=args.github or "",
+                                 allow=allow, hand=args.hand or "",
+                                 test=_test_argv(args.test, repo) if args.test else ())
     except channels.ChannelError as problem:
         _setup_failure(problem)
     print(f"\n  {state:8} {ch.title}  (in {workspace.FOLDER})")
@@ -858,6 +880,9 @@ def main(argv=None):
                          'run (hand an approved brief to a coding agent). Default read,research')
     ch.add_argument('--hand', choices=['claude', 'codex'], default=None,
                     help='the coding agent `run` hands work to: your own Claude Code or Codex install')
+    ch.add_argument('--test', default=None,
+                    help='the project\'s test command; Notron runs it after each hand-off, network off '
+                         '(e.g. ".venv/bin/python -m pytest -q"; "" removes it)')
     ch.set_defaults(fn=cmd_channel)
 
     tk = sub.add_parser('tasks', help='hand-off tasks: briefed by Nemotron, run by your coding agent')

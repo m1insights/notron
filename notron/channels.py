@@ -59,6 +59,10 @@ class Channel:
     github: str = ""
     allow: tuple[str, ...] = ("read",)
     hand: str = ""
+    #: The project's own test command, as argv, set by the user at the terminal.
+    #: After a hand-off, Notron runs it in the fence (network off) and shows the
+    #: result to Nemotron's review. Never from a note, never from a model.
+    test: tuple[str, ...] = ()
 
     @property
     def title(self) -> str:
@@ -96,6 +100,8 @@ def _validate(ch: Channel) -> Channel:
         raise ChannelError(f"The coding agent is one of {', '.join(HANDS)}.")
     if "run" in ch.allow and not ch.hand:
         raise ChannelError("`run` needs an agent: --hand claude|codex.")
+    if ch.test and (not ch.repo or not all(isinstance(a, str) and a for a in ch.test)):
+        raise ChannelError("A test command needs a repository, e.g. --test \".venv/bin/python -m pytest -q\".")
     return ch
 
 
@@ -119,7 +125,8 @@ def load() -> list[Channel]:
             out.append(_validate(Channel(name=row["name"], note_id=row["note_id"],
                                          repo=row.get("repo", ""), github=row.get("github", ""),
                                          allow=tuple(row.get("allow", ("read",))),
-                                         hand=row.get("hand", ""))))
+                                         hand=row.get("hand", ""),
+                                         test=tuple(row.get("test") or ()))))
         except (KeyError, TypeError) as exc:
             raise ChannelError("The channel registry is unreadable; fix or remove it.") from exc
     return out
@@ -131,7 +138,7 @@ def _save(channels: list[Channel]) -> None:
     path = _path()
     private_directory(path.parent)
     atomic_write_json(path, {"version": 1, "channels": [
-        {**asdict(c), "allow": list(c.allow)} for c in channels]})
+        {**asdict(c), "allow": list(c.allow), "test": list(c.test)} for c in channels]})
 
 
 def for_note(note_id: str | None) -> Channel | None:
@@ -141,7 +148,7 @@ def for_note(note_id: str | None) -> Channel | None:
 
 
 def add(name: str, *, repo: str = "", github: str = "", allow: tuple[str, ...] = ("read",),
-        hand: str = "") -> tuple[Channel, str]:
+        hand: str = "", test: tuple[str, ...] = ()) -> tuple[Channel, str]:
     """Create (or adopt) `Notron <name>` in her folder and register it.
 
     Adopts an existing note of that exact title in her folder rather than making
@@ -157,7 +164,7 @@ def add(name: str, *, repo: str = "", github: str = "", allow: tuple[str, ...] =
     existing = load()
     if any(c.name.lower() == name.lower() for c in existing):
         raise ChannelError(f"There is already a channel called {name}.")
-    _validate(Channel(name, "pending", repo, github, tuple(allow), hand))
+    _validate(Channel(name, "pending", repo, github, tuple(allow), hand, tuple(test)))
     lib = library.load()
     if not lib.configured:
         raise policy.PolicyError("Set up note permissions (notron library) before adding a channel.")
@@ -171,7 +178,7 @@ def add(name: str, *, repo: str = "", github: str = "", allow: tuple[str, ...] =
         note_id = notes.create_note(workspace.FOLDER, markup.render(
             title, HELP.format(title=title, project=project) + "\n\n———\n"))
         state = "created"
-    channel = _validate(Channel(name, note_id, repo, github, tuple(allow), hand))
+    channel = _validate(Channel(name, note_id, repo, github, tuple(allow), hand, tuple(test)))
     # The grant first, then the registry. If the grant cannot be saved (secure
     # storage locked, say) the registry never names a note she may not read —
     # the first live run did it the other way round and left exactly that.
@@ -198,7 +205,7 @@ def remove(name: str) -> Channel:
 
 
 def update(name: str, *, github: str | None = None, allow: tuple[str, ...] | None = None,
-           hand: str | None = None) -> Channel:
+           hand: str | None = None, test: tuple[str, ...] | None = None) -> Channel:
     """Change what an existing channel may use. The note and its grant stay put."""
     from dataclasses import replace
     existing = load()
@@ -206,7 +213,8 @@ def update(name: str, *, github: str | None = None, allow: tuple[str, ...] | Non
     if old is None:
         raise ChannelError(f"No channel called {name}.")
     new = _validate(replace(old, **{k: v for k, v in (("github", github), ("hand", hand),
-                                                      ("allow", tuple(allow) if allow is not None else None))
+                                                      ("allow", tuple(allow) if allow is not None else None),
+                                                      ("test", tuple(test) if test is not None else None))
                                     if v is not None}))
     _save([new if c is old else c for c in existing])
     return new

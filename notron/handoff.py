@@ -21,6 +21,9 @@ Containment is plain code here, not a promise in a prompt:
   anything outside it is reported, never hidden.
 * The agent's summary and its diff are untrusted text on the way back — they
   go to Nemotron as evidence to judge, never as instructions.
+* If the user gave the channel a test command, Notron — not the agent — runs it
+  in the copy once the agent stops, under the same fence with the network off,
+  and the exit code is a fact code reports beside Nemotron's verdict.
 
 Task content (request, brief, diff) is encrypted at rest like every other
 record of the user's words; the raw agent output lives only in the private run
@@ -48,6 +51,12 @@ from . import paths
 APPROVAL_TTL = 24 * 3600
 #: How long an agent may work before it is stopped.
 RUN_TIMEOUT = 15 * 60
+#: How long the project's tests may run after it. Measured 2026-10-01: Vyvid's
+#: 227 tests take 2.3s in the fence; this only bounds a hung suite.
+TEST_TIMEOUT = 10 * 60
+#: How much of the test output Nemotron and the task record keep: the end, where
+#: pytest and most runners put the failures and the count.
+MAX_TEST_OUTPUT = 3000
 MAX_TURNS = 40
 #: What of the result Nemotron is shown and the note is told.
 MAX_DIFF = 12000
@@ -124,6 +133,8 @@ class Task:
     approve_reminder: str = ""       # the "Approve: …" reminder whose tick approves this brief
     done_reminder: str = ""          # the "✅ Done: …" reminder, once the report landed
     output: str = ""                 # a workspace task's folder of results
+    phase: str = ""                  # "tests" while Notron runs the project's tests after the agent
+    tests: dict = field(default_factory=dict)   # command, status (passed|failed|timed out|not run), exit, took, output
 
     @property
     def goal(self) -> str:
@@ -354,11 +365,13 @@ def _quote(path) -> str:
     return '"' + str(Path(path).resolve()).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def sandbox_profile(run_dir: Path, repo_top: str = "") -> str:
+def sandbox_profile(run_dir: Path, repo_top: str = "", *, network: bool = True) -> str:
     """Deny the user's secrets, Notron's own state and writes to their real checkout.
 
     Everything else stays allowed: the agent's own login, caches and network
     to its provider. Only reading and writing the listed places is refused.
+    The project's tests get the same profile with `network=False`: a test suite
+    edited by the agent is the agent's code, and it has no provider to reach.
     """
     home = Path(os.environ.get("HOME", str(Path.home())))
     secret = " ".join(f"(subpath {_quote(home / p)})" for p in SECRET_PATHS)
@@ -372,6 +385,8 @@ def sandbox_profile(run_dir: Path, repo_top: str = "") -> str:
         # where the throwaway copy's index lives, so that stays writable.
         rules.append(f"(deny file-write* (require-all (subpath {_quote(repo_top)})"
                      f" (require-not (subpath {_quote(Path(repo_top) / '.git')}))))")
+    if not network:
+        rules.append("(deny network*)")
     return "".join(rules)
 
 
@@ -515,7 +530,10 @@ def _start(task: Task, ch) -> Task:
     cwd = run_dir / "repo" / rel if rel != "." else run_dir / "repo"
     (run_dir / "brief.txt").write_text(task.prompt)
     os.chmod(run_dir / "brief.txt", 0o600)
-    pid = _spawn(argv(task.hand, run_dir, cwd, str(top)), cwd=cwd, stdin=run_dir / "brief.txt",
+    rules = RULES + (f"\nWhen you stop, Notron runs the project's tests (`{' '.join(ch.test)}`) in this copy "
+                     "and shows the result to the reviewer. Do not weaken or delete a test to make it pass."
+                     if ch.test else "")
+    pid = _spawn(argv(task.hand, run_dir, cwd, str(top), rules=rules), cwd=cwd, stdin=run_dir / "brief.txt",
                  stdout=run_dir / "out.json", stderr=run_dir / "err.txt")
     return _update(task.id, status="running", started=time.time(), pid=pid, pid_started=_started_at(pid))
 
@@ -603,13 +621,92 @@ def poll(*, now: float | None = None) -> list[Task]:
     now = time.time() if now is None else now
     done = []
     for task in [t for t in all_tasks() if t.status == "running"]:
+        testing = task.phase == "tests"
         if task.pid and _alive(task.pid, task.pid_started):
-            if now - (task.started or now) < RUN_TIMEOUT:
+            since = task.tests.get("started", now) if testing else (task.started or now)
+            if now - since < (TEST_TIMEOUT if testing else RUN_TIMEOUT):
                 continue
             _kill(task.pid, task.pid_started)
-            _update(task.id, error=f"stopped after {RUN_TIMEOUT // 60} minutes")
+            if testing:
+                _update(task.id, tests={**task.tests, "status": "timed out"})
+            else:
+                _update(task.id, error=f"stopped after {RUN_TIMEOUT // 60} minutes")
+        if testing:
+            _tests_done(get(task.id), now)
+        elif task.branch and _start_tests(get(task.id), now):
+            continue
         done.append(_collect(get(task.id), now))
     return done
+
+
+def _fenced() -> bool:
+    return os.path.exists(SANDBOX_EXEC)
+
+
+def _start_tests(task: Task, now: float) -> bool:
+    """Run the channel's tests in the agent's copy, fenced, network off. True if started.
+
+    Only when the agent changed something: no change, nothing to test. The
+    command is the user's, from the registry; the agent cannot name it.
+    """
+    ch = _channel_for(task)
+    if ch is None or not ch.test:
+        return False
+    run_dir = Path(task.run_dir)
+    wt = run_dir / "repo"
+    try:
+        if not wt.exists() or not _git(["status", "--porcelain"], wt):
+            return False
+        top = _toplevel(task)
+        rel = os.path.relpath(Path(ch.repo).resolve(), Path(top).resolve()) if top else "."
+        cwd = wt / rel if rel != "." else wt
+        if not _fenced():
+            # Tests the agent may have edited never run unfenced.
+            _update(task.id, tests={"command": " ".join(ch.test), "status": "not run",
+                                    "output": "no kernel fence on this Mac"})
+            return False
+        exit_file = run_dir / "tests.exit"
+        # `sh` only joins output and records the exit code; the command itself is
+        # argv, never parsed by a shell.
+        cmd = [SANDBOX_EXEC, "-p", sandbox_profile(run_dir, top, network=False),
+               "/bin/sh", "-c", '"$@" 2>&1; echo $? > "$0"', str(exit_file), *ch.test]
+        empty = run_dir / "tests.in"
+        empty.write_bytes(b"")
+        pid = _spawn(cmd, cwd=cwd, stdin=empty, stdout=run_dir / "tests.txt", stderr=run_dir / "tests.err")
+    except (TaskError, OSError, subprocess.SubprocessError) as exc:
+        _update(task.id, tests={"command": " ".join(ch.test), "status": "not run", "output": str(exc)[:300]})
+        return False
+    _update(task.id, phase="tests", pid=pid, pid_started=_started_at(pid),
+            tests={"command": " ".join(ch.test), "started": now})
+    return True
+
+
+def _tests_done(task: Task, now: float) -> Task:
+    """Read what the tests said. The exit code decides passed/failed, not the output."""
+    run_dir = Path(task.run_dir)
+    tests = dict(task.tests)
+    try:
+        raw = (run_dir / "tests.exit").read_text().strip()
+        code = int(raw) if raw.lstrip("-").isdigit() else None
+    except OSError:
+        code = None
+    proc = _procs.pop(task.pid, None) if task.pid else None
+    if proc is not None and proc.poll() is not None and code is not None:
+        # This process's own record beats a file the code under test could also
+        # write. (`sandbox-exec` passes the shell's status through.)
+        code = proc.returncode
+    out = ""
+    for name in ("tests.txt", "tests.err"):
+        if (run_dir / name).exists():
+            out += (run_dir / name).read_text(errors="replace")
+    out = out.strip()
+    if len(out) > MAX_TEST_OUTPUT:
+        out = "[…]\n" + out[-MAX_TEST_OUTPUT:]
+    if tests.get("status") != "timed out":
+        tests["status"] = "passed" if code == 0 else ("failed" if code is not None else "not run")
+    tests.update(exit=code, output=out, took=round(now - tests.get("started", now), 1))
+    tests.pop("started", None)
+    return _update(task.id, phase="", pid=None, tests=tests)
 
 
 def _parse(task: Task, run_dir: Path) -> tuple[str, list[str], bool]:
