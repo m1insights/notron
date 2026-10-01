@@ -211,3 +211,35 @@ def test_an_email_whose_claim_is_in_flight_is_not_marked_seen(monkeypatch, box):
     with inbox._editing() as data:
         data["claimed"].pop("letter:<m1@pharmacy.co.uk>")
     assert letterbox.file(letterbox.gather(now=10_120.0))["filed"] == 1 and len(rem.made) == 1
+
+
+# ------------------------------------------------- a plus address, 2026-10-01
+
+PLUS = PASS.replace("From:", "Delivered-To: info+notron@m1labs.io\nTo: info+notron@m1labs.io\nFrom:")
+
+
+def test_with_a_plus_address_only_mail_sent_there_is_a_request(monkeypatch):
+    letterbox.setup("info@m1labs.io", ["vivek@pharmacy.co.uk"], now=0.0, to="info+notron@m1labs.io")
+    fake = FakeMail(monkeypatch, hdr(1), hdr(2))
+    raws = {1001: PLUS, 1002: PASS.replace("From:", "To: info@m1labs.io\nFrom:")}
+    monkeypatch.setattr(mail, "message", lambda h: (raws[h.id], fake.body))
+    rem = FakeReminders(monkeypatch)
+    out = letterbox.file(letterbox.gather(now=10_000.0))
+    assert out == {"filed": 1, "held": 0, "ignored": 1} and len(rem.made) == 1
+    assert set(letterbox.requests()) == {hdr(1).key}         # mailroom leaves this one alone
+
+
+def test_a_plus_address_is_matched_exactly():
+    raw = "To: info+notronx@m1labs.io, ainfo+notron@m1labs.io.evil\n"
+    assert not letterbox.addressed_to(raw, "info+notron@m1labs.io")
+    assert letterbox.addressed_to("Cc: Vivek <INFO+Notron@m1labs.io>\n", "info+notron@m1labs.io")
+
+
+def test_a_plus_address_keeps_the_inbox_in_the_users_email_to_dos(monkeypatch):
+    letterbox.setup("info@m1labs.io", ["vivek@pharmacy.co.uk"], now=0.0, to="info+notron@m1labs.io")
+    monkeypatch.setattr(mail, "accounts", lambda: ["info@m1labs.io"])
+    assert mailroom._accounts() == ["info@m1labs.io"]
+    with letterbox._editing() as data:
+        data["requests"] = {hdr(1).key: 9e18}
+    fresh = mailroom.fresh(headers=[hdr(1), hdr(2)])
+    assert [h.key for h in fresh] == [hdr(2).key]

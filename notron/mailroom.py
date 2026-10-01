@@ -206,8 +206,10 @@ def target(*, caller=None) -> str | None:
 
 def _accounts() -> list[str]:
     from . import letterbox
-    wanted, own = chosen_accounts(), letterbox.account()
-    # Notron's own address holds requests for her, not email for the user.
+    wanted, box = chosen_accounts(), letterbox.settings()
+    # An account of Notron's own holds requests for her, not email for the user.
+    # A plus address shares the user's inbox: only its requests are left out (`fresh`).
+    own = "" if box.get("to") else box.get("account", "")
     return [a for a in mail.accounts() if (wanted is None or a in wanted) and a != own]
 
 
@@ -222,10 +224,13 @@ def recent(*, hours: int = WINDOW_HOURS) -> list[mail.Header]:
 def fresh(*, hours: int = WINDOW_HOURS, headers: list[mail.Header] | None = None) -> list[mail.Header]:
     """New inbox mail, minus what was looked at before and minus obvious machines —
     unless a key person sent it. No model."""
+    from . import letterbox
     data = _read()
     seen, keys = data.get("seen", {}), data.get("people", [])
+    taken = letterbox.requests()            # sent to Notron's address: hers, not a to-do
     return [h for h in (recent(hours=hours) if headers is None else headers)
-            if h.key not in seen and (not MACHINE.search(h.sender) or is_key(h.sender, keys))]
+            if h.key not in seen and h.key not in taken
+            and (not MACHINE.search(h.sender) or is_key(h.sender, keys))]
 
 
 def _listing(hs: list[mail.Header]) -> str:
