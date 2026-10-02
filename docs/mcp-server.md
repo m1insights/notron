@@ -51,7 +51,7 @@ All four read tools are marked read-only. None of them needs a Nebius key.
 | Tool | Arguments | Returns |
 |---|---|---|
 | `notes_list` | `limit` (default 50, max 50) | `{"notes": [{"id", "title", "folder", "modified"}]}`, newest first. Metadata only, no text. |
-| `notes_search` | `query`, `limit` (default 8, max 50) | `{"notes": [{"id", "title", "folder", "modified", "excerpt"}]}`. Keyword match; no model, no index, no network. |
+| `notes_search` | `query`, `limit` (default 8, max 50) | `{"notes": [{"id", "title", "folder", "modified", "excerpt"}]}`. Keyword match: titles first, then body matches only among the top title candidates; no model, no index, no network. |
 | `notes_read` | `note_id` | `{"id", "title", "folder", "modified", "text", "has_attachments_not_shown"}`. Text is capped at 20,000 characters, then `[… more not shown]`. |
 | `agenda` | `days` (default 7, max 31) | `{"today", "week", "reminders"}`, each plain text. |
 | `ask_notron` | `request` | `{"answer", "results", "dry_run"}`. Runs Notron's normal graph: NVIDIA Nemotron decides, Notron's Guard authorizes. Needs the Nebius key. |

@@ -92,7 +92,14 @@ def build(*, writes: bool, ask: bool, brain_factory, after_writes=None):
         # opts a note in, the organizer rewrites it in place. Unset is the honest,
         # conservative hint; a client should ask before approving.
         @app.tool(annotations=ToolAnnotations(read_only_hint=not writes))
-        def ask_notron(request: str) -> dict:
+        async def ask_notron(request: str) -> dict:
+            # Async on purpose, and blocking on purpose: mcp 2.x runs a sync tool
+            # on a worker thread, and brain._deadline_guard refuses every provider
+            # call off the main thread (its deadline is a SIGALRM). An async tool
+            # runs on the stdio loop, which `run()` keeps on the main thread. The
+            # session waits while Nemotron thinks; that is the price of the
+            # deadline. The read tools stay sync: nothing on their path is
+            # main-thread-only (Notes and EventKit are subprocesses).
             """Ask Notron (NVIDIA Nemotron). It can answer from notes, calendar and reminders,
             and, if the user enabled writes, file notes or create reminders through its own
             safety checks."""

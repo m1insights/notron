@@ -50,11 +50,13 @@ ends with the receipt: `checked time.get_current_time · decided by Nemotron Sup
 | `notron connect remove NAME` | Unregister the server, take it out of every channel, and forget its secrets. |
 
 The name is letters, numbers and dashes (up to 40). The command must be a bare
-command found on your `PATH` (`uvx`, `npx`) or an absolute path.
+command name (looked up on `PATH` when the server starts, such as `uvx` or `npx`)
+or an absolute path.
 
-`connect secret` and `channel set` need Notron's secure storage, which still waits
-on the signed-startup work (P06). Until then they stop at "Protected processing
-paused". A server with no secrets never touches the Keychain.
+`connect secret` and `channel set` need Notron's secure storage, which needs the
+signed Notron app installed: Notron checks the app bundle's signature before it
+unlocks the Keychain. Without it they stop (`Secure startup requires a validly
+signed Notron bundle.`). A server with no secrets never touches the Keychain.
 
 ## What v1 will and will not run
 

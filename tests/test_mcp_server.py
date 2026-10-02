@@ -126,3 +126,20 @@ def test_config_names_this_interpreter_and_the_serve_command():
     block = json.loads(mcp_server.config())
     assert block == {"mcpServers": {"notron": {"command": sys.executable,
                                                "args": ["-m", "notron", "mcp", "serve"]}}}
+
+
+def test_ask_notron_runs_on_the_main_thread(monkeypatch):
+    """mcp 2.x runs a sync tool on a worker thread, and brain._deadline_guard
+    refuses provider calls off the main thread (its deadline is a SIGALRM). So a
+    sync ask_notron failed every Nemotron call under the real server, and with
+    --writes the failed probe marked the worker unhealthy."""
+    import threading
+    seen = {}
+
+    def fake_ask(request, *, writes, brain, after=None):
+        seen["main"] = threading.current_thread() is threading.main_thread()
+        return {"answer": "ok", "results": [], "dry_run": not writes}
+    monkeypatch.setattr(bridge, "ask", fake_ask)
+    app = mcp_server.build(writes=False, ask=True, brain_factory=lambda: object())
+    assert _call(app, "ask_notron", {"request": "hi"})["answer"] == "ok"
+    assert seen["main"] is True

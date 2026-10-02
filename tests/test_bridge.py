@@ -419,3 +419,20 @@ def test_worker_health_stays_up_while_a_write_runs(monkeypatch):
     bridge.ask("x", writes=True, brain=object())
     assert during["state"] == "ready"
     assert HealthStore().row()["state"] == "stopped", "and closed once the run is over"
+
+
+def test_listing_loads_the_policy_once_not_once_per_note(monkeypatch):
+    """Each load decrypts and validates the policy file; per note, a library
+    of hundreds paid that hundreds of times for one list."""
+    real = library.load
+    loads = []
+    monkeypatch.setattr(library, "load", lambda *a, **kw: loads.append(1) or real(*a, **kw))
+    assert bridge.notes_list()
+    assert len(loads) <= 2
+
+
+def test_a_folder_name_is_redacted_like_a_title(_notes_is_never_the_real_one):
+    app = _notes_is_never_the_real_one
+    app.folders.insert(0, ("token sk-abcdefghijklmnop1234", ["Groceries"]))
+    rows = [r for r in bridge.notes_list() if r["title"] == "Groceries"]
+    assert rows and "sk-abcdefghijklmnop1234" not in rows[0]["folder"]

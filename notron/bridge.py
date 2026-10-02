@@ -47,14 +47,17 @@ def _system(note: notes.Note, snapshot: policy.PolicySnapshot) -> bool:
             or snapshot.system_role(note.id) is not None)
 
 
-def _visible(note: notes.Note, snapshot: policy.PolicySnapshot) -> bool:
-    return (not _system(note, snapshot) and snapshot.readable(note)
-            and library.state_of(note.id, note.modified) != library.IGNORE)
+def _visible(note: notes.Note, snapshot: policy.PolicySnapshot, lib=None) -> bool:
+    """`lib` is a library already loaded for this call; a list passes one so the
+    policy file is read once, not once per note."""
+    hidden = (lib.hides(note.id, note.modified) if lib is not None
+              else library.state_of(note.id, note.modified) == library.IGNORE)
+    return not _system(note, snapshot) and snapshot.readable(note) and not hidden
 
 
 def _row(note: notes.Note) -> dict:
     from . import privacy
-    return {"id": note.id, "title": privacy.redact(note.title), "folder": note.folder,
+    return {"id": note.id, "title": privacy.redact(note.title), "folder": privacy.redact(note.folder),
             "modified": note.modified}
 
 
@@ -65,8 +68,9 @@ def notes_list(limit: int = MAX_LIMIT) -> list[dict]:
     # Newest first, so a cap of 50 is what they are working on now rather than
     # the oldest corner of the first folder. An unparseable date sorts last.
     floor = datetime.min
-    ordered = sorted(library.user_notes(), key=lambda n: n.modified_at or floor, reverse=True)
-    return [_row(n) for n in ordered if _visible(n, snapshot)][:limit]
+    lib = library.load()
+    ordered = sorted(library.user_notes(lib), key=lambda n: n.modified_at or floor, reverse=True)
+    return [_row(n) for n in ordered if _visible(n, snapshot, lib)][:limit]
 
 
 def notes_search(query: str, limit: int = 8) -> list[dict]:
