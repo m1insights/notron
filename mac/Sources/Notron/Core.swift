@@ -2,21 +2,17 @@ import Foundation
 import NotronCore
 
 /// The one way the app talks to the Python core: a subprocess, exactly like the
-/// CLI. Dev-machine paths for now — shipping a DMG means bundling a Python
-/// runtime inside the .app (see mac/README.md); these two environment variables
-/// are the seam that will point at it.
+/// CLI. It runs the checkout the app was built in (`Checkout`) — shipping a DMG
+/// means bundling a Python runtime inside the .app (see mac/README.md); the
+/// `NOTRON_HOME` / `NOTRON_PYTHON` environment variables are the seam for that.
 enum Core {
     // P06 owns signature/runtime validation. Never enable through an env flag.
     static let protectedManagedStartupValidated = false
     @MainActor static var managedIPC:ManagedIPCSession?
 
-    static let home: URL = {
-        let path = ProcessInfo.processInfo.environment["NOTRON_HOME"] ?? "/Users/m1labs/Dev/apps/juno"
-        return URL(fileURLWithPath: path)
-    }()
+    static let home: URL = Checkout.home()
 
-    static let python: String =
-        ProcessInfo.processInfo.environment["NOTRON_PYTHON"] ?? "/Users/m1labs/Dev/apps/juno/.venv/bin/python"
+    static let python: String = Checkout.python(home: home)
 
     struct Failure: Error, CustomStringConvertible {
         let description: String

@@ -423,6 +423,15 @@ notron connect tools time && notron connect approve time get_current_time
 notron channel set Shop --connect time
 ```
 
+**Where to find connectors.** Links only — Notron does not vet, bundle or
+endorse anything on these lists. Each server still has to be added, its tools
+listed and approved by you, one at a time.
+
+- [MCP reference servers](https://github.com/modelcontextprotocol/servers) — the protocol's own examples (time, fetch, git, filesystem, memory)
+- [Official MCP Registry](https://registry.modelcontextprotocol.io) — published servers, searchable
+- [GitHub MCP Server](https://github.com/github/github-mcp-server) — issues, pull requests and code, from GitHub itself
+- [awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers) — a large community-maintained list
+
 ## Use your Apple Notes from any AI (MCP)
 
 Claude Desktop, Cursor and other MCP clients can search and read the notes you
