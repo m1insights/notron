@@ -326,22 +326,29 @@ def _flat(text: str) -> str:
     return " ".join(visible.split())[:MAX_DESCRIPTION]
 
 
-def menu_for(channel) -> list[str]:
-    """One line per tool Nemotron may call in this channel.
+def offered(channel) -> dict[str, str]:
+    """Each tool Nemotron may call in this channel, by qualified name, with its
+    menu line. One registry read gives `project` both the menu and the names it
+    holds a decision to, so the two can never disagree.
 
     The description is server-written text: flattened to one line and capped,
     because it lands in the passage the prompt already calls data, and a
     multi-line description is how a hostile server would try to look like the
     prompt itself.
     """
-    lines = []
+    out = {}
     for s in _granted(channel):
         for t in s.tools.values():
             if t.name in s.changed:
                 continue
-            desc = _flat(t.description)
-            lines.append(f"- {qualified(s.name, t.name)}: {desc} args: {_shape(t.schema)}")
-    return lines
+            name = qualified(s.name, t.name)
+            out[name] = f"- {name}: {_flat(t.description)} args: {_shape(t.schema)}"
+    return out
+
+
+def menu_for(channel) -> list[str]:
+    """One line per tool Nemotron may call in this channel (see `offered`)."""
+    return list(offered(channel).values())
 
 
 def _strings(value):
