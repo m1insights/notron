@@ -41,6 +41,8 @@ def _first_unsupported(s, path, top):
         return f"{path or 'top'}: anyOf" if inner is None else _first_unsupported(inner, path, False)
     if not isinstance(s, dict):
         return f"{path or 'top'}: not an object"
+    if top:
+        s = {k: v for k, v in s.items() if k != "$schema"}  # accepted at the top
     extra = schema._keys(s) - schema.KEYWORDS
     if extra:
         return f"keyword {sorted(extra)}"
