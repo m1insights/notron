@@ -81,12 +81,14 @@ def main(name):
             print(f"  not approvable: {o.name} ({o.why})")
     # Why a read-only tool's arguments were refused, counted by first cause, so
     # a server whose whole catalogue fails reads as one fixable line.
-    causes = collections.Counter()
+    causes, examples = collections.Counter(), {}
     for o in offers:
         if o.why == "arguments too complex for v1":
-            causes[_first_unsupported(o.schema, "", True)] += 1
+            cause = _first_unsupported(o.schema, "", True)
+            causes[cause] += 1
+            examples.setdefault(cause, f"{o.name}: {json.dumps(o.schema)[:300]}")
     for cause, n in causes.most_common(8):
-        print(f"  {n:4} refused for: {cause}")
+        print(f"  {n:4} refused for: {cause}\n       e.g. {examples[cause]}")
     # A tool that needs no arguments, so the call below can send `{}`.
     bare = [o.name for o in offers if o.approvable and not o.schema.get("required")]
     if not bare:
