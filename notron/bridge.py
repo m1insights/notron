@@ -20,6 +20,8 @@ so Nemotron still decides and the Guard still authorizes.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from . import library, markup, notes, policy, workspace
 from .outbound import Passage, prepare_outbound
 
@@ -60,7 +62,11 @@ def notes_list(limit: int = MAX_LIMIT) -> list[dict]:
     """The user's notes Notron may read: metadata only, no bodies."""
     snapshot = policy.require_ready()
     limit = _clamp(limit, 1, MAX_LIMIT)
-    return [_row(n) for n in library.user_notes() if _visible(n, snapshot)][:limit]
+    # Newest first, so a cap of 50 is what they are working on now rather than
+    # the oldest corner of the first folder. An unparseable date sorts last.
+    floor = datetime.min
+    ordered = sorted(library.user_notes(), key=lambda n: n.modified_at or floor, reverse=True)
+    return [_row(n) for n in ordered if _visible(n, snapshot)][:limit]
 
 
 def notes_search(query: str, limit: int = 8) -> list[dict]:
@@ -85,6 +91,10 @@ def notes_read(note_id: str) -> dict:
     snapshot = policy.require_ready()
     if not isinstance(note_id, str) or not note_id.strip():
         return dict(NOT_AVAILABLE)
+    if library.state_of(note_id) == library.IGNORE:
+        # Refused before Notes is asked anything, as `attachments.on_note` does:
+        # an ignored note costs no query and leaves no trace in the call log.
+        return dict(NOT_AVAILABLE)
     note = notes.get_note(note_id)
     if note is None or not _visible(note, snapshot):
         return dict(NOT_AVAILABLE)
@@ -95,7 +105,12 @@ def notes_read(note_id: str) -> dict:
     # A recording or a file leaves no trace in the body at all: a voice memo
     # reads back as an empty note. Ask Notes the second question so silence
     # about a file is never mistaken for "there is no file".
-    hidden = markup.holds_media(body) or bool(attachments.on_note(note.id, note.modified))
+    try:
+        hidden = markup.holds_media(body) or bool(attachments.on_note(note.id, note.modified))
+    except Exception:
+        # Notes busy or the question refused: whether a file hangs off this
+        # note is unknown, and unknown must never read as "no file" (inv. 12).
+        hidden = True
     return {**_row(note), "text": text, "has_attachments_not_shown": hidden}
 
 
@@ -115,10 +130,15 @@ def agenda(days: int = 7, *, checker=None) -> dict:
             return f"{app} could not be read just now; do not assume it is free or empty."
         return nodes.honest(body, app, empty, unreadable)
 
+    def export(text: str) -> str:
+        # Event titles and reminders are user text, redacted exactly as the
+        # graph's Passage(..., "agenda") is before a model sees it.
+        return prepare_outbound("export", [Passage(text, "agenda")])[0]
+
     return {
-        "today": read("Calendar", calendar.brief, "Nothing in the calendar today."),
-        "week": read("Calendar", lambda: calendar.week(days=days), calendar.empty_week(days)),
-        "reminders": read("Reminders", reminders.summary, "Nothing outstanding in Reminders."),
+        "today": export(read("Calendar", calendar.brief, "Nothing in the calendar today.")),
+        "week": export(read("Calendar", lambda: calendar.week(days=days), calendar.empty_week(days))),
+        "reminders": export(read("Reminders", reminders.summary, "Nothing outstanding in Reminders.")),
     }
 
 

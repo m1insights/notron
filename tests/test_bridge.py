@@ -228,3 +228,52 @@ def test_agenda_days_are_capped(monkeypatch):
     ok = lambda: [Check("Calendar", True, "full access", ""), Check("Reminders", True, "full access", "")]
     bridge.agenda(days=400, checker=ok)
     assert seen["days"] == bridge.MAX_DAYS
+
+
+def test_agenda_redacts_secrets_on_the_way_out(monkeypatch):
+    """An event title is user text like any note: the graph redacts it before a
+    model sees it, so the bridge must before a client's provider does."""
+    _empty_day(monkeypatch)
+    monkeypatch.setattr(calendar, "brief", lambda **kw: "- 09:00 Wifi: password hunter2")
+    monkeypatch.setattr(calendar, "week", lambda **kw: "- 10:00 Call sk-abcdefghijklmnop1234")
+    monkeypatch.setattr(reminders, "summary", lambda **kw: "- reset login (password ruchimanan)")
+    ok = lambda: [Check("Calendar", True, "full access", ""), Check("Reminders", True, "full access", "")]
+    out = bridge.agenda(checker=ok)
+    assert "hunter2" not in out["today"] and "Wifi" in out["today"]
+    assert "sk-abcdefghijklmnop1234" not in out["week"]
+    assert "ruchimanan" not in out["reminders"]
+
+
+def test_the_list_is_the_most_recent_notes_not_the_first_folder(_notes_is_never_the_real_one, monkeypatch):
+    """Capped at 50 in folder order, a library of hundreds hands a client the
+    oldest corner of the first folder and nothing it is working on now."""
+    from notron import notes as notes_mod
+    listed = [notes_mod.Note(f"Notes/n{i}", f"Note {i}", "Notes",
+                             f"Wednesday, {1 + i % 28} September 2026 at 10:00:00") for i in range(80)]
+    monkeypatch.setattr(library, "user_notes", lambda *a, **kw: listed)
+    out = bridge.notes_list(limit=50)
+    stamps = [notes_mod.Note("x", "", "", r["modified"]).modified_at for r in out]
+    assert len(out) == 50 and stamps == sorted(stamps, reverse=True)
+    newest = max(n.modified_at for n in listed)
+    assert stamps[0] == newest
+
+
+def test_an_attachment_check_that_fails_is_not_reported_as_none(_notes_is_never_the_real_one, monkeypatch):
+    """Notes busy on the second question is "unknown", and unknown is not "no file"."""
+    from notron import attachments
+
+    def busy(*a, **kw):
+        raise RuntimeError("Notes busy")
+    monkeypatch.setattr(attachments, "on_note", busy)
+    out = bridge.notes_read(SUPPS)
+    assert out["has_attachments_not_shown"] is True
+    assert "Supps" in out["text"]
+
+
+def test_an_ignored_note_is_refused_before_notes_is_asked(_notes_is_never_the_real_one):
+    """Same pattern as attachments.on_note: an ignored id costs no Notes query."""
+    app = _notes_is_never_the_real_one
+    _ignore(PARKING)
+    app.calls.clear()
+    assert bridge.notes_read(PARKING) == {"error": "not available"}
+    assert "metadata" not in app.calls and "body" not in app.calls
