@@ -175,14 +175,18 @@ def _test_argv(command: str, repo: str) -> tuple[str, ...]:
 def _add_channel(args):
     from . import channels
     allow = tuple(a.strip() for a in (args.allow or 'read,research').split(',') if a.strip())
+    if getattr(args, 'disconnect', None):
+        raise SystemExit("A new channel has nothing to disconnect; use --connect, or `channel set`.")
     try:
         repo = str(pathlib.Path(args.repo).expanduser().resolve()) if args.repo else ""
         ch, state = channels.add(" ".join(args.name), repo=repo, github=args.github or "",
                                  allow=allow, hand=args.hand or "",
-                                 test=_test_argv(args.test, repo) if args.test else ())
+                                 test=_test_argv(args.test, repo) if args.test else (),
+                                 connectors=_names(getattr(args, 'connect', None)))
     except channels.ChannelError as problem:
         _setup_failure(problem)
-    print(f"\n  {state:8} {ch.title}  (in {workspace.FOLDER})")
+    print(f"\n  {state:8} {ch.title}  (in {workspace.FOLDER})"
+          + (f"\n  connectors: {', '.join(ch.connectors)}" if ch.connectors else ""))
     print(f"\n  Say: “Hey Siri, add is CI green to my {ch.title} note.”")
     print("  Or type any line into it. She answers underneath, while `notron listen` runs.\n")
 

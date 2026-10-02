@@ -204,6 +204,23 @@ def test_a_grant_stored_as_a_bare_string_is_damage_not_letters():
         channels.load()
 
 
+def test_channel_add_connect_is_granted_not_silently_dropped(monkeypatch, tmp_path, capsys):
+    """`channel add X --connect github` once parsed, printed success, and
+    granted nothing: only `set` passed the flag on."""
+    from notron import cli, notes
+    _connector()
+    monkeypatch.setattr(notes, "ensure_folder", lambda name: name)
+    monkeypatch.setattr(notes, "find_note", lambda folder, title: None)
+    monkeypatch.setattr(notes, "create_note", lambda folder, body: "new-id")
+    args = dict(action="add", name=["Synqology"], repo=str(tmp_path), github=None, allow=None,
+                hand=None, test=None, connect="github", disconnect=None)
+    cli.cmd_channel(type("A", (), args)())
+    assert channels.load()[0].connectors == ("GitHub",)
+    with pytest.raises(SystemExit):
+        cli.cmd_channel(type("A", (), {**args, "name": ["Vyvid"], "connect": None, "disconnect": "github"})())
+    assert [c.name for c in channels.load()] == ["Synqology"]
+
+
 def test_channel_set_connect_from_the_command_line(capsys):
     from notron import cli
     _connector()
@@ -421,6 +438,18 @@ def test_connector_calls_share_the_tool_budget(monkeypatch):
     assert len(state.tools) == nodes.MAX_TOOLS == 4 and ran == []
     state = nodes.project(_channel_state(), brain=Decides({"tools": four[:3], "calls": two}))
     assert len(state.tools) == 4 and [r[2] for r in ran] == [{"q": "a"}]
+
+
+def test_tools_dropped_by_the_budget_are_traced_not_silent(monkeypatch):
+    """A pick that never ran must say so: otherwise the trace reads as if
+    Nemotron had not asked for it."""
+    _connected(monkeypatch)
+    five = ["git_status", "git_log", "git_branches", "git_diff_stat", "git_files"]
+    state = nodes.project(_channel_state(), brain=Decides({
+        "tools": five, "calls": [{"tool": SEARCH, "arguments": {"q": "a"}}]}))
+    assert any(f"over budget ['git_files', '{SEARCH}']" in t for t in state.trace)
+    state = nodes.project(_channel_state(), brain=Decides({"tools": five[:2]}))
+    assert not any("over budget" in t for t in state.trace)
 
 
 def test_a_hostile_line_cannot_add_a_connector_to_the_menu(monkeypatch):

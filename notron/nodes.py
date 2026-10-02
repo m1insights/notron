@@ -436,11 +436,15 @@ def project(state: State, *, brain) -> State:
         out = {}
     allowed = {t.name for t in tools.available(channel)}
     picked = out.get("tools") if isinstance(out.get("tools"), list) else []
-    chosen = [t for t in dict.fromkeys(p for p in picked if isinstance(p, str)) if t in allowed][:MAX_TOOLS]
+    wanted = [t for t in dict.fromkeys(p for p in picked if isinstance(p, str)) if t in allowed]
+    chosen = wanted[:MAX_TOOLS]
     refused = [p for p in picked if isinstance(p, str) and p not in allowed]
     calls, refused_calls = _calls(out, offered)
     # One budget for both, built-in tools first: they are local and cheap.
-    calls = calls[:max(0, MAX_TOOLS - len(chosen))]
+    room = max(0, MAX_TOOLS - len(chosen))
+    # Named in the trace: a pick that silently never ran reads as never picked.
+    over = wanted[MAX_TOOLS:] + list(dict.fromkeys(tool for tool, _ in calls[room:]))
+    calls = calls[:room]
     refused += refused_calls
     state.needs_web = out.get("web") is True and "research" in channel.allow
     kind = out.get("kind") if out.get("kind") in ("question", "task", "note") else "question"
@@ -459,7 +463,8 @@ def project(state: State, *, brain) -> State:
                       + f" · decided by Nemotron Super in {took:.1f}s")
     state.note("project", f"{channel.name}: {kind}, tools={chosen}, "
                           + (f"calls={called}, " if called else "") + f"web={state.needs_web}, "
-                          f"{took:.1f}s" + (f", refused {refused}" if refused else "") + (f" — {why}" if why else ""))
+                          f"{took:.1f}s" + (f", refused {refused}" if refused else "")
+                          + (f", over budget {over}" if over else "") + (f" — {why}" if why else ""))
     if kind == "task" and "run" in channel.allow:
         _brief(state, channel, brain=brain, decided=took)
     return state
