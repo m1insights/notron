@@ -165,6 +165,7 @@ the background worker where an unanswerable dialog is a hang.
 **The owner should run this from a normal login session:**
 
 ```bash
+# Historical: tavily-api-key retired 2026-10-02 (delete still works; set refuses).
 printf 'not-real-yet' | .venv/bin/python -m notron key set tavily-api-key
 printf '' | .venv/bin/python -m notron key list
 printf '' | .venv/bin/python -m notron key delete tavily-api-key

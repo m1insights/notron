@@ -117,6 +117,9 @@ class Preset:
     vouched: tuple[str, ...] = ()
     #: False: code calls it (the researcher); Nemotron never picks it from a menu.
     menu: bool = True
+    #: (tool, argument) pairs holding free search text the server only *prefixes*
+    #: with the bound repository. Scope qualifiers in them are refused (`SCOPE`).
+    scoped_queries: tuple[tuple[str, str], ...] = ()
     install: str = ""                   # how to get the binary, said when it is missing
 
 
@@ -137,6 +140,10 @@ PRESETS = {p.name: p for p in (
            binds=(("owner", "owner"), ("repo", "name")),
            tools=("list_pull_requests", "pull_request_read", "search_issues", "issue_read",
                   "list_commits", "actions_list"),
+           # github-mcp-server builds `repo:owner/name <query>`, and GitHub ORs
+           # repeated scope qualifiers: `repo:other/private token` in the query
+           # would search a repository the channel never named.
+           scoped_queries=(("search_issues", "query"),),
            install="brew install github-mcp-server"),
     # tavily-mcp sets no annotations at all, so v1 would call every tool "changes
     # things". A search changes nothing; Notron says so for that one tool, and
@@ -147,6 +154,11 @@ PRESETS = {p.name: p for p in (
            vouched=("tavily_search",), menu=False,
            install="install Node.js (for npx): https://nodejs.org"),
 )}
+
+
+#: A search qualifier that widens or moves the scope. Matched anywhere, with or
+#: without a leading `-` or quotes; a false refusal costs one search.
+SCOPE = re.compile(r"(?i)(?:^|[^A-Za-z0-9_])(?:repo|org|user|owner)\s*:")
 
 
 def preset_of(server: Server) -> Preset | None:
@@ -542,6 +554,14 @@ def _checked(server: Server, approved: ApprovedTool, arguments, label: str, chan
     bound = (_bound(server, channel) if channel is not None else None) or {}
     if channel is not None and _binds(server) and not bound:
         return f"{label}: not available in this channel"
+    # Bound per tool: a tool without an `owner` argument must not be handed one
+    # (the schema is closed, so it would be refused as unexpected).
+    bound = {k: v for k, v in bound.items() if k in approved.schema.get("properties", {})}
+    p = preset_of(server)
+    for tool, arg in (p.scoped_queries if p else ()):
+        value = arguments.get(arg) if tool == approved.name else None
+        if isinstance(value, str) and SCOPE.search(value):
+            return f"{label}: refused — {arg}: names a repository; this channel searches its own"
     arguments = {k: v for k, v in arguments.items() if k not in bound}
     loose = _unbound(approved.schema, bound)
     errors = schema.validate(loose, arguments)
@@ -634,6 +654,11 @@ def install_preset(name: str, *, with_key: bool = False) -> tuple[Server, list[s
     if existing is not None and preset_of(existing) is None:
         raise ConnectorError(f"There is already a connector called {p.name}; "
                              f"remove it first: notron connect remove {p.name}")
+    if existing is not None and with_key:
+        missing = tuple(v for v in p.optional_secrets if v not in existing.secrets)
+        if missing:
+            existing = replace(existing, secrets=(*existing.secrets, *missing))
+            _save([existing if s.name == existing.name else s for s in load()])
     stale = (existing is not None and Path(existing.argv[0]).is_absolute()
              and not Path(existing.argv[0]).exists())
     if existing is None or stale:
@@ -660,7 +685,12 @@ def web_search(query: str, limit: int) -> str:
     approved = server.tools.get("tavily_search")
     if approved is None or "tavily_search" in server.changed:
         raise ConnectorError("web search is not approved — notron connect preset tavily")
-    return _checked(server, approved, {"query": query, "max_results": limit}, "tavily.tavily_search")
+    label = "tavily.tavily_search"
+    out = _checked(server, approved, {"query": query, "max_results": limit}, label)
+    if out.startswith(label + ":"):
+        # A refusal line, not results: say why instead of "0 sources".
+        raise ConnectorError(out[len(label) + 1:].strip())
+    return out
 
 
 def web_ready() -> bool:

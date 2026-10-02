@@ -263,8 +263,14 @@ def provisioned() -> list[tuple[str, bool]]:
     return [(name, get(name) is not None) for name in PROVISIONABLE]
 
 
+#: Names Notron no longer uses but a user may still hold in the Keychain. They
+#: can be deleted, never stored. `tavily-api-key` retired on 2026-10-02 when web
+#: search moved to Tavily's MCP server (`connect preset tavily`).
+RETIRED = ('tavily-api-key',)
+
+
 def forget_api_key(name: str) -> None:
-    if not _provisionable(name):
+    if not (_provisionable(name) or name in RETIRED):
         raise CredentialUnavailable('That credential cannot be removed here.')
     if _provider is None:
         raise CredentialUnavailable('Keychain unavailable; protected processing paused.')

@@ -123,7 +123,7 @@ No production or managed-server privacy/release gate is claimed.
 | All nine inference callers above → `Brain._call` → SDK `chat.completions.create` | POST `https://api.tokenfactory.nebius.com/v1/chat/completions` → `ProviderTransport` → `_ProviderConnection.request` | Prepared passages + static system instruction; current `NEBIUS_KEY` rebuilt as Authorization at the adapter |
 | `index.build`, `index.search` → `Brain.embed` → SDK `embeddings.create` | POST `https://api.tokenfactory.nebius.com/v1/embeddings` → same adapter | Every batch prepares/rechecks; same endpoint-scoped credential |
 | `cli.cmd_models` → `Brain.available_models` → SDK `models.list` | GET `https://api.tokenfactory.nebius.com/v1/models` → same adapter | No user text; same secure readiness and credential checks |
-| `nodes.researcher` → `research.search` → `httpx2.Client.post` | POST `https://api.tavily.com/search` → same adapter | Prepared query; injected `SEARCH_KEY` in JSON body; no ambient authentication headers |
+| `nodes.researcher` → `research.search` → `connectors.web_search` (superseded 2026-10-02) | `tavily_search` on the local `tavily-mcp@0.2.22` MCP process, which makes its own HTTPS call; no route in `network.py` | Prepared query, connector schema/credential checks, digest re-check; keyless or connector-scoped `TAVILY_API_KEY`. See `2026-10-02-mcp-presets.md` |
 | Explicit development Nebius-compatible override | Same three Nebius methods/paths on the single configured public HTTPS host, port 443 | Requires `NOTRON_DEVELOPMENT=1` and `DEV_NEBIUS_KEY`; no production/environment/constructor-key fallback |
 | Writer/planner citation grounding | **No transport** | Exact URLs in prepared source/request/note passages; unsupported citations replaced locally |
 

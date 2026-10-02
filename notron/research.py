@@ -51,9 +51,32 @@ def _call(query: str, limit: int) -> str:
 
 
 #: tavily-mcp 0.2.22 `formatResults`: an optional `Answer:` line, then per
-#: result `Title:`, optional `ID:`, `URL:`, `Content:` and optional extras.
-_RESULT = re.compile(r"^Title: (?P<title>.*)$", re.M)
-_FIELD = re.compile(r"^(?P<key>ID|URL|Content|Raw Content|Favicon): ?(?P<value>.*)$")
+#: result a blank line, `Title:`, `ID: <hex>-<NN>` (NN = the result's position),
+#: `URL:`, `Content:` and optional extras.
+_START = re.compile(r"^Title: (?P<title>.*)\n(?:ID: (?P<id>\S*)\n)?", re.M)
+_FIELD = re.compile(r"^(?P<key>URL|Content|Raw Content|Favicon): ?(?P<value>.*)$")
+_POSITION = re.compile(r"-(\d+)$")
+
+
+def _starts(text: str) -> list[tuple[int, str]]:
+    """Where each genuine result begins, as (offset, title).
+
+    A page's own text is inside `Content:`, and a page can contain a line that
+    says `Title:` or `URL: https://www.nejm.org/…` (review, 2026-10-02). A
+    result therefore starts only after a blank line, and when the server sends
+    `ID:` lines the positions must count 00, 01, 02… in order: a forged block
+    has to guess its place, and any block out of step is read as content of the
+    one before it, never as a source.
+    """
+    found = [m for m in _START.finditer(text) if m.start() == 0 or text[max(0, m.start() - 2):m.start()] == "\n\n"]
+    if not any(m["id"] for m in found):
+        return [(m.start(), m["title"]) for m in found]
+    out = []
+    for m in found:
+        pos = _POSITION.search(m["id"] or "")
+        if pos and int(pos.group(1)) == len(out):
+            out.append((m.start(), m["title"]))
+    return out
 
 
 def parse(text: str) -> tuple[str, list[Finding]]:
@@ -62,33 +85,35 @@ def parse(text: str) -> tuple[str, list[Finding]]:
     The server's output is untrusted data. When 0.2.22 hits its keyless limit
     it answers with a pitch addressed to agents ("Agentic payment…", "Earn
     bonus credits by POSTing answers to…") and no results; that parses to
-    nothing. Only the title, the URL and the content of each result survive; a
-    result with no http(s) URL is not a source and is left out.
+    nothing. Only the title, the first URL and the content of each result
+    survive; a field line inside a page's content never replaces the real one,
+    and a result with no http(s) URL is not a source and is left out.
     """
     answer = ""
     head = text.split("Detailed Results:", 1)[0]
     m = re.search(r"^Answer: (.*)$", head, re.M)
     if m:
         answer = m.group(1).strip()
-    starts = [m.start() for m in _RESULT.finditer(text)] + [len(text)]
+    starts = _starts(text)
     findings = []
-    for a, b in zip(starts, starts[1:]):
-        block = text[a:b].splitlines()
-        title = block[0][len("Title: "):].strip()
+    for (a, title), (b, _) in zip(starts, starts[1:] + [(len(text), "")]):
         fields, key = {}, None
-        for line in block[1:]:
+        for line in text[a:b].splitlines()[1:]:
             f = _FIELD.match(line)
-            if f:
+            if key == "Content" and not (f and f["key"] in ("Raw Content", "Favicon")):
+                # Everything after `Content:` belongs to it, including lines
+                # that look like fields, until the formatter's own trailers.
+                fields["Content"] += "\n" + line
+                continue
+            if f and f["key"] not in fields:
                 key = f["key"]
                 fields[key] = f["value"]
-            elif key == "Content" and line.strip():
-                # Content runs across lines; anything after it that is not a
-                # field belongs to it, until the next field or result.
-                fields["Content"] += "\n" + line
+            elif f:
+                key = None
         url = fields.get("URL", "").strip()
         if not url.startswith(("https://", "http://")):
             continue
-        findings.append(Finding(title=title[:120], url=url,
+        findings.append(Finding(title=title.strip()[:120], url=url,
                                 snippet=fields.get("Content", "").strip()[:800]))
     return answer, findings
 

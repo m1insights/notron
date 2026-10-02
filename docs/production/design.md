@@ -296,7 +296,7 @@ These establish constraints; they are not proof of this app's implementation or 
 
 `credentials.CredentialStore` owns `get(name) -> bytes | None`,
 `put(name, value: bytes) -> None`, and `delete(name) -> None`. Approved account
-names are `storage-key`, `nebius-api-key`, and `tavily-api-key`, under Keychain
+names are `storage-key`, `nebius-api-key`, and `tavily-api-key` (retired 2026-10-02: deletable only; web search is an MCP connector), under Keychain
 service `com.m1labs.notron`. `credentials.configure(provider)` injects access;
 there is no `.env` import, credential environment fallback, or automatic key
 replacement. `Brain.from_credentials()` replaces `from_env()`. Non-secret

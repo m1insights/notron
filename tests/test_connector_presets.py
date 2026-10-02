@@ -162,8 +162,9 @@ def test_the_researcher_search_goes_through_the_connector_checks(servers):
 
 def test_a_credential_shaped_query_never_reaches_tavily(servers):
     connectors.install_preset("tavily")
-    out = connectors.web_search("sk-abcdefghijklmnopqrstuvwx", 6)
-    assert "looked like a credential" in out and servers.calls == []
+    with pytest.raises(connectors.ConnectorError, match="looked like a credential"):
+        connectors.web_search("sk-abcdefghijklmnopqrstuvwx", 6)
+    assert servers.calls == []
 
 
 # --- the channel's repository is code's choice -------------------------------
@@ -239,3 +240,50 @@ def test_a_server_by_absolute_path_finds_its_own_runtime(monkeypatch):
     env = mcp_client.child_env({}, ("/Users/u/.fnm/node/bin/npx", "-y", "tavily-mcp@0.2.22"))
     assert env["PATH"].split(":")[0] == "/Users/u/.fnm/node/bin"
     assert mcp_client.child_env({}, ("npx",))["PATH"] == "/usr/bin:/bin"
+
+
+# --- review findings, 2026-10-02 ----------------------------------------------
+
+SEARCH_ISSUES = {"name": "search_issues", "description": "Search issues",
+                 "inputSchema": {"type": "object", "required": ["query"], "properties": {
+                     "query": {"type": "string"}, "owner": {"type": "string"}, "repo": {"type": "string"}}},
+                 "annotations": {"readOnlyHint": True}}
+SEARCH_CODE = {"name": "search_code", "description": "Search code",
+               "inputSchema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}}},
+               "annotations": {"readOnlyHint": True}}
+
+
+def _github(servers, *tools):
+    servers.by["github-mcp-server"] = [PRS, SEARCH_ISSUES, SEARCH_CODE]
+    connectors.add("github", ("/opt/bin/github-mcp-server", *connectors.PRESETS["github"].argv[1:]),
+                   preset="github")
+    connectors.approve("github", list(tools))
+
+
+@pytest.mark.parametrize("query", ["repo:other-org/private token", "token org:acme", "-user:me x",
+                                   'x "repo:a/b"', "OWNER: someone"])
+def test_a_search_query_cannot_name_another_repository(servers, repo, query):
+    """github-mcp-server only prefixes `repo:owner/name`, and GitHub ORs scope
+    qualifiers, so `repo:other/private` in the query reached any repo the token sees."""
+    _github(servers, "search_issues")
+    out = connectors.call(channel(repo[1], github="m1/synq"), "github.search_issues", {"query": query})
+    assert "names a repository" in out and servers.calls == []
+
+
+def test_an_ordinary_issue_search_still_runs_scoped(servers, repo):
+    _github(servers, "search_issues")
+    connectors.call(channel(repo[1], github="m1/synq"), "github.search_issues", {"query": "is:open crash"})
+    assert servers.calls[-1][2] == {"query": "is:open crash", "owner": "m1", "repo": "synq"}
+
+
+def test_a_tool_without_owner_arguments_is_not_handed_them(servers, repo):
+    _github(servers, "search_code")
+    out = connectors.call(channel(repo[1], github="m1/synq"), "github.search_code", {"query": "TODO"})
+    assert "unexpected" not in out and servers.calls[-1][2] == {"query": "TODO"}
+
+
+def test_with_key_adds_the_tavily_key_to_an_existing_preset(servers):
+    connectors.install_preset("tavily")
+    with pytest.raises(connectors.MissingSecret, match="notron connect secret tavily TAVILY_API_KEY"):
+        connectors.install_preset("tavily", with_key=True)
+    assert connectors.get("tavily").secrets == ("TAVILY_API_KEY",)

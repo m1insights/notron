@@ -44,7 +44,11 @@ What a preset adds to an ordinary connector:
   anything the model sends for them is replaced. The git server is also started
   with `--repository` set to that repo, so it refuses any other path itself.
   A project inside a bigger repository (Synqology in `~/Dev`) uses the
-  enclosing repository: `mcp-server-git` will not start on a subfolder.
+  enclosing repository: `mcp-server-git` will not start on a subfolder, so
+  `git_log`/`git_show` there also reach sibling projects' commits.
+- **Issue search stays in the channel's repo.** `github-mcp-server` only
+  prefixes `repo:owner/name`, and GitHub ORs scope qualifiers, so a
+  `search_issues` query holding `repo:`, `org:`, `user:` or `owner:` is refused.
 - **Tavily is vouched read-only by Notron.** `tavily-mcp` marks none of its
   tools, so v1 would refuse them all. Notron vouches for `tavily_search` only,
   and only while the registered command is exactly the pinned one; edit the

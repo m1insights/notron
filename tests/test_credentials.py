@@ -434,3 +434,14 @@ def test_a_read_overlapping_a_change_is_not_held(monkeypatch, tmp_path):
     monkeypatch.setattr(credentials.KeychainStore, '_request', request)
     assert store.get(credentials.NEBIUS_KEY) == b'old'
     assert store.get(credentials.NEBIUS_KEY) == b'new'
+
+
+def test_the_retired_tavily_key_can_still_be_deleted_but_never_stored(_task3_storage):
+    """Web search moved to an MCP server on 2026-10-02; an old key must not be
+    stranded in the Keychain."""
+    from notron import credentials
+    _task3_storage.put('tavily-api-key', b'old')
+    credentials.forget_api_key('tavily-api-key')
+    assert 'tavily-api-key' not in _task3_storage.values
+    with pytest.raises(credentials.CredentialUnavailable):
+        credentials.provision_api_key('tavily-api-key', 'synthetic-key-value')
