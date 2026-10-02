@@ -1,7 +1,8 @@
 """Connectors — MCP servers the user registered, and the tools they approved.
 
 What a connector may do is decided here, in plain code, never by a note or by
-the model. The user types the server's argv at the terminal (`add`), Notron
+the model. The user types the server's argv, or its https URL, at the terminal
+(`add`; a URL may need a `login` first), Notron
 lists its tools (`discover`), and the user approves them one by one
 (`approve`). Nemotron then sees approved tools by name (`menu_for`) and proposes
 arguments; `call` checks the channel grant, the pinned schema and the arguments
@@ -50,6 +51,9 @@ PROPERTY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
 MAX_PROPERTIES = 20
 MAX_DESCRIPTION = 160
 MAX_SHAPE = 600
+#: How a remote server is signed in to. A local server is always "none": its
+#: secrets go into its environment instead.
+AUTHS = ("none", "bearer", "oauth")
 
 CHANGED = "changed since you approved it — run notron connect approve {server}"
 
@@ -76,6 +80,9 @@ class Server:
     #: Kept so the refusal says why, and so a server that changes the tool back
     #: does not quietly regain it: only the user's approval does that.
     changed: tuple[str, ...] = ()
+    #: A remote server: an https URL instead of an argv, never both.
+    url: str = ""
+    auth: str = "none"
 
 
 @dataclass(frozen=True)
@@ -116,13 +123,54 @@ def _damaged() -> ConnectorError:
 def _validate(s: Server) -> Server:
     if not isinstance(s.name, str) or not NAME.match(s.name):
         raise ConnectorError("A connector name is letters, numbers and dashes, up to 40.")
+    if not all(isinstance(v, str) and VAR.match(v) for v in s.secrets):
+        raise ConnectorError("A secret name looks like GITHUB_TOKEN.")
+    if s.url or s.auth != "none":
+        return _validate_remote(s)
     if (not s.argv or not all(isinstance(a, str) and a for a in s.argv)
             or not (BARE.match(s.argv[0]) or Path(s.argv[0]).is_absolute())):
         # A relative path would mean whatever folder she happened to start in.
         raise ConnectorError("The server command must be a bare command or an absolute path.")
-    if not all(isinstance(v, str) and VAR.match(v) for v in s.secrets):
-        raise ConnectorError("A secret name looks like GITHUB_TOKEN.")
     return s
+
+
+def _validate_remote(s: Server) -> Server:
+    """A URL the user typed: https to a public-looking host, nothing in it that
+    could carry a token (no user:password, no query, no fragment). Whether the
+    host really resolves to the public internet is asked on every connect
+    (`mcp_client.public_url`), because that answer can change."""
+    from . import network
+    if s.argv:
+        raise ConnectorError("A connector is a command or a URL, not both.")
+    if (not isinstance(s.url, str) or network._https_parts(s.url) is None
+            or "?" in s.url or "#" in s.url or len(s.url) > 512):
+        raise ConnectorError("The server URL must be https://, with no login, query or #fragment, "
+                             "and not a local or private address.")
+    if s.auth not in AUTHS:
+        raise ConnectorError("Sign-in is none, bearer or oauth.")
+    if s.auth == "bearer" and len(s.secrets) != 1:
+        raise ConnectorError("A bearer connector has exactly one secret: --bearer GITHUB_TOKEN.")
+    if s.auth != "bearer" and s.secrets:
+        raise ConnectorError("Only --bearer sends a secret to a remote server.")
+    return s
+
+
+def target(server: Server):
+    """What `mcp_client` connects to: the argv, or a `Remote` for a URL."""
+    if not server.url:
+        return server.argv
+    store = _oauth_store(server) if server.auth == "oauth" else None
+    return mcp_client.Remote(server.url, server.secrets[0] if server.auth == "bearer" else "", store)
+
+
+def _oauth_store(server: Server) -> "mcp_client.TokenStore":
+    from . import credentials
+
+    def key(item):
+        return f"connector.{server.name}.{item}"
+
+    return mcp_client.TokenStore(lambda item: credentials.get(key(item)),
+                                 lambda item, value: credentials.store_connector_token(key(item), value))
 
 
 def load() -> list[Server]:
@@ -144,9 +192,10 @@ def load() -> list[Server]:
             if not all(isinstance(t.description, str) and isinstance(t.schema, dict)
                        and isinstance(t.digest, str) for t in tools.values()):
                 raise _damaged()
-            out.append(_validate(Server(row["name"], tuple(row["argv"]),
+            out.append(_validate(Server(row["name"], tuple(row.get("argv", ())),
                                         tuple(row.get("secrets", ())), tools,
-                                        tuple(row.get("changed", ())))))
+                                        tuple(row.get("changed", ())),
+                                        row.get("url", ""), row.get("auth", "none"))))
     except (KeyError, TypeError, AttributeError) as exc:
         raise _damaged() from exc
     return out
@@ -161,7 +210,8 @@ def _save(servers: list[Server]) -> None:
         {"name": s.name, "argv": list(s.argv), "secrets": list(s.secrets),
          "tools": {n: {"description": t.description, "schema": t.schema, "digest": t.digest}
                    for n, t in s.tools.items()},
-         "changed": list(s.changed)}
+         "changed": list(s.changed),
+         **({"url": s.url, "auth": s.auth} if s.url else {})}
         for s in servers]})
 
 
@@ -176,10 +226,13 @@ def _require(name: str) -> Server:
     return found
 
 
-def add(name: str, argv, secrets=()) -> Server:
+def add(name: str, argv=(), secrets=(), *, url: str = "", auth: str = "none") -> Server:
     """Register a server. Lists nothing and approves nothing: running it at all
     waits for `discover`, which the user asks for separately."""
-    server = _validate(Server(str(name).strip(), tuple(argv), tuple(secrets)))
+    server = _validate(Server(str(name).strip(), tuple(argv), tuple(secrets), url=url, auth=auth))
+    if server.url and privacy.contains_secret(server.url):
+        raise ConnectorError("That URL holds something that looks like a token. Register it with "
+                             "--bearer VAR instead, then: notron connect secret <server> VAR")
     if any(privacy.contains_secret(a) for a in server.argv):
         # argv is visible to every process on the Mac, lands in shell history,
         # and would sit in connectors.json in the clear. The value is never
@@ -204,7 +257,8 @@ def remove(name: str) -> Server:
     from . import credentials
     existing = load()
     gone = _require(name)
-    for var in gone.secrets:
+    for var in (*gone.secrets, *((mcp_client.TokenStore.TOKENS, mcp_client.TokenStore.CLIENT)
+                                 if gone.auth == "oauth" else ())):
         credentials.forget_api_key(f"connector.{gone.name}.{var}")  # missing is fine
     _save([s for s in existing if s.name != gone.name])
     return gone
@@ -261,7 +315,28 @@ def _offer(tool: dict) -> Offer:
 
 
 def _list(server: Server) -> list[dict]:
-    return mcp_client.list_tools(server.argv, _secrets(server))
+    return mcp_client.list_tools(target(server), _secrets(server))
+
+
+def login(name: str) -> Server:
+    """Sign in to an OAuth server, interactively. The one path that may open a
+    browser; everything else answers "needs sign-in" instead."""
+    server = _require(name)
+    if server.auth != "oauth":
+        raise ConnectorError(f"{server.name} does not use a browser sign-in.")
+    try:
+        mcp_client.login(target(server))
+    except (CredentialUnavailable, StorageError, PolicyError, ConnectorError):
+        raise
+    except mcp_client.Unavailable as exc:
+        raise ConnectorError(f"{server.name}: {exc}") from None
+    except Exception as exc:
+        raise ConnectorError(f"{server.name}: sign-in failed ({type(exc).__name__})") from None
+    return server
+
+
+def _needs_login(server: Server) -> str:
+    return f"{server.name}: needs sign-in — notron connect login {server.name}"
 
 
 def _listed(server: Server) -> list[dict]:
@@ -272,6 +347,8 @@ def _listed(server: Server) -> list[dict]:
         return [t for t in _list(server) if isinstance(t, dict)]
     except (CredentialUnavailable, StorageError, PolicyError, ConnectorError):
         raise
+    except mcp_client.NeedsLogin:
+        raise ConnectorError(_needs_login(server)) from None
     except mcp_client.Unavailable as exc:
         raise ConnectorError(str(exc)) from None
     except Exception as exc:
@@ -413,16 +490,18 @@ def call(channel, name, arguments) -> str:
         if errors:
             return f"{label}: refused — " + "; ".join(errors[:5])
         secrets = _secrets(server)
-        live = next((t for t in mcp_client.list_tools(server.argv, secrets)
+        live = next((t for t in mcp_client.list_tools(target(server), secrets)
                      if isinstance(t, dict) and t.get("name") == tool), None)
         if live is None or digest(live) != approved.digest:
             _disable(server, tool)
             return f"{label}: " + CHANGED.format(server=server.name)
-        return mcp_client.call_tool(server.argv, secrets, tool, arguments)
+        return mcp_client.call_tool(target(server), secrets, tool, arguments)
     except (CredentialUnavailable, StorageError, PolicyError):
         raise
     except MissingSecret as exc:
         return str(exc)
+    except mcp_client.NeedsLogin:
+        return _needs_login(server)
     except (mcp_client.Unavailable, ConnectorError) as exc:
         return f"{label}: {exc}"
     except Exception as exc:
