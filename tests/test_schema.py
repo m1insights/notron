@@ -123,3 +123,22 @@ def test_github_mcp_server_vendor_keys_are_ignored_annotations():
 def test_a_nullable_wrapper_does_not_smuggle_a_nested_container_into_an_array():
     assert not schema.supported({"type": "object", "properties": {"x": {
         "type": "array", "items": {"anyOf": [{"type": "object"}, {"type": "null"}]}}}})
+
+
+def test_vercels_dialect_label_does_not_refuse_its_whole_catalogue():
+    """Live 2026-10-02: all 133 of Vercel's read-only tools were refused for a
+    top-level `$schema` (the zod-to-json-schema dialect URI). It names a draft;
+    it constrains nothing, so it may stand at the top of a tool's arguments."""
+    from notron import schema
+    tool = {"$schema": "http://json-schema.org/draft-07/schema#", "type": "object",
+            "properties": {"teamId": {"type": "string"}}, "additionalProperties": False}
+    assert schema.supported(tool)
+    assert schema.validate(tool, {"teamId": "t1"}) == []
+
+
+def test_a_dialect_label_is_only_a_label():
+    from notron import schema
+    nested = {"type": "object", "properties": {
+        "q": {"$schema": "http://json-schema.org/draft-07/schema#", "type": "string"}}}
+    assert not schema.supported(nested)                       # only at the top
+    assert not schema.supported({"$schema": {"evil": 1}, "type": "object"})  # only a string
