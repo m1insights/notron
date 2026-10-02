@@ -193,25 +193,31 @@ def brief(*, on: datetime | None = None, caller=None) -> str:
                      for e in todays)
 
 
-def week(*, on: datetime | None = None, caller=None, limit: int = MAX_IN_PROMPT) -> str:
-    """The next seven days, grouped by day.
+def empty_week(days: int = 7) -> str:
+    return ("Nothing in the calendar this week." if days == 7
+            else f"Nothing in the calendar in the next {days} days.")
+
+
+def week(*, on: datetime | None = None, caller=None, limit: int = MAX_IN_PROMPT,
+         days: int = 7) -> str:
+    """The next seven days (or `days`, for the MCP bridge), grouped by day.
 
     Grouped by the days each event *occupies*, so a three-day trip appears on
     all three. It used to be listed once, on the day it began, which made the
     two days in the middle look free.
     """
-    all_events = window(days=7, on=on, from_midnight=True, caller=caller)
+    all_events = window(days=days, on=on, from_midnight=True, caller=caller)
     events = all_events[:limit]
     dated = [e for e in events if e.starts_at and e.last_day]
     if not dated:
-        return "Nothing in the calendar this week."
+        return empty_week(days)
 
     # Walk the days the events actually span rather than counting forward from
     # today: what is grouped is whatever the read returned, so this cannot
     # quietly drop an event by disagreeing with the clock. MAX_DAYS is only a
     # stop against one absurd multi-year event turning into a thousand headings.
     first = min(e.starts_at.date() for e in dated)
-    last = min(max(e.last_day for e in dated), first + timedelta(days=MAX_DAYS))
+    last = min(max(e.last_day for e in dated), first + timedelta(days=max(MAX_DAYS, days)))
     lines, day = [], first
     while day <= last:
         on_day = [e for e in dated if e.covers(day)]

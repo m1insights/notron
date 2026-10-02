@@ -239,7 +239,7 @@ def router(state: State, *, brain) -> State:
         # refused here rather than defended against twice downstream.
         state.intent = "question"
         state.note("router", "the model cannot choose file, undo or organize — answering instead")
-    if state.intent == "ignore" and state.trigger in ("notes", "manual", "reminder"):
+    if state.intent == "ignore" and state.trigger in ("notes", "manual", "reminder", "mcp"):
         # Everything that reaches the router today was said *to* her — typed in
         # the Ask note, tagged #notron, or given on the command line. A router
         # that answers "not addressed to the assistant" is wrong by construction,
@@ -545,30 +545,37 @@ def _agenda_text(*, reader=None, checker=None) -> str:
     alone is never enough: ask what she is allowed to see before believing an
     empty answer.
     """
+    day, todo = (reader or _read_day)()
+    unreadable = blind_apps(checker=checker)
+    return (f"## In your calendar today\n"
+            + honest(day, "Calendar", "Nothing in the calendar today.", unreadable)
+            + "\n\n## Still outstanding in Reminders\n"
+            + honest(todo, "Reminders", "Nothing outstanding in Reminders.", unreadable))
+
+
+def blind_apps(*, checker=None) -> dict:
+    """Calendar/Reminders she cannot read now, by app. A check that itself fails
+    counts as blind: an unverified read is not evidence of an empty day."""
     from . import permissions
 
-    day, todo = (reader or _read_day)()
     try:
-        unreadable = {c.app: c for c in permissions.blind(checker=checker)}
+        return {c.app: c for c in permissions.blind(checker=checker)}
     except Exception:
-        unreadable = {app: permissions.Check(app, False, 'access could not be verified', '')
-                      for app in ('Calendar', 'Reminders')}
+        return {app: permissions.Check(app, False, 'access could not be verified', '')
+                for app in ('Calendar', 'Reminders')}
 
-    def section(heading: str, body: str, app: str, empty: str) -> str:
-        gone = unreadable.get(app)
-        if gone is None:
-            return f"## {heading}\n{body}"
-        warning = BLIND.format(app=app, detail=gone.detail)
-        if gone.fix:
-            warning += f" ({gone.fix})"
-        seen = "" if body.strip() in ("", empty) else f"\n{body}"
-        return f"## {heading}\n{warning}{seen}"
 
-    return (section("In your calendar today", day, "Calendar",
-                    "Nothing in the calendar today.")
-            + "\n\n"
-            + section("Still outstanding in Reminders", todo, "Reminders",
-                      "Nothing outstanding in Reminders."))
+def honest(body: str, app: str, empty: str, unreadable: dict) -> str:
+    """`body` as read, or the BLIND warning plus whatever was seen. Shared with
+    `bridge.agenda`, so an MCP client hears the same words the model does."""
+    gone = unreadable.get(app)
+    if gone is None:
+        return body
+    warning = BLIND.format(app=app, detail=gone.detail)
+    if gone.fix:
+        warning += f" ({gone.fix})"
+    seen = "" if body.strip() in ("", empty) else f"\n{body}"
+    return f"{warning}{seen}"
 
 
 def agenda(state: State, *, brain=None, reader=None, checker=None) -> State:
