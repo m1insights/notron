@@ -22,6 +22,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -42,7 +43,13 @@ VAR = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 TOOL = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9_.-]{0,63}$")
 #: A bare command name, resolved on PATH, the way the user typed it.
 BARE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._+-]*$")
+#: Property names are server-written too, and they reach the menu verbatim
+#: (outside the description cap), so they are held to identifier shape, a count
+#: and a rendered length. "IGNORE ALL PRIOR INSTRUCTIONS" is a valid JSON key.
+PROPERTY = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+MAX_PROPERTIES = 20
 MAX_DESCRIPTION = 160
+MAX_SHAPE = 600
 
 CHANGED = "changed since you approved it — run notron connect approve {server}"
 
@@ -86,7 +93,13 @@ def qualified(server: str, tool: str) -> str:
 
 
 def digest(tool: dict) -> str:
-    """Everything the server said about a tool, as one value to compare later."""
+    """Everything the server said about a tool, as one value to compare later.
+
+    It pins what the server *says*, not what it *does*: the listing and the call
+    are separate requests (one process each), and nothing stops a server from
+    behaving differently from its description. The check catches a changed
+    promise, which is why the output stays untrusted data either way.
+    """
     pinned = {k: tool.get(k) for k in ("name", "description", "inputSchema", "annotations")}
     return hashlib.sha256(json.dumps(pinned, sort_keys=True).encode()).hexdigest()
 
@@ -175,8 +188,18 @@ def add(name: str, argv, secrets=()) -> Server:
 
 
 def remove(name: str) -> Server:
+    """Unregister a server and forget its secrets.
+
+    Secrets first: a token left behind would be handed, silently, to a
+    different server later registered under the same name. A locked Keychain
+    raises here and the server stays registered, so the user can retry; it
+    never reads as "nothing to forget".
+    """
+    from . import credentials
     existing = load()
     gone = _require(name)
+    for var in gone.secrets:
+        credentials.forget_api_key(f"connector.{gone.name}.{var}")  # missing is fine
     _save([s for s in existing if s.name != gone.name])
     return gone
 
@@ -206,15 +229,25 @@ def _secrets(server: Server) -> dict[str, str]:
     return out
 
 
+def _safe_names(params: dict) -> bool:
+    props = params.get("properties", {})
+    if len(props) > MAX_PROPERTIES or not all(isinstance(k, str) and PROPERTY.match(k) for k in props):
+        return False
+    return all(_safe_names(v) for v in props.values() if v.get("type") == "object")
+
+
 def _offer(tool: dict) -> Offer:
     name, desc = tool.get("name"), tool.get("description") or ""
     params, notes = tool.get("inputSchema"), tool.get("annotations") or {}
     if not isinstance(name, str) or not TOOL.match(name) or not isinstance(desc, str):
         why = "name Notron cannot show safely"
-    elif notes.get("readOnlyHint") is not True:
+    elif not isinstance(notes, dict) or notes.get("readOnlyHint") is not True:
         why = "changes things: v1 is read-only"
     elif not isinstance(params, dict) or not schema.supported(params):
         why = "arguments too complex for v1"
+    elif not _safe_names(params):
+        # After `supported`, so every nested schema is already a well-formed dict.
+        why = "argument names Notron cannot show safely"
     else:
         why = ""
     return Offer(str(name), str(desc), params if isinstance(params, dict) else {},
@@ -225,17 +258,23 @@ def _list(server: Server) -> list[dict]:
     return mcp_client.list_tools(server.argv, _secrets(server))
 
 
-def discover(name: str) -> list[Offer]:
-    """Ask the server for its tools and say which of them v1 could approve."""
-    server = _require(name)
+def _listed(server: Server) -> list[dict]:
+    """The server's tools, or plain words for the CLI. A raw exception (an
+    ExceptionGroup, an OSError carrying the server's own text) never reaches the
+    terminal: that text is the server's, and can echo what it was handed."""
     try:
-        return [_offer(t) for t in _list(server)]
+        return [t for t in _list(server) if isinstance(t, dict)]
     except (CredentialUnavailable, StorageError, PolicyError, ConnectorError):
         raise
     except mcp_client.Unavailable as exc:
         raise ConnectorError(str(exc)) from None
     except Exception as exc:
         raise ConnectorError(f"{server.name}: could not list tools ({type(exc).__name__})") from None
+
+
+def discover(name: str) -> list[Offer]:
+    """Ask the server for its tools and say which of them v1 could approve."""
+    return [_offer(t) for t in _listed(_require(name))]
 
 
 def approve(name: str, tool_names) -> list[str]:
@@ -246,7 +285,7 @@ def approve(name: str, tool_names) -> list[str]:
     """
     server = _require(name)
     listed = {}
-    for t in [t for t in _list(server) if isinstance(t, dict)]:
+    for t in _listed(server):
         listed.setdefault(t.get("name"), t)
     wanted = list(dict.fromkeys(tool_names))
     for n in wanted:
@@ -272,8 +311,17 @@ def _granted(channel) -> list[Server]:
 
 def _shape(params: dict) -> str:
     required = set(params.get("required", ()))
-    return json.dumps({k: f"{v.get('type', 'any')}{' (required)' if k in required else ''}"
+    text = json.dumps({k: f"{v.get('type', 'any')}{' (required)' if k in required else ''}"
                        for k, v in params.get("properties", {}).items()})
+    return text if len(text) <= MAX_SHAPE else text[:MAX_SHAPE] + " …"
+
+
+def _flat(text: str) -> str:
+    """One line, no invisible characters. Zero-width and bidi controls (Unicode
+    category Cf) let a description read differently to the model than to a
+    person reviewing the approval."""
+    visible = "".join(c for c in text if unicodedata.category(c) != "Cf")
+    return " ".join(visible.split())[:MAX_DESCRIPTION]
 
 
 def menu_for(channel) -> list[str]:
@@ -289,7 +337,7 @@ def menu_for(channel) -> list[str]:
         for t in s.tools.values():
             if t.name in s.changed:
                 continue
-            desc = " ".join(t.description.split())[:MAX_DESCRIPTION]
+            desc = _flat(t.description)
             lines.append(f"- {qualified(s.name, t.name)}: {desc} args: {_shape(t.schema)}")
     return lines
 
@@ -344,6 +392,11 @@ def call(channel, name, arguments) -> str:
             arguments = json.loads(safe)
         except ValueError:
             return f"{label}: blocked: arguments looked like a credential"
+        # Redaction can turn a valid value into one the schema refuses (an enum
+        # member, a minimum length); what is sent must pass the same check.
+        errors = schema.validate(approved.schema, arguments)
+        if errors:
+            return f"{label}: refused — " + "; ".join(errors[:5])
         secrets = _secrets(server)
         live = next((t for t in mcp_client.list_tools(server.argv, secrets)
                      if isinstance(t, dict) and t.get("name") == tool), None)
