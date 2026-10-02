@@ -57,10 +57,16 @@ def result_text(blocks: list[dict], *, is_error: bool) -> str:
 
     The omitted markers go after the cap, never inside it: a long text block must
     not push "[image omitted]" off the end, or the model reads the result as if it
-    had seen everything the server sent (CLAUDE.md invariant 12).
+    had seen everything the server sent (CLAUDE.md invariant 12). They are counted
+    per type, not listed one by one, so 5,000 images stay one short line.
     """
     text = "\n".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
-    omitted = [f"[{b.get('type') or 'content'} omitted]" for b in blocks if b.get("type") != "text"]
+    counts: dict[str, int] = {}
+    for b in blocks:
+        if b.get("type") != "text":
+            kind = str(b.get("type") or "content")[:20]
+            counts[kind] = counts.get(kind, 0) + 1
+    omitted = [f"[{n} {kind} omitted]" for kind, n in counts.items()]
     if is_error:
         text = "error: " + (text or "(no message)")[:300]
     if len(text) > MAX_OUTPUT:
@@ -84,8 +90,11 @@ def _run(argv, secrets, work):
     params = StdioServerParameters(command=argv[0], args=list(argv[1:]), env=child_env(secrets))
 
     async def main():
-        with anyio.fail_after(TIMEOUT):
-            async with stdio_client(params) as (r, w), ClientSession(r, w) as session:
+        # A third-party server's stderr can echo the token it was handed; it
+        # never reaches Notron's terminal or logs.
+        with open(os.devnull, "w") as quiet, anyio.fail_after(TIMEOUT):
+            async with stdio_client(params, errlog=quiet) as (r, w), \
+                    ClientSession(r, w) as session:
                 await session.initialize()
                 return await work(session)
     return anyio.run(main)
@@ -93,18 +102,22 @@ def _run(argv, secrets, work):
 
 def list_tools(argv, secrets) -> list[dict]:
     _require_sdk()
+
     async def work(session):
         tools, cursor = [], None
         for _ in range(MAX_PAGES):
             if cursor is None:
                 res = await session.list_tools()
             else:
-                from mcp_types import PaginatedRequestParams
+                from mcp.types import PaginatedRequestParams
                 res = await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
             tools += res.tools
             cursor = res.next_cursor
             if not cursor:
                 break
+        else:
+            # A partial list must not reach the approval screen looking complete.
+            raise Unavailable("This server lists more tools than Notron reads, so none were shown.")
         return [{"name": t.name, "description": t.description or "",
                  "inputSchema": t.input_schema or {"type": "object"},
                  # by_alias: `readOnlyHint`, the name the approval digest pins.
@@ -116,6 +129,7 @@ def list_tools(argv, secrets) -> list[dict]:
 
 def call_tool(argv, secrets, name: str, arguments: dict) -> str:
     _require_sdk()
+
     async def work(session):
         res = await session.call_tool(name, arguments)
         blocks = [c.model_dump() for c in res.content]

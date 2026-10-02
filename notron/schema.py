@@ -19,9 +19,40 @@ MAX_STRING = 2000
 MAX_ITEMS = 50
 
 
+BOUNDS = ("minimum", "maximum")
+LENGTHS = ("minLength", "maxLength", "maxItems")  # counts: whole and not negative
+
+
+def _number(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _well_formed(s: dict) -> bool:
+    """Keyword values of the shape `validate` relies on.
+
+    Checking names alone let `{"minimum": "1"}` or `{"required": "ab"}` through
+    approval and then crash, or worse quietly mis-check, at call time.
+    """
+    if not isinstance(s.get("type"), str):
+        return False
+    if any(k in s and not _number(s[k]) for k in BOUNDS):
+        return False
+    if any(k in s and not (_number(s[k]) and isinstance(s[k], int) and s[k] >= 0)
+           for k in LENGTHS):
+        return False
+    if "required" in s and not (isinstance(s["required"], list)
+                                and all(isinstance(n, str) for n in s["required"])):
+        return False
+    if "enum" in s and not isinstance(s["enum"], list):
+        return False
+    if "properties" in s and not isinstance(s["properties"], dict):
+        return False
+    return True
+
+
 def supported(s: dict, *, top: bool = True) -> bool:
     """True when every keyword in `s` is one this module actually enforces."""
-    if not isinstance(s, dict) or set(s) - KEYWORDS:
+    if not isinstance(s, dict) or set(s) - KEYWORDS or not _well_formed(s):
         return False
     if top and s.get("type") != "object":
         return False
@@ -29,8 +60,7 @@ def supported(s: dict, *, top: bool = True) -> bool:
     if t not in TYPES:
         return False
     if t == "object":
-        props = s.get("properties", {})
-        return isinstance(props, dict) and all(supported(v, top=False) for v in props.values())
+        return all(supported(v, top=False) for v in s.get("properties", {}).values())
     if t == "array":
         # Arrays hold scalars only in v1: nested containers are refused, not half-checked.
         item = s.get("items", {"type": "string"})

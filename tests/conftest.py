@@ -434,6 +434,9 @@ def _mcp_servers_require_fakes(monkeypatch):
     def blocked(*args, **kwargs):
         raise AssertionError('MCP servers require a fake in unit tests')
 
+    # Kept for the one test that drives the real `_run` with the SDK's transport
+    # faked underneath it.
+    blocked.original = mcp_client._run
     monkeypatch.setattr(mcp_client, '_run', blocked)
 
 

@@ -1,3 +1,5 @@
+import pytest
+
 from notron import schema
 
 S = {"type": "object", "additionalProperties": False, "required": ["q"],
@@ -51,3 +53,24 @@ def test_nested_containers_are_not_approvable():
 
 def test_top_level_must_be_an_object_of_arguments():
     assert schema.validate(S, ["q"]) == ["arguments: wrong type"]
+
+
+@pytest.mark.parametrize("bad", [
+    {"type": ["string", "null"]},                 # a type list: unhashable, was a TypeError
+    {"type": "integer", "minimum": "1"},          # approved, then validate() raised
+    {"type": "integer", "maximum": True},         # bool is not a number here either
+    {"type": "string", "maxLength": None},
+    {"type": "string", "minLength": 1.5},
+    {"type": "array", "maxItems": "5"},
+    {"type": "string", "enum": "ab"},
+    {"type": "object", "properties": []},
+])
+def test_keyword_values_must_have_the_right_shape(bad):
+    assert not schema.supported({"type": "object", "properties": {"x": bad}})
+
+
+def test_required_must_be_a_list_of_names():
+    # A string would be iterated a character at a time.
+    assert not schema.supported({"type": "object", "required": "ab", "properties": {}})
+    assert not schema.supported({"type": "object", "required": [1], "properties": {}})
+    assert not schema.supported({"type": ["object"], "properties": {}})
