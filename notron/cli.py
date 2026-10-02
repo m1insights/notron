@@ -296,7 +296,7 @@ def cmd_connect(args):
             server = connectors.get(args.name)
             if server is None:
                 raise connectors.ConnectorError(f"No connector called {args.name}.")
-            unlock(server)
+            unlock(server)  # before any grant changes: a locked Keychain changes nothing
             # Revoke the grants first: a crash after this leaves a registered
             # server no channel uses, which is inert, never a grant to a name a
             # different server could later be registered under.
@@ -308,6 +308,11 @@ def cmd_connect(args):
     except (connectors.ConnectorError, channels.ChannelError) as problem:
         print(f"  {problem}", file=sys.stderr)
         raise SystemExit(1)
+    except CredentialUnavailable as problem:
+        # A person is at the terminal: say why, rather than main()'s generic
+        # pause line. `remove` unlocks before touching any grant, so this
+        # leaves the grants and the registry exactly as they were.
+        _setup_failure(problem)
 
 
 def cmd_tasks(args):

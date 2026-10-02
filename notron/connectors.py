@@ -180,6 +180,12 @@ def add(name: str, argv, secrets=()) -> Server:
     """Register a server. Lists nothing and approves nothing: running it at all
     waits for `discover`, which the user asks for separately."""
     server = _validate(Server(str(name).strip(), tuple(argv), tuple(secrets)))
+    if any(privacy.contains_secret(a) for a in server.argv):
+        # argv is visible to every process on the Mac, lands in shell history,
+        # and would sit in connectors.json in the clear. The value is never
+        # echoed back: this message is printed to a terminal.
+        raise ConnectorError("That command holds something that looks like a token. Register it with "
+                             "--secret VAR instead, then: notron connect secret <server> VAR")
     existing = load()
     if any(s.name.lower() == server.name.lower() for s in existing):
         raise ConnectorError(f"There is already a connector called {server.name}.")

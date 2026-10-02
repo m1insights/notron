@@ -443,7 +443,8 @@ def project(state: State, *, brain) -> State:
     # One budget for both, built-in tools first: they are local and cheap.
     room = max(0, MAX_TOOLS - len(chosen))
     # Named in the trace: a pick that silently never ran reads as never picked.
-    over = wanted[MAX_TOOLS:] + list(dict.fromkeys(tool for tool, _ in calls[room:]))
+    # Every dropped entry, once each: two dropped calls to one tool are two.
+    over = wanted[MAX_TOOLS:] + [tool for tool, _ in calls[room:]]
     calls = calls[:room]
     refused += refused_calls
     state.needs_web = out.get("web") is True and "research" in channel.allow

@@ -241,3 +241,64 @@ def test_connect_failures_are_one_plain_line_and_a_nonzero_exit(capsys):
 
 def test_connect_is_config_not_a_notes_write():
     assert 'connect' not in cli.WRITES
+
+
+def test_connect_add_refuses_a_token_typed_into_the_command(capsys):
+    """argv is visible to every process on the Mac and lands in shell history;
+    and it would be stored in connectors.json in the clear."""
+    import pytest
+    from notron import connectors
+    token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789'
+    with pytest.raises(SystemExit) as stop:
+        cli.main(['connect', 'add', 'GitHub', '--', 'npx', 'server-github', f'--token={token}'])
+    err = capsys.readouterr().err
+    assert stop.value.code == 1 and '--secret' in err and 'connect secret' in err
+    assert token not in err and connectors.load() == []
+
+
+def test_a_server_without_secrets_never_opens_the_keychain(monkeypatch, capsys):
+    """Until P06, startup pauses; a server that needs no token must still work."""
+    from notron import credentials
+    _fake_server(monkeypatch)
+    monkeypatch.setattr(credentials, '_provider', None)
+    monkeypatch.setattr(credentials, 'startup', lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError('opened the Keychain')))
+    cli.main(['connect', 'add', 'time', '--', 'uvx', 'mcp-server-time'])
+    cli.main(['connect', 'tools', 'time'])
+    cli.main(['connect', 'approve', 'time', 'get_current_time'])
+    cli.main(['connect', 'list'])
+    cli.main(['connect', 'list', '--json'])
+    cli.main(['connect', 'remove', 'time'])
+    assert 'get_current_time' in capsys.readouterr().out
+
+
+def test_a_secret_that_cannot_be_forgotten_leaves_the_server_registered(monkeypatch, capsys):
+    """A token left behind would be handed to the next server registered
+    under this name, so a failed forget must not read as removed."""
+    import pytest
+    from notron import connectors, credentials
+    cli.main(['connect', 'add', 'GitHub', '--secret', 'GITHUB_TOKEN', '--', 'npx', 'server-github'])
+
+    def locked(name):
+        raise credentials.CredentialUnavailable('Keychain unavailable; protected processing paused.')
+    monkeypatch.setattr(credentials, 'forget_api_key', locked)
+    with pytest.raises(SystemExit) as stop:
+        cli.main(['connect', 'remove', 'github'])
+    assert stop.value.code == 2 and 'Keychain unavailable' in capsys.readouterr().err
+    assert connectors.get('github') is not None
+
+
+def test_a_locked_keychain_stops_remove_before_any_grant_is_touched(monkeypatch, capsys):
+    import pytest
+    from notron import channels, connectors, credentials
+    cli.main(['connect', 'add', 'GitHub', '--secret', 'GITHUB_TOKEN', '--', 'npx', 'server-github'])
+    channels._save([channels.Channel('Synqology', 'chan-0', connectors=('GitHub',))])
+    monkeypatch.setattr(credentials, '_provider', None)
+
+    def paused(*a, **k):
+        raise credentials.CredentialUnavailable('Keychain unavailable; protected processing paused.')
+    monkeypatch.setattr(credentials, 'startup', paused)
+    with pytest.raises(SystemExit) as stop:
+        cli.main(['connect', 'remove', 'github'])
+    assert stop.value.code == 2 and 'Keychain unavailable' in capsys.readouterr().err
+    assert channels.load()[0].connectors == ('GitHub',) and connectors.get('github') is not None

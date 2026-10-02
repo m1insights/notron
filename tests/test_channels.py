@@ -448,6 +448,10 @@ def test_tools_dropped_by_the_budget_are_traced_not_silent(monkeypatch):
     state = nodes.project(_channel_state(), brain=Decides({
         "tools": five, "calls": [{"tool": SEARCH, "arguments": {"q": "a"}}]}))
     assert any(f"over budget ['git_files', '{SEARCH}']" in t for t in state.trace)
+    # Each dropped call is listed once per call, so the count is exact.
+    state = nodes.project(_channel_state(), brain=Decides({"tools": five[:4], "calls": [
+        {"tool": SEARCH, "arguments": {"q": "a"}}, {"tool": SEARCH, "arguments": {"q": "b"}}]}))
+    assert any(f"over budget ['{SEARCH}', '{SEARCH}']" in t for t in state.trace)
     state = nodes.project(_channel_state(), brain=Decides({"tools": five[:2]}))
     assert not any("over budget" in t for t in state.trace)
 
