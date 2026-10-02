@@ -191,6 +191,125 @@ def _add_channel(args):
     print("  Or type any line into it. She answers underneath, while `notron listen` runs.\n")
 
 
+def _connect_args(rest, secrets):
+    """`connect add NAME [--secret VAR ...] -- argv...`: argparse hands back
+    everything after NAME, so declared secrets are taken off the front here and
+    the server's argv after `--` is kept exactly as typed."""
+    rest, secrets = list(rest), list(secrets or ())
+    while len(rest) >= 2 and rest[0] == '--secret':
+        secrets.append(rest[1])
+        rest = rest[2:]
+    if rest and rest[0] == '--':
+        rest = rest[1:]
+    return tuple(rest), tuple(secrets)
+
+
+def cmd_connect(args):
+    """MCP servers Notron may use: register, look, approve, grant, remove.
+
+    Every step is the user's, at the terminal. Nothing here touches Notes, and
+    a server's own text (tool names, descriptions) is flattened before it is
+    printed, so a hostile description cannot redraw the terminal.
+    """
+    import json as _json
+    from . import channels, connectors, credentials
+
+    def unlock(server):
+        # Only a server with secrets needs the Keychain; one without never asks.
+        if server is not None and server.secrets and credentials._provider is None:
+            credentials.startup()
+
+    try:
+        if args.action == 'add':
+            argv, secrets = _connect_args(args.argv, args.secret)
+            if not argv:
+                raise connectors.ConnectorError(
+                    "Which command starts the server? e.g. notron connect add time -- uvx mcp-server-time")
+            server = connectors.add(args.name, argv, secrets)
+            print(f"\n  Registered {server.name}: {' '.join(server.argv)}")
+            for var in server.secrets:
+                print(f"  needs {var}: notron connect secret {server.name} {var}")
+            print(f"  Next: notron connect tools {server.name}\n")
+        elif args.action == 'tools':
+            unlock(connectors.get(args.name))
+            offers = connectors.discover(args.name)
+            print()
+            for o in offers:
+                read_only = "read-only" if o.annotations.get("readOnlyHint") is True else "changes things"
+                verdict = "approvable" if o.approvable else f"not approvable: {o.why}"
+                print(f"  {connectors._flat(o.name)[:64]} · {read_only} · {verdict}")
+                if o.description:
+                    print(f"      {connectors._flat(o.description)}")
+            if not offers:
+                print("  The server offered no tools.")
+            print()
+        elif args.action == 'approve':
+            if not args.tools:
+                raise connectors.ConnectorError(f"Which tools? notron connect approve {args.name} <tool> ...")
+            unlock(connectors.get(args.name))
+            done = connectors.approve(args.name, args.tools)
+            server = connectors.get(args.name)
+            print(f"\n  Approved {', '.join(connectors.qualified(server.name, t) for t in done)}.")
+            print(f"  Grant it to a channel: notron channel set <project> --connect {server.name}\n")
+        elif args.action == 'secret':
+            server = connectors.get(args.name)
+            if server is None:
+                raise connectors.ConnectorError(f"No connector called {args.name}.")
+            if args.var not in server.secrets:
+                declared = ", ".join(server.secrets) or "none"
+                raise connectors.ConnectorError(
+                    f"{server.name} was not registered with {args.var} (it has: {declared}).")
+            if credentials._provider is None:
+                credentials.startup()
+            try:
+                # The registered casing: `connectors` asks for exactly this name.
+                credentials.provision_api_key(f"connector.{server.name}.{args.var}", _read_secret(args.var))
+            except CredentialUnavailable as problem:
+                _setup_failure(problem)
+            print(f"Stored {args.var} for {server.name}.")
+        elif args.action == 'list':
+            found = connectors.load()
+            granted = {}
+            for ch in channels.load():
+                for name in ch.connectors:
+                    granted.setdefault(name.lower(), []).append(ch.name)
+            rows = [dict(name=s.name, argv=list(s.argv), secrets=list(s.secrets),
+                         tools=sorted(s.tools), changed=list(s.changed),
+                         channels=granted.get(s.name.lower(), [])) for s in found]
+            if args.json:
+                print(_json.dumps(rows, indent=2))
+                return
+            if not rows:
+                print("\n  No connectors yet. Try: notron connect add time -- uvx mcp-server-time\n")
+                return
+            print()
+            for r in rows:
+                print(f"  {r['name']:16} {' '.join(r['argv'])}")
+                print(f"  {'':16} approved: {', '.join(r['tools']) or 'none'}")
+                if r['changed']:
+                    print(f"  {'':16} changed since approval: {', '.join(r['changed'])}")
+                if r['secrets']:
+                    print(f"  {'':16} secrets: {', '.join(r['secrets'])}")
+                print(f"  {'':16} channels: {', '.join(r['channels']) or 'none'}")
+            print()
+        elif args.action == 'remove':
+            server = connectors.get(args.name)
+            if server is None:
+                raise connectors.ConnectorError(f"No connector called {args.name}.")
+            unlock(server)
+            # Revoke the grants first: a crash after this leaves a registered
+            # server no channel uses, which is inert, never a grant to a name a
+            # different server could later be registered under.
+            for ch in channels.load():
+                if any(c.lower() == server.name.lower() for c in ch.connectors):
+                    channels.update(ch.name, disconnect=(server.name,))
+            gone = connectors.remove(server.name)
+            print(f"\n  Removed {gone.name}, its grants and its secrets.\n")
+    except (connectors.ConnectorError, channels.ChannelError) as problem:
+        print(f"  {problem}", file=sys.stderr)
+        raise SystemExit(1)
+
+
 def cmd_tasks(args):
     """Hand-off tasks: what Nemotron briefed, what ran, what came back."""
     import json as _json
@@ -937,6 +1056,28 @@ def main(argv=None):
                     help='let Nemotron use these registered connectors (MCP servers) here, e.g. github,linear')
     ch.add_argument('--disconnect', default=None, help='stop using these connectors here')
     ch.set_defaults(fn=cmd_channel)
+
+    cn = sub.add_parser('connect', help='MCP servers Notron may use in a channel: add, approve, remove')
+    cs = cn.add_subparsers(dest='action', required=True)
+    c = cs.add_parser('add', help='register a server: notron connect add time -- uvx mcp-server-time')
+    c.add_argument('name')
+    c.add_argument('--secret', action='append', default=[],
+                   help='an environment variable the server needs, e.g. GITHUB_TOKEN (repeatable); '
+                        'set its value with `notron connect secret`')
+    c.add_argument('argv', nargs=argparse.REMAINDER, help='after --: the command that starts the server')
+    c = cs.add_parser('tools', help='what the server offers, and what v1 could approve')
+    c.add_argument('name')
+    c = cs.add_parser('approve', help='approve read-only tools, one by one')
+    c.add_argument('name')
+    c.add_argument('tools', nargs='*')
+    c = cs.add_parser('secret', help="store a server's secret; the value is read from stdin, never argv")
+    c.add_argument('name')
+    c.add_argument('var')
+    c = cs.add_parser('list', help='servers, approved tools, and the channels using them')
+    c.add_argument('--json', action='store_true')
+    c = cs.add_parser('remove', help='unregister a server, ungrant it everywhere, forget its secrets')
+    c.add_argument('name')
+    cn.set_defaults(fn=cmd_connect)
 
     tk = sub.add_parser('tasks', help='hand-off tasks: briefed by Nemotron, run by your coding agent')
     tk.add_argument('action', nargs='?', choices=['list', 'show', 'approve', 'cancel', 'fence', 'setup'], default='list')
