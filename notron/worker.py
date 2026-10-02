@@ -15,6 +15,9 @@ from .health import HealthStore, Heartbeat, WorkerLock
 from .securestore import EncryptedStore, StorageError
 
 KINDS = {'ask', 'plan', 'file', 'morning', 'index', 'care', 'reflect', 'mail'}
+#: An answer queued for a producer that waits on it (`bridge.ask`) and gave up,
+#: or died, before collecting it. Encrypted like the job, and never kept longer.
+ANSWER_TTL = 3600
 
 
 class QueuedPayloadError(StorageError):
@@ -122,7 +125,9 @@ class Queue:
             text = (' '.join(args['request']) if kind == 'ask' else
                     ('plan my week' if args.get('week') else 'plan my day') if kind == 'plan' else
                     'plan my day' if kind == 'morning' else 'file my brain dump')
-            envelope = requests.create(text, request_id=args.get('request_id'), source='morning' if kind == 'morning' else 'cli')
+            source = ('morning' if kind == 'morning' else
+                      'mcp' if kind == 'ask' and args.get('source') == 'mcp' else 'cli')
+            envelope = requests.create(text, request_id=args.get('request_id'), source=source)
         job_id = (sha256((kind + ':' + args['request_id']).encode()).hexdigest()
                   if args.get('request_id') else uuid4().hex)
         value = {'kind': kind, 'args': args, 'envelope': json.loads(envelope.encode()) if envelope else None}
@@ -168,6 +173,24 @@ class Queue:
             from .persistence import durable_unlink
             durable_unlink(self._payloads().root / (job['payload_ref'] + '.enc'))
 
+    def save_answer(self, job_id, result):
+        """Kept for a producer waiting on this job: the listener's stdout goes
+        nowhere, so its return value is the only answer there is."""
+        value = {'answer': result.get('answer'), 'results': [str(r) for r in result.get('results', [])]}
+        self._payloads().write('answer-' + job_id, json.dumps(value).encode())
+
+    def take_answer(self, job_id):
+        """The answer once, then gone: a waiting producer collects it and no
+        copy of note-derived text outlives the call."""
+        from .persistence import durable_unlink
+        store = self._payloads()
+        path = store.root / f'answer-{job_id}.enc'
+        if not path.exists():
+            return None
+        value = json.loads(store.read('answer-' + job_id))
+        durable_unlink(path)
+        return value
+
     def recover_interrupted(self):
         require_owner()
         from . import recovery
@@ -200,6 +223,9 @@ class Queue:
                 raise StorageError('Unsafe worker payload path.')
             for path in root.glob('job-*.enc'):
                 if path.stem not in refs:
+                    durable_unlink(path)
+            for path in root.glob('answer-*.enc'):
+                if time.time() - path.stat().st_mtime > ANSWER_TTL:
                     durable_unlink(path)
             db.commit()
 
@@ -254,6 +280,9 @@ def execute(job, fn=None):
         record = requests.current().get(job['request_id'])
         if record and record.status != 'completed':
             status = 'needs_review'
+    if getattr(args, 'reply', False) and isinstance(result, dict) and status == 'completed':
+        # Saved before finish: a producer that sees 'completed' finds it there.
+        queue.save_answer(job['job_id'], result)
     queue.finish(job['job_id'], status)
     if status == 'completed':
         queue.health.success()

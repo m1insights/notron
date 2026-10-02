@@ -20,6 +20,7 @@ so Nemotron still decides and the Guard still authorizes.
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
 from . import library, markup, notes, policy, workspace
@@ -149,14 +150,18 @@ def agenda(days: int = 7, *, checker=None) -> dict:
     }
 
 
-#: `graph.run_request` waits for the worker lock, and the listener holds that
-#: lock for its whole life, so without this check ask_notron hangs for as long
-#: as the listener runs. One executor at a time is the rule; a busy answer is
-#: honest, a hang is not.
-BUSY = ("Notron's listener is running, and it is the only thing allowed to act for you "
-        "right now. Ask in 📥 Ask Notron instead, or stop the listener (`notron listen --off`) "
-        "to ask here.")
-
+#: How long an ask waits for the running listener to get to it. A listener
+#: tick can spend 30–74 s on Notes (measured 2026-09-23) before it drains the
+#: queue, and Super then thinks for a few seconds more.
+LISTENER_WAIT = 180
+LISTENER_POLL = 0.5
+STILL_WORKING = ("Notron's listener has your request but has not finished it yet. It will "
+                 "still run; anything she writes lands in your notes and in 📊 Log. Ask again "
+                 "in a minute for the answer here.")
+NEEDS_REVIEW = ("Notron's listener could not finish this request safely, so it is waiting for "
+                "you to review it (`notron review`).")
+PAUSED_QUEUED = ("Notron was paused while your request waited for her. It is kept, and runs "
+                 "when you resume her in the Notron app.")
 
 PAUSED = ("Notron is paused, so she will not act from here either. "
           "Resume her in the Notron app, then ask again.")
@@ -197,43 +202,88 @@ class _Paused(Exception):
     pass
 
 
-def ask(request: str, *, writes: bool, brain, after=None) -> dict:
+def _ask_listener(request: str, *, writes: bool, sleep, wait: float) -> dict:
+    """Hand the request to the listener that holds the worker lock, and wait for
+    its answer. One executor at a time is the rule: this process never runs the
+    graph beside it. The listener runs the same `notron ask` a terminal does,
+    with its own startup checks and receipts, so neither is repeated here."""
+    from . import credentials, worker
+    from .health import HealthStore
+    if HealthStore().paused:
+        return {"error": PAUSED}
+    if credentials._provider is None:
+        credentials.startup()
+    queue = worker.Queue()
+    job_id = queue.enqueue("ask", {"request": [request], "dry_run": not writes,
+                                   "reply": True, "source": "mcp"})["job_id"]
+    deadline = time.monotonic() + wait
+    while True:
+        # The answer before the status: execute saves it, then marks the job
+        # completed, so a completed job is never read ahead of its answer.
+        answer = queue.take_answer(job_id)
+        if answer is not None:
+            return {**answer, "dry_run": not writes}
+        job = queue.get(job_id)
+        if job is None or job["status"] in ("needs_review", "completed"):
+            return {"error": NEEDS_REVIEW}
+        if job["status"] == "queued" and HealthStore().paused:
+            return {"error": PAUSED_QUEUED}
+        if time.monotonic() >= deadline:
+            return {"error": STILL_WORKING}
+        sleep(LISTENER_POLL)
+
+
+def _ask_here(request: str, *, writes: bool, brain, after) -> dict:
+    """This process holds the worker lock: run the graph directly."""
+    from . import graph, requests
+    from .health import HealthStore, Heartbeat
+    from .policy import PolicyError
+    # The user's pause binds every surface, a dry run included: submit
+    # refuses to execute anything while paused.
+    if HealthStore().paused:
+        return {"error": PAUSED}
+    if not writes:
+        envelope = requests.create(request, source="mcp")
+        state = graph.run_request(envelope, brain=brain, dry_run=True, trigger="mcp")
+    else:
+        # Held across the run, as submit holds it across the job: health
+        # must not read "stopped" while a real write is in flight.
+        with Heartbeat(HealthStore()):
+            try:
+                _prepare_to_write()
+            except _Paused:
+                return {"error": PAUSED}
+            except Exception as exc:  # noqa: BLE001 - recorded by worker.failure
+                # PolicyError texts are fixed strings; anything else is named
+                # by type only, since its message could carry a note title.
+                why = str(exc) if isinstance(exc, PolicyError) else type(exc).__name__
+                return {"error": f"{NOT_READY}: {why}"}
+            envelope = requests.create(request, source="mcp")
+            try:
+                state = graph.run_request(envelope, brain=brain, dry_run=False, trigger="mcp")
+            finally:
+                if after is not None:
+                    after()
+    return {"answer": state.answer, "results": list(state.results), "dry_run": not writes}
+
+
+def ask(request: str, *, writes: bool, brain, after=None, sleep=time.sleep,
+        wait: float = LISTENER_WAIT) -> dict:
     """Run the normal graph on a request from an MCP client. Without `writes`
     it is a dry run: Nemotron answers, nothing is written. `after` runs under
     the same lock once a real run finishes, even one that raised (the CLI's
-    receipt delivery)."""
-    from . import graph, requests
-    from .health import HealthStore, Heartbeat, WorkerLock
-    from .policy import PolicyError
+    receipt delivery).
+
+    `graph.run_request` waits for the worker lock, and the listener holds it for
+    its whole life. Running here would hang; replying "busy" refused every
+    request in normal use. So while the listener runs, the request is queued
+    for it and the listener's answer comes back."""
+    from .health import WorkerLock
     if not isinstance(request, str) or not request.strip():
         return {"error": "empty request"}
     with WorkerLock() as lock:
-        if not lock.acquired:
-            return {"error": BUSY}
-        # The user's pause binds every surface, a dry run included: submit
-        # refuses to execute anything while paused.
-        if HealthStore().paused:
-            return {"error": PAUSED}
-        if not writes:
-            envelope = requests.create(request, source="mcp")
-            state = graph.run_request(envelope, brain=brain, dry_run=True, trigger="mcp")
-        else:
-            # Held across the run, as submit holds it across the job: health
-            # must not read "stopped" while a real write is in flight.
-            with Heartbeat(HealthStore()):
-                try:
-                    _prepare_to_write()
-                except _Paused:
-                    return {"error": PAUSED}
-                except Exception as exc:  # noqa: BLE001 - recorded by worker.failure
-                    # PolicyError texts are fixed strings; anything else is named
-                    # by type only, since its message could carry a note title.
-                    why = str(exc) if isinstance(exc, PolicyError) else type(exc).__name__
-                    return {"error": f"{NOT_READY}: {why}"}
-                envelope = requests.create(request, source="mcp")
-                try:
-                    state = graph.run_request(envelope, brain=brain, dry_run=False, trigger="mcp")
-                finally:
-                    if after is not None:
-                        after()
-    return {"answer": state.answer, "results": list(state.results), "dry_run": not writes}
+        if lock.acquired:
+            return _ask_here(request, writes=writes, brain=brain, after=after)
+    # Waited on after the failed attempt is released: the listener needs
+    # nothing from this process while it works.
+    return _ask_listener(request, writes=writes, sleep=sleep, wait=wait)

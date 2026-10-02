@@ -291,31 +291,145 @@ def test_a_note_after_the_start_from_cutoff_is_readable_not_just_listed():
     assert out.get("error") is None and "Parking Garages" in out["text"]
 
 
-def test_ask_while_the_listener_runs_says_busy_instead_of_hanging(monkeypatch):
-    """run_request blocks on the worker lock the listener holds for its whole
-    life. From an MCP client that was an ask_notron call that never returned."""
-    from notron.health import WorkerLock
+def _listener(serve):
+    """A stand-in listener: holds the worker lock on another thread and runs
+    `serve()` while it holds it, as `Watcher.tick` drains the queue."""
     import threading
-
-    def never(*a, **kw):
-        raise AssertionError("ran a second executor beside the listener")
-    monkeypatch.setattr(graph, "run_request", never)
+    from notron.health import WorkerLock
     held, done = threading.Event(), threading.Event()
 
-    def listener():
+    def run():
         with WorkerLock() as lock:
             assert lock.acquired
             held.set()
-            done.wait(5)
-    t = threading.Thread(target=listener)
+            while not done.wait(0.01):
+                serve()
+    t = threading.Thread(target=run, daemon=True)
     t.start()
     held.wait(5)
+    return done, t
+
+
+def _never_beside_the_listener(monkeypatch):
+    def never(*a, **kw):
+        raise AssertionError("ran a second executor beside the listener")
+    monkeypatch.setattr(graph, "run_request", never)
+    monkeypatch.setattr(bridge, "_prepare_to_write", never)
+
+
+def test_ask_while_the_listener_runs_is_answered_by_the_listener(monkeypatch):
+    """ask_notron replied "busy" whenever the listener was running, which is
+    always: the one surface built for MCP clients refused every request in
+    normal use. It now queues the request for the listener and returns the
+    answer the listener produced, without opening a second executor."""
+    from notron import cli, worker
+    _never_beside_the_listener(monkeypatch)
+    seen = []
+
+    def cmd_ask(args):
+        from notron import requests
+        seen.append((args.request, args.dry_run, args._envelope.source))
+        # What the graph does to a real run's request once its writes land.
+        requests.current().claim(args._envelope.request_id)
+        requests.current().finish(args._envelope.request_id)
+        return {"answer": "Dentist at 3.", "results": ["appended to 📥 Ask Notron"]}
+    monkeypatch.setattr(cli, "cmd_ask", cmd_ask)
+    done, t = _listener(worker.drain_one)
     try:
-        out = bridge.ask("what's on today", writes=True, brain=object())
+        out = bridge.ask("what's on today", writes=True, brain=object(), sleep=lambda s: None)
     finally:
         done.set()
-        t.join()
-    assert out == {"error": bridge.BUSY}
+        t.join(5)
+    assert out == {"answer": "Dentist at 3.", "results": ["appended to 📥 Ask Notron"], "dry_run": False}
+    assert seen == [(["what's on today"], False, "mcp")]
+    assert not worker.Queue().pending()
+    assert not list((worker.Queue().health.path.parent / "worker-payloads").glob("answer-*")), \
+        "the answer is taken, not left lying in storage"
+
+
+def test_a_dry_run_ask_stays_a_dry_run_through_the_listener(monkeypatch):
+    from notron import cli, worker
+    _never_beside_the_listener(monkeypatch)
+    seen = []
+    monkeypatch.setattr(cli, "cmd_ask", lambda args: seen.append(args.dry_run) or
+                        {"answer": "ok", "results": []})
+    done, t = _listener(worker.drain_one)
+    try:
+        out = bridge.ask("x", writes=False, brain=object(), sleep=lambda s: None)
+    finally:
+        done.set()
+        t.join(5)
+    assert seen == [True] and out["dry_run"] is True and out["answer"] == "ok"
+
+
+def test_a_listener_that_never_gets_to_it_returns_instead_of_hanging(monkeypatch):
+    """The original failure was a call that never returned. A busy listener
+    must still produce an answer to the client within the wait."""
+    import itertools
+    from notron import worker
+    _never_beside_the_listener(monkeypatch)
+    clock = itertools.count(0, 50)
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: next(clock))
+    done, t = _listener(lambda: None)
+    try:
+        out = bridge.ask("x", writes=True, brain=object(), sleep=lambda s: None)
+    finally:
+        done.set()
+        t.join(5)
+    assert out == {"error": bridge.STILL_WORKING}
+    assert [j["status"] for j in worker.Queue().pending()] == ["queued"], \
+        "the request stays with the listener; it is not dropped"
+
+
+def test_a_queued_ask_that_needs_review_says_so(monkeypatch):
+    from notron import cli, worker
+    _never_beside_the_listener(monkeypatch)
+
+    def boom(args):
+        raise RuntimeError("Notes went away")
+    monkeypatch.setattr(cli, "cmd_ask", boom)
+
+    def serve():
+        try:
+            worker.drain_one()
+        except RuntimeError:
+            pass
+    done, t = _listener(serve)
+    try:
+        out = bridge.ask("x", writes=True, brain=object(), sleep=lambda s: None)
+    finally:
+        done.set()
+        t.join(5)
+    assert out == {"error": bridge.NEEDS_REVIEW}
+
+
+def test_a_pause_while_queued_behind_the_listener_is_honoured(monkeypatch):
+    from notron.health import HealthStore
+    _never_beside_the_listener(monkeypatch)
+    done, t = _listener(lambda: None)
+    try:
+        def pause(_):
+            HealthStore().set_paused(True)
+        out = bridge.ask("x", writes=True, brain=object(), sleep=pause)
+    finally:
+        done.set()
+        t.join(5)
+    assert out == {"error": bridge.PAUSED_QUEUED}
+
+
+def test_a_stale_answer_nobody_collected_is_pruned(monkeypatch):
+    import os, time as _time
+    from notron import worker
+    from notron.health import WorkerLock
+    queue = worker.Queue()
+    queue.save_answer("abc", {"answer": "secret-ish", "results": []})
+    path = queue.health.path.parent / "worker-payloads" / "answer-abc.enc"
+    assert path.exists()
+    old = _time.time() - worker.ANSWER_TTL - 5
+    os.utime(path, (old, old))
+    with WorkerLock():
+        queue.prune_payloads()
+    assert not path.exists()
 
 
 def test_receipts_are_delivered_only_after_a_real_run(monkeypatch):

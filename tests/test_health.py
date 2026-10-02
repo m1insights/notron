@@ -155,3 +155,25 @@ def test_a_used_notes_lock_does_not_block_a_fresh_storage_key(tmp_path):
     (tmp_path / 'managed-requests.enc').write_bytes(b'x')
     recognised = health.control_artifacts(tmp_path)
     assert 'managed-requests.enc' not in recognised
+
+
+def test_closing_the_heartbeat_keeps_the_failure_that_stopped_the_worker():
+    """worker.failure records why a run ended (keychain locked, offline,
+    permission needed) and then the `with Heartbeat` block closes. close()
+    wrote state='stopped', reason_code=None over it, so the one record of why
+    Notron stopped was erased the moment it was written."""
+    from notron.health import HealthStore, Heartbeat
+    store = HealthStore()
+    with Heartbeat(store, interval=60):
+        store.update(state='paused', reason_code='keychain_locked')
+    row = store.row()
+    assert (row['state'], row['reason_code']) == ('paused', 'keychain_locked')
+
+
+def test_a_clean_close_still_reads_stopped():
+    from notron.health import HealthStore, Heartbeat
+    store = HealthStore()
+    with Heartbeat(store, interval=60):
+        store.update(state='ready', reason_code=None)
+    row = store.row()
+    assert (row['state'], row['reason_code']) == ('stopped', None)
