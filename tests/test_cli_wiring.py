@@ -361,3 +361,33 @@ def test_mcp_config_prints_a_ready_to_paste_block(capsys):
     block = json.loads(capsys.readouterr().out)
     assert block['mcpServers']['notron'] == {'command': sys.executable,
                                              'args': ['-m', 'notron', 'mcp', 'serve']}
+
+
+def test_connect_add_url_registers_a_remote_server_with_its_sign_in(capsys):
+    import json
+    import pytest
+    from notron import connectors
+    cli.main(['connect', 'add', 'github', '--url', 'https://api.githubcopilot.com/mcp/',
+              '--bearer', 'GITHUB_TOKEN'])
+    cli.main(['connect', 'add', 'vercel', '--url', 'https://mcp.vercel.com', '--oauth'])
+    out = capsys.readouterr().out
+    assert 'needs GITHUB_TOKEN: notron connect secret github GITHUB_TOKEN' in out
+    assert 'Sign in once: notron connect login vercel' in out
+    cli.main(['connect', 'list', '--json'])
+    rows = {r['name']: r for r in json.loads(capsys.readouterr().out)}
+    assert rows['github']['auth'] == 'bearer' and rows['vercel']['url'] == 'https://mcp.vercel.com'
+    for bad in (['connect', 'add', 'x', '--url', 'https://mcp.vercel.com', '--', 'npx', 's'],
+                ['connect', 'add', 'x', '--url', 'https://mcp.vercel.com', '--oauth', '--bearer', 'T'],
+                ['connect', 'add', 'x', '--oauth', '--', 'npx', 's']):
+        with pytest.raises(SystemExit):
+            cli.main(bad)
+    assert connectors.get('x') is None
+
+
+def test_connect_login_signs_in_through_connectors(monkeypatch, capsys):
+    from notron import connectors
+    seen = []
+    monkeypatch.setattr(connectors, 'login', lambda name: seen.append(name) or connectors.get(name))
+    cli.main(['connect', 'add', 'vercel', '--url', 'https://mcp.vercel.com', '--oauth'])
+    cli.main(['connect', 'login', 'vercel'])
+    assert seen == ['vercel'] and 'Signed in to vercel' in capsys.readouterr().out

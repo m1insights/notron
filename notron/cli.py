@@ -191,13 +191,23 @@ def _add_channel(args):
     print("  Or type any line into it. She answers underneath, while `notron listen` runs.\n")
 
 
-def _connect_args(rest, secrets):
+def _connect_args(rest, secrets, args=None):
     """`connect add NAME [--secret VAR ...] -- argv...`: argparse hands back
-    everything after NAME, so declared secrets are taken off the front here and
-    the server's argv after `--` is kept exactly as typed."""
+    everything after NAME, so declared secrets (and `--url`, `--bearer`,
+    `--oauth`, onto `args`) are taken off the front here and the server's argv
+    after `--` is kept exactly as typed."""
     rest, secrets = list(rest), list(secrets or ())
-    while len(rest) >= 2 and rest[0] == '--secret':
-        secrets.append(rest[1])
+    while rest:
+        if len(rest) >= 2 and rest[0] == '--secret':
+            secrets.append(rest[1])
+        elif args is not None and len(rest) >= 2 and rest[0] in ('--url', '--bearer'):
+            setattr(args, rest[0][2:], rest[1])
+        elif args is not None and rest[0] == '--oauth':
+            args.oauth = True
+            rest = rest[1:]
+            continue
+        else:
+            break
         rest = rest[2:]
     if rest and rest[0] == '--':
         rest = rest[1:]
@@ -216,20 +226,41 @@ def cmd_connect(args):
 
     def unlock(server):
         # Only a server with secrets needs the Keychain; one without never asks.
-        if server is not None and server.secrets and credentials._provider is None:
+        if (server is not None and (server.secrets or server.auth == "oauth")
+                and credentials._provider is None):
             credentials.startup()
 
     try:
         if args.action == 'add':
-            argv, secrets = _connect_args(args.argv, args.secret)
-            if not argv:
-                raise connectors.ConnectorError(
-                    "Which command starts the server? e.g. notron connect add time -- uvx mcp-server-time")
-            server = connectors.add(args.name, argv, secrets)
-            print(f"\n  Registered {server.name}: {' '.join(server.argv)}")
+            argv, secrets = _connect_args(args.argv, args.secret, args)
+            if args.url:
+                if argv or secrets:
+                    raise connectors.ConnectorError(
+                        "A URL server takes --bearer VAR or --oauth, not a command or --secret.")
+                if args.bearer and args.oauth:
+                    raise connectors.ConnectorError("Pick one sign-in: --bearer VAR or --oauth.")
+                auth = "bearer" if args.bearer else "oauth" if args.oauth else "none"
+                server = connectors.add(args.name, url=args.url, auth=auth,
+                                        secrets=(args.bearer,) if args.bearer else ())
+                print(f"\n  Registered {server.name}: {server.url}")
+            else:
+                if args.bearer or args.oauth:
+                    raise connectors.ConnectorError("--bearer and --oauth are for a --url server.")
+                if not argv:
+                    raise connectors.ConnectorError(
+                        "Which command starts the server? e.g. notron connect add time -- uvx mcp-server-time"
+                        " (or --url https://… for a remote server)")
+                server = connectors.add(args.name, argv, secrets)
+                print(f"\n  Registered {server.name}: {' '.join(server.argv)}")
             for var in server.secrets:
                 print(f"  needs {var}: notron connect secret {server.name} {var}")
+            if server.auth == "oauth":
+                print(f"  Sign in once: notron connect login {server.name}")
             print(f"  Next: notron connect tools {server.name}\n")
+        elif args.action == 'login':
+            unlock(connectors.get(args.name))
+            server = connectors.login(args.name)
+            print(f"\n  Signed in to {server.name}. Next: notron connect tools {server.name}\n")
         elif args.action == 'tools':
             unlock(connectors.get(args.name))
             offers = connectors.discover(args.name)
@@ -273,7 +304,7 @@ def cmd_connect(args):
             for ch in channels.load():
                 for name in ch.connectors:
                     granted.setdefault(name.lower(), []).append(ch.name)
-            rows = [dict(name=s.name, argv=list(s.argv), secrets=list(s.secrets),
+            rows = [dict(name=s.name, argv=list(s.argv), url=s.url, auth=s.auth, secrets=list(s.secrets),
                          tools=sorted(s.tools), changed=list(s.changed),
                          channels=granted.get(s.name.lower(), [])) for s in found]
             if args.json:
@@ -284,7 +315,8 @@ def cmd_connect(args):
                 return
             print()
             for r in rows:
-                print(f"  {r['name']:16} {' '.join(r['argv'])}")
+                where = f"{r['url']} ({r['auth']})" if r['url'] else ' '.join(r['argv'])
+                print(f"  {r['name']:16} {where}")
                 print(f"  {'':16} approved: {', '.join(r['tools']) or 'none'}")
                 if r['changed']:
                     print(f"  {'':16} changed since approval: {', '.join(r['changed'])}")
@@ -1088,12 +1120,20 @@ def main(argv=None):
 
     cn = sub.add_parser('connect', help='MCP servers Notron may use in a channel: add, approve, remove')
     cs = cn.add_subparsers(dest='action', required=True)
-    c = cs.add_parser('add', help='register a server: notron connect add time -- uvx mcp-server-time')
+    c = cs.add_parser('add', help='register a server: notron connect add time -- uvx mcp-server-time, '
+                                  'or notron connect add vercel --url https://mcp.vercel.com --oauth')
     c.add_argument('name')
+    c.add_argument('--url', default='', help='a remote (streamable HTTP) server instead of a command')
+    c.add_argument('--bearer', default='', metavar='VAR',
+                   help='with --url: send this secret as "Authorization: Bearer", e.g. GITHUB_TOKEN')
+    c.add_argument('--oauth', action='store_true',
+                   help='with --url: sign in through the browser, once: notron connect login <name>')
     c.add_argument('--secret', action='append', default=[],
                    help='an environment variable the server needs, e.g. GITHUB_TOKEN (repeatable); '
                         'set its value with `notron connect secret`')
     c.add_argument('argv', nargs=argparse.REMAINDER, help='after --: the command that starts the server')
+    c = cs.add_parser('login', help='sign in to a --oauth server in the browser, once')
+    c.add_argument('name')
     c = cs.add_parser('tools', help='what the server offers, and what v1 could approve')
     c.add_argument('name')
     c = cs.add_parser('approve', help='approve read-only tools, one by one')
