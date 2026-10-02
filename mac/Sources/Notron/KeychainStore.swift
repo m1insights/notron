@@ -11,7 +11,19 @@ import LocalAuthentication
 public struct KeychainStore {
     static let service = "com.m1labs.notron"
     static let names: Set<String> = ["managed-refresh", "storage-key", "nebius-api-key", "tavily-api-key", "development-nebius-api-key"]
+    /// A token an MCP server needs, stored per server and variable
+    /// (`connector.<server>.<VAR>`). Same pattern as `CONNECTOR_SECRET` in
+    /// notron/credentials.py; anchored on both ends, and no dot in the server
+    /// part, so it can never match a fixed name or another server's item.
+    static let connectorSecret = try! NSRegularExpression(
+        pattern: #"\Aconnector\.[A-Za-z0-9-]{1,40}\.[A-Z][A-Z0-9_]{0,63}\z"#)
     enum Failure: Error { case unavailable, invalidRequest }
+
+    static func allowed(_ name: String) -> Bool {
+        if names.contains(name) { return true }
+        let range = NSRange(name.startIndex..., in: name)
+        return connectorSecret.firstMatch(in: name, range: range) != nil
+    }
 
     public init() {}
 
@@ -29,7 +41,7 @@ public struct KeychainStore {
     /// on purpose**, because they run in the background worker where a dialog
     /// would be a hang with nobody to answer it.
     private func query(_ name: String) throws -> [String: Any] {
-        guard Self.names.contains(name) else { throw Failure.invalidRequest }
+        guard Self.allowed(name) else { throw Failure.invalidRequest }
         let context = LAContext()
         context.interactionNotAllowed = true
         return [kSecClass as String: kSecClassGenericPassword,

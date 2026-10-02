@@ -181,8 +181,29 @@ def remove(name: str) -> Server:
     return gone
 
 
+class MissingSecret(ConnectorError):
+    pass
+
+
 def _secrets(server: Server) -> dict[str, str]:
-    return {}
+    """The server's own secrets, from the Keychain, by the names it was given.
+
+    A missing one is a plain line that says how to set it. A locked or
+    unavailable Keychain is not "missing": `CredentialUnavailable` propagates,
+    because only one of those two is fixed by pasting a token.
+    """
+    from . import credentials
+    out = {}
+    for var in server.secrets:
+        value = credentials.get(f"connector.{server.name}.{var}")
+        if value is None:
+            raise MissingSecret(f"{server.name}: needs {var} — "
+                                f"notron connect secret {server.name} {var}")
+        try:
+            out[var] = value.decode("utf-8")
+        except UnicodeDecodeError:
+            raise CredentialUnavailable("Keychain unavailable; protected processing paused.") from None
+    return out
 
 
 def _offer(tool: dict) -> Offer:
@@ -332,6 +353,8 @@ def call(channel, name, arguments) -> str:
         return mcp_client.call_tool(server.argv, secrets, tool, arguments)
     except (CredentialUnavailable, StorageError, PolicyError):
         raise
+    except MissingSecret as exc:
+        return str(exc)
     except (mcp_client.Unavailable, ConnectorError) as exc:
         return f"{label}: {exc}"
     except Exception as exc:

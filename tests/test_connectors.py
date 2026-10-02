@@ -250,3 +250,38 @@ def test_the_menu_shows_only_granted_approved_unchanged_tools(server):
     assert connectors.menu_for(channels.Channel("Vyvid", "note-y")) == []
     assert [l.split(":")[0] for l in connectors.menu_for(granted("github", "gone"))] == [
         "- github.search_issues"]
+
+
+# --- secrets ----------------------------------------------------------------
+
+def test_a_server_is_handed_exactly_its_own_keychain_secrets(server, _task3_storage):
+    from notron import credentials
+    credentials.provision_api_key("connector.github.GITHUB_TOKEN", "synthetic-gh-token")
+    credentials.provision_api_key("connector.linear.GITHUB_TOKEN", "someone-elses")
+    connectors.add("github", ("npx", "server-github"), ("GITHUB_TOKEN",))
+    connectors.approve("github", ["search_issues"])
+    connectors.call(granted("github"), "github.search_issues", {"q": "ci"})
+    assert server.listed == [{"GITHUB_TOKEN": "synthetic-gh-token"}] * 2
+    assert server.calls[0][2] == {"GITHUB_TOKEN": "synthetic-gh-token"}
+
+
+def test_a_missing_secret_says_how_to_set_it_and_runs_nothing(server, _task3_storage):
+    from notron import credentials
+    credentials.provision_api_key("connector.github.GITHUB_TOKEN", "synthetic-gh-token")
+    connectors.add("github", ("npx", "server-github"), ("GITHUB_TOKEN",))
+    connectors.approve("github", ["search_issues"])
+    credentials.forget_api_key("connector.github.GITHUB_TOKEN")
+    need = "github: needs GITHUB_TOKEN — notron connect secret github GITHUB_TOKEN"
+    with pytest.raises(connectors.ConnectorError) as err:
+        connectors.discover("github")
+    assert str(err.value) == need
+    assert connectors.call(granted("github"), "github.search_issues", {"q": "ci"}) == need
+    assert server.calls == [] and len(server.listed) == 1  # approval's list only
+
+
+def test_a_locked_keychain_pauses_rather_than_reading_as_a_missing_secret(server, monkeypatch):
+    from notron import credentials
+    connectors.add("github", ("npx", "server-github"), ("GITHUB_TOKEN",))
+    monkeypatch.setattr(credentials, "_provider", None)
+    with pytest.raises(credentials.CredentialUnavailable):
+        connectors.discover("github")

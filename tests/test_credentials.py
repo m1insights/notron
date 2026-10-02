@@ -207,6 +207,44 @@ def test_forget_api_key_removes_only_provisionable_names(_task3_storage):
             credentials.forget_api_key(name)
 
 
+def test_a_connector_secret_is_stored_read_and_forgotten_by_its_own_name(_task3_storage):
+    """A connector's token (GITHUB_TOKEN, say) lives in the Keychain under
+    `connector.<server>.<VAR>`, never in argv or an env file."""
+    from notron import credentials
+    name = 'connector.github.GITHUB_TOKEN'
+    credentials.provision_api_key(name, 'synthetic-token-value')
+    assert credentials.get(name) == b'synthetic-token-value'
+    credentials.forget_api_key(name)
+    assert credentials.get(name) is None
+
+
+def test_the_connector_pattern_does_not_reopen_the_reserved_names(_task3_storage):
+    """Widening the allowlist to a pattern must not let `storage-key` or
+    `managed-refresh` through, nor a name that only looks like a connector's."""
+    from notron import credentials
+    for name in (credentials.STORAGE_KEY, 'managed-refresh', 'connector.x.lower',
+                 'connector..GITHUB_TOKEN', 'connector.git.hub.TOKEN',
+                 'connector.github.GITHUB_TOKEN\n', 'xconnector.github.TOKEN'):
+        with pytest.raises(credentials.CredentialUnavailable):
+            credentials.provision_api_key(name, 'synthetic-key-value')
+        with pytest.raises(credentials.CredentialUnavailable):
+            credentials.forget_api_key(name)
+    assert credentials.get(credentials.STORAGE_KEY) == bytes(range(32))
+
+
+def test_a_malformed_connector_name_never_reaches_the_helper(monkeypatch, tmp_path):
+    from notron import credentials
+    import subprocess
+    monkeypatch.setattr(subprocess, 'Popen',
+                        lambda *a, **k: pytest.fail('must not ask the helper'))
+    store = credentials.KeychainStore(tmp_path / 'helper')
+    with pytest.raises(credentials.CredentialUnavailable):
+        store.get('connector.x.lower')
+    credentials.configure(store)
+    with pytest.raises(credentials.CredentialUnavailable):
+        credentials.get('connector.x.lower')
+
+
 def test_key_command_reads_the_secret_from_stdin_never_argv(monkeypatch, capsys, _task3_storage):
     """argv is visible to every process on the machine and lands in shell
     history, so the secret must never be an argument -- and must not be echoed."""

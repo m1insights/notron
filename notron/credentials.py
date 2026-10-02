@@ -5,6 +5,7 @@ import base64
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import threading
@@ -17,6 +18,16 @@ NEBIUS_KEY = 'nebius-api-key'
 SEARCH_KEY = 'tavily-api-key'
 DEV_NEBIUS_KEY = 'development-nebius-api-key'
 NAMES = frozenset({STORAGE_KEY, NEBIUS_KEY, SEARCH_KEY, DEV_NEBIUS_KEY})
+#: A token an MCP server needs (`connectors.py`), stored per server and variable.
+#: A pattern rather than a list because the user names the servers, but a
+#: narrow one: no dot in the server part, so `connector.a.b.C` cannot address
+#: another server's item, and nothing it matches collides with a fixed name.
+#: `fullmatch`, not `match` with `$`, which would also accept a trailing newline.
+CONNECTOR_SECRET = re.compile(r"connector\.[A-Za-z0-9-]{1,40}\.[A-Z][A-Z0-9_]{0,63}")
+
+
+def _known(name) -> bool:
+    return isinstance(name, str) and (name in NAMES or CONNECTOR_SECRET.fullmatch(name) is not None)
 
 
 class CredentialUnavailable(RuntimeError):
@@ -50,7 +61,7 @@ class KeychainStore:
         self._lock = threading.Lock()
 
     def _request(self, operation: str, name: str, value: bytes | None = None):
-        if name not in NAMES:
+        if not _known(name):
             raise CredentialUnavailable('Unknown credential name.')
         request = {'operation': operation, 'name': name}
         if value is not None:
@@ -156,7 +167,7 @@ def startup() -> None:
 
 
 def get(name: str) -> bytes | None:
-    if name not in NAMES or _provider is None:
+    if not _known(name) or _provider is None:
         raise CredentialUnavailable('Keychain unavailable; protected processing paused.')
     try:
         value = _provider.get(name)
@@ -207,6 +218,13 @@ def provision_storage_key(root: Path) -> None:
 #: allowing them would quietly widen a deliberate boundary.
 PROVISIONABLE = (NEBIUS_KEY, SEARCH_KEY, DEV_NEBIUS_KEY)
 
+
+def _provisionable(name) -> bool:
+    # Connector secrets are user-supplied tokens, like the API keys above; the
+    # pattern cannot match `storage-key` or `managed-refresh`.
+    return name in PROVISIONABLE or (isinstance(name, str)
+                                     and CONNECTOR_SECRET.fullmatch(name) is not None)
+
 #: A pasted key is one line. Anything longer or multi-line is a paste accident,
 #: and storing it writes a credential that fails much later, somewhere far from
 #: the cause -- the failure mode this whole module exists to avoid.
@@ -220,7 +238,7 @@ def provision_api_key(name: str, secret: str) -> None:
     pass text they read from stdin, and this function is the only path to
     `put` for anything other than the storage key.
     """
-    if name not in PROVISIONABLE:
+    if not _provisionable(name):
         raise CredentialUnavailable('That credential cannot be set here.')
     if _provider is None:
         raise CredentialUnavailable('Keychain unavailable; protected processing paused.')
@@ -247,7 +265,7 @@ def provisioned() -> list[tuple[str, bool]]:
 
 
 def forget_api_key(name: str) -> None:
-    if name not in PROVISIONABLE:
+    if not _provisionable(name):
         raise CredentialUnavailable('That credential cannot be removed here.')
     if _provider is None:
         raise CredentialUnavailable('Keychain unavailable; protected processing paused.')
