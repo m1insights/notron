@@ -87,7 +87,12 @@ def build(*, writes: bool, ask: bool, brain_factory, after_writes=None):
         return _guard(lambda: bridge.agenda(days))
 
     if ask:
-        @app.tool(annotations=ToolAnnotations(read_only_hint=not writes))
+        # destructive_hint False even with writes: every write goes through the
+        # Guard, which only adds outside her folder (invariant 2), never deletes
+        # a reminder (7) or moves an event (6). In-place rewrites need a per-note
+        # opt-in the user typed in Notes, and keep an undo copy.
+        @app.tool(annotations=ToolAnnotations(read_only_hint=not writes,
+                                              destructive_hint=False if writes else None))
         def ask_notron(request: str) -> dict:
             """Ask Notron (NVIDIA Nemotron). It can answer from notes, calendar and reminders,
             and, if the user enabled writes, file notes or create reminders through its own

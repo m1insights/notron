@@ -159,6 +159,7 @@ def test_ask_without_writes_is_a_dry_run(monkeypatch):
     assert seen["envelope"].source == "mcp" and seen["envelope"].text == "where did I park"
     assert out == {"answer": "You parked on level 3.", "results": ["would append to 📥 Ask Notron"],
                    "dry_run": True}
+    monkeypatch.setattr(bridge, "_prepare_to_write", lambda brain: None)
     bridge.ask("where did I park", writes=True, brain=brain)
     assert seen["dry_run"] is False
 
@@ -321,8 +322,79 @@ def test_receipts_are_delivered_only_after_a_real_run(monkeypatch):
     class S:
         answer, results = "ok", []
     monkeypatch.setattr(graph, "run_request", lambda *a, **kw: S())
+    monkeypatch.setattr(bridge, "_prepare_to_write", lambda brain: None)
     delivered = []
     bridge.ask("x", writes=False, brain=object(), after=lambda: delivered.append(1))
     assert delivered == []
     bridge.ask("x", writes=True, brain=object(), after=lambda: delivered.append(1))
+    assert delivered == [1]
+
+
+
+def _nothing_runs(monkeypatch):
+    def never(*a, **kw):
+        raise AssertionError("the graph ran")
+    monkeypatch.setattr(graph, "run_request", never)
+
+
+def test_ask_honours_a_pause_the_user_set(monkeypatch):
+    """worker.submit refuses to run while paused; an MCP client must not be the
+    way around the user's own pause switch, dry run or not."""
+    from notron.health import HealthStore
+    _nothing_runs(monkeypatch)
+    HealthStore().set_paused(True)
+    for writes in (False, True):
+        assert bridge.ask("file this", writes=writes, brain=object()) == {"error": bridge.PAUSED}
+
+
+def test_a_failed_worker_probe_runs_nothing(monkeypatch):
+    """Writes take the same startup checks a CLI write does (permissions, key,
+    provider). One that fails is an answer, and the graph never starts."""
+    from notron import worker, worker_migration
+    from notron.health import HealthStore
+    from notron.policy import PolicyError
+    _nothing_runs(monkeypatch)
+    monkeypatch.setattr(worker_migration, "migrate_filer", lambda: None)
+
+    def denied():
+        raise PolicyError("Native app permission requires attention.")
+    monkeypatch.setattr(worker, "probe", denied)
+    recorded = []
+    monkeypatch.setattr(worker, "failure", recorded.append)
+    out = bridge.ask("file this", writes=True, brain=object())
+    assert out["error"].startswith(bridge.NOT_READY)
+    assert "Native app permission" in out["error"]
+    assert [type(e) for e in recorded] == [PolicyError], "recorded in worker health, as submit does"
+
+
+def test_preflight_runs_in_submit_order(monkeypatch):
+    from notron import watch, worker, worker_migration
+    order = []
+    monkeypatch.setattr(worker_migration, "migrate_filer", lambda: order.append("migrate"))
+    monkeypatch.setattr(worker, "probe", lambda: order.append("probe") or object())
+    monkeypatch.setattr(worker.Queue, "recover_interrupted", lambda self: order.append("interrupted"))
+
+    class W:
+        def __init__(self, brain): pass
+        def recover_pending(self):
+            order.append("pending")
+            return False
+    monkeypatch.setattr(watch, "Watcher", W)
+
+    class S:
+        answer, results = "ok", []
+    monkeypatch.setattr(graph, "run_request", lambda *a, **kw: order.append("run") or S())
+    bridge.ask("x", writes=True, brain=object(), after=lambda: order.append("receipts"))
+    assert order == ["migrate", "probe", "interrupted", "pending", "run", "receipts"]
+
+
+def test_a_write_that_raises_still_gets_its_receipts_drained(monkeypatch):
+    monkeypatch.setattr(bridge, "_prepare_to_write", lambda brain: None)
+
+    def boom(*a, **kw):
+        raise RuntimeError("Notes went away mid-write")
+    monkeypatch.setattr(graph, "run_request", boom)
+    delivered = []
+    with pytest.raises(RuntimeError):
+        bridge.ask("x", writes=True, brain=object(), after=lambda: delivered.append(1))
     assert delivered == [1]

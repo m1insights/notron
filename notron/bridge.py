@@ -154,19 +154,75 @@ BUSY = ("Notron's listener is running, and it is the only thing allowed to act f
         "to ask here.")
 
 
+PAUSED = ("Notron is paused, so she will not act from here either. "
+          "Resume her in the Notron app, then ask again.")
+NOT_READY = "Notron is not ready to act for you"
+
+
+def _prepare_to_write(brain) -> None:
+    """The startup steps `worker.submit` runs before any CLI write, in its order:
+    filer migration, the probe (permissions, key, provider), interrupted jobs,
+    then pending requests. A write from an MCP client is no less a write, and
+    skipping these would make the client the one path around them. Raises on
+    failure, after recording it in worker health exactly as submit does."""
+    from . import worker
+    from .health import HealthStore, Heartbeat
+    from .watch import Watcher
+    from .worker_migration import migrate_filer
+    with Heartbeat(HealthStore()):
+        try:
+            migrate_filer()
+            probed = worker.probe()
+            worker.Queue().recover_interrupted()
+            recovery = Watcher(probed)
+            for _ in range(200):
+                if HealthStore().paused:
+                    raise _Paused()
+                if not recovery.recover_pending():
+                    break
+            HealthStore().update(state='ready', reason_code=None)
+        except _Paused:
+            raise
+        except Exception as exc:
+            worker.failure(exc)
+            raise
+
+
+class _Paused(Exception):
+    pass
+
+
 def ask(request: str, *, writes: bool, brain, after=None) -> dict:
     """Run the normal graph on a request from an MCP client. Without `writes`
     it is a dry run: Nemotron answers, nothing is written. `after` runs under
-    the same lock once a real run finishes (the CLI's receipt delivery)."""
+    the same lock once a real run finishes, even one that raised (the CLI's
+    receipt delivery)."""
     from . import graph, requests
-    from .health import WorkerLock
+    from .health import HealthStore, WorkerLock
+    from .policy import PolicyError
     if not isinstance(request, str) or not request.strip():
         return {"error": "empty request"}
     with WorkerLock() as lock:
         if not lock.acquired:
             return {"error": BUSY}
+        # The user's pause binds every surface, a dry run included: submit
+        # refuses to execute anything while paused.
+        if HealthStore().paused:
+            return {"error": PAUSED}
+        if writes:
+            try:
+                _prepare_to_write(brain)
+            except _Paused:
+                return {"error": PAUSED}
+            except Exception as exc:  # noqa: BLE001 - recorded by worker.failure
+                # PolicyError texts are fixed strings; anything else is named by
+                # type only, since its message could carry a note title.
+                why = str(exc) if isinstance(exc, PolicyError) else type(exc).__name__
+                return {"error": f"{NOT_READY}: {why}"}
         envelope = requests.create(request, source="mcp")
-        state = graph.run_request(envelope, brain=brain, dry_run=not writes, trigger="mcp")
-        if writes and after is not None:
-            after()
+        try:
+            state = graph.run_request(envelope, brain=brain, dry_run=not writes, trigger="mcp")
+        finally:
+            if writes and after is not None:
+                after()
     return {"answer": state.answer, "results": list(state.results), "dry_run": not writes}
