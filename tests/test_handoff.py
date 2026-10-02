@@ -707,3 +707,18 @@ def test_a_dotenv_outside_the_run_is_invisible_to_the_tests(tmp_path):
     refused to open, and all eleven test modules crashed. Hidden, it is absent."""
     profile = handoff.tests_profile(tmp_path / "run", "/tmp/synq")
     assert '(deny file-read* (require-all (regex #"/\\.env[^/]*$")' in profile
+
+
+def test_a_node_project_gets_its_installed_dependencies_linked_in(tmp_path):
+    """2026-10-01: SynqRx's vitest suite needs node_modules, which a fresh copy lacks."""
+    project, copy = tmp_path / "blistertrack", tmp_path / "copy"
+    (project / "node_modules").mkdir(parents=True)
+    copy.mkdir()
+    handoff._link_dependencies(project, copy)
+    assert (copy / "node_modules").is_symlink()
+    assert (copy / "node_modules").resolve() == (project / "node_modules").resolve()
+    handoff._link_dependencies(project, copy)             # twice is harmless
+    other = tmp_path / "copy2"
+    other.mkdir()
+    handoff._link_dependencies(tmp_path / "python-project", other)
+    assert list(other.iterdir()) == []                     # nothing installed, nothing linked

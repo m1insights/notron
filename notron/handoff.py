@@ -703,6 +703,7 @@ def _start_tests(task: Task, now: float) -> bool:
             _update(task.id, tests={"command": command, "status": "not run",
                                     "output": "no kernel fence on this Mac"})
             return False
+        _link_dependencies(Path(ch.repo), cwd)
         home = run_dir / "home"
         home.mkdir(mode=0o700, exist_ok=True)
         empty = run_dir / "tests.in"
@@ -715,6 +716,22 @@ def _start_tests(task: Task, now: float) -> bool:
     _update(task.id, phase="tests", pid=pid, pid_started=_started_at(pid),
             tests={"command": command, "started": now})
     return True
+
+
+#: Installed dependencies a fresh copy lacks and a test run needs, linked in from
+#: the user's checkout. A Python venv needs no link (the test command names its
+#: interpreter by absolute path); Node resolves `node_modules` from the files
+#: themselves. Measured 2026-10-01: SynqRx's 544 vitest tests pass in the fence
+#: this way. The cage only lets them be read, and the reset after the run
+#: removes the link (it is untracked) before anything is kept.
+DEPENDENCY_DIRS = ("node_modules",)
+
+
+def _link_dependencies(project: Path, cwd: Path) -> None:
+    for name in DEPENDENCY_DIRS:
+        src, dest = project / name, cwd / name
+        if src.is_dir() and not dest.exists() and not dest.is_symlink():
+            dest.symlink_to(src, target_is_directory=True)
 
 
 def _commit(task: Task, wt: Path) -> None:
