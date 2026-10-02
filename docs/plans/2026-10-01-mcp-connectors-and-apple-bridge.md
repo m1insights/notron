@@ -656,9 +656,11 @@ Manual, on the Mac. Record results in `docs/production/evidence/2026-10-mcp-brid
 3. A tool-list cache, if A8 shows launch latency over 3 s.
 4. Fix the hardcoded `/Users/m1labs/...` defaults in `mac/Sources/Notron/Core.swift:14,19` so a fresh clone works (open-source blocker, ~30 min).
 5. A community connector list in the README (links only, no hosting, no endorsement).
+6. Queue ask_notron requests for the listener instead of returning busy (~half day).
+7. Heartbeat.close() overwrites a failure reason with 'stopped' (CLI and MCP).
 
 ## Evidence
 
 - `mcp` version pinned: `mcp==2.2.0` (latest on PyPI 2026-10-01; a 2.x major, so the 1.x class names above were checked against the installed SDK in A3). `uv.lock` updated.
-- A8 live gate: _link_
-- B3 device gate: _link_
+- A8 live gate: [docs/production/evidence/2026-10-mcp-connectors.md](../production/evidence/2026-10-mcp-connectors.md) (step 2, Siri end to end, pending owner device test)
+- B3 device gate: pending owner device test (to be recorded in `docs/production/evidence/2026-10-mcp-bridge.md`)

@@ -4,6 +4,8 @@
 
 **Goal:** Prove that another developer can extend Notron without changing its core.
 
+Tools: superseded by MCP connectors (docs/plans/2026-10-01-mcp-connectors-and-apple-bridge.md). Task 2 skills remain.
+
 **Architecture:** Publish the proven v1 process protocol and conformance fixtures, then exercise them with an independent adapter and declarative workflow. No marketplace or generic framework migration is required.
 
 **Tech Stack:** Python reference SDK/CLI, language-neutral JSON protocol, MIT examples and existing plugin registry.
