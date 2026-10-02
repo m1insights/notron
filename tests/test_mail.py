@@ -180,20 +180,24 @@ def test_a_shortlist_is_decided_from_senders_and_subjects_only():
 
 
 def test_nemotron_writes_one_to_do_per_email_key_people_and_urgent_first():
+    # A deadline that is still ahead whenever the suite runs: the first version
+    # hard-coded 2026-10-01 and went red the moment that date passed.
+    from datetime import date, timedelta
+    ahead = (date.today() + timedelta(days=30)).isoformat()
     mailroom.add_person("vivek@example.com")
     hs = [hdr(1, sender="Gogol <gogoldbull@gmail.com>"), hdr(2), hdr(3, sender="Ann <a@b.com>"),
           hdr(4, sender="Bo <b@b.com>")]
     out = mailroom.todos(hs, {h.key: "text" for h in hs}, brain=Decides({"todos": [
         {"n": 1, "todo": "Reply to Gogol with the order status", "when": "this week"},
         {"n": 2, "todo": "Approve Vivek's payroll", "when": "whenever"},
-        {"n": 3, "todo": "Book Ann's\nmeeting", "when": "today", "due": "2026-10-01"},
+        {"n": 3, "todo": "Book Ann's\nmeeting", "when": "today", "due": ahead},
         {"n": 3, "todo": "a second one", "when": "today"},
         {"n": 4, "todo": "", "when": "today"},
         {"n": 9, "todo": "not an email", "when": "today"},
         {"n": 1.0, "todo": "float", "when": "today"}]}))
     assert [(t.header.index, t.when, t.key_person) for t in out] == [
         (2, "whenever", True), (3, "today", False), (1, "this week", False)]
-    assert out[1].text == "Book Ann's meeting" and out[1].due == "2026-10-01"
+    assert out[1].text == "Book Ann's meeting" and out[1].due == ahead
 
 
 def test_a_made_up_deadline_is_dropped():
