@@ -11,7 +11,10 @@ from typing import Literal, Sequence, get_args
 from . import policy, privacy, workspace
 from .policy import PolicyError, PolicySnapshot
 
-Purpose = Literal['route', 'write', 'schedule', 'organize', 'reflect', 'embed', 'search', 'delegate']
+# `connector`: arguments Notron sends *to* a third-party MCP server.
+# `export`: note text Notron hands *to* an MCP client (and so to its AI provider).
+Purpose = Literal['route', 'write', 'schedule', 'organize', 'reflect', 'embed', 'search', 'delegate',
+                  'connector', 'export']
 Origin = Literal['user_request', 'note', 'standing', 'memory', 'lesson', 'web',
                  'history', 'agenda', 'model', 'diagnostic', 'tool', 'mail']
 NOTE_ORIGINS = {'note', 'standing', 'memory', 'lesson', 'history'}

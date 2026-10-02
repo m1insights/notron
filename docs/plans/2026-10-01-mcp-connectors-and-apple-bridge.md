@@ -659,6 +659,6 @@ Manual, on the Mac. Record results in `docs/production/evidence/2026-10-mcp-brid
 
 ## Evidence
 
-- `mcp` version pinned: _fill in at A1_
+- `mcp` version pinned: `mcp==2.2.0` (latest on PyPI 2026-10-01; a 2.x major, so the 1.x class names above were checked against the installed SDK in A3). `uv.lock` updated.
 - A8 live gate: _link_
 - B3 device gate: _link_
