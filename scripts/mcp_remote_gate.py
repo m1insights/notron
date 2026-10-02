@@ -16,7 +16,8 @@ import sys
 import tempfile
 import time
 
-os.environ["NOTRON_DATA_DIR"] = tempfile.mkdtemp(prefix="notron-gate-")
+# realpath: macOS temp lives under /var, a symlink, which secure storage refuses.
+os.environ["NOTRON_DATA_DIR"] = os.path.realpath(tempfile.mkdtemp(prefix="notron-gate-"))
 
 from notron import channels, connectors, credentials  # noqa: E402
 
