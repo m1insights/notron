@@ -425,6 +425,19 @@ def _native_subprocesses_require_mocks(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _mcp_servers_require_fakes(monkeypatch):
+    """The MCP SDK spawns its server through anyio, not `subprocess.Popen`, so the
+    block above would not stop a missed fake from launching a real third-party
+    process with real secrets. `mcp_client._run` is the one door; shut it here."""
+    from notron import mcp_client
+
+    def blocked(*args, **kwargs):
+        raise AssertionError('MCP servers require a fake in unit tests')
+
+    monkeypatch.setattr(mcp_client, '_run', blocked)
+
+
+@pytest.fixture(autouse=True)
 def _operation_storage_is_disposable(monkeypatch, tmp_path, _task3_storage):
     from notron import operations
     monkeypatch.setattr(operations, 'PATH', tmp_path / 'ledger' / 'operations.sqlite3')
