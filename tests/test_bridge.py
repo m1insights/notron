@@ -159,7 +159,7 @@ def test_ask_without_writes_is_a_dry_run(monkeypatch):
     assert seen["envelope"].source == "mcp" and seen["envelope"].text == "where did I park"
     assert out == {"answer": "You parked on level 3.", "results": ["would append to 📥 Ask Notron"],
                    "dry_run": True}
-    monkeypatch.setattr(bridge, "_prepare_to_write", lambda brain: None)
+    monkeypatch.setattr(bridge, "_prepare_to_write", lambda: None)
     bridge.ask("where did I park", writes=True, brain=brain)
     assert seen["dry_run"] is False
 
@@ -322,7 +322,7 @@ def test_receipts_are_delivered_only_after_a_real_run(monkeypatch):
     class S:
         answer, results = "ok", []
     monkeypatch.setattr(graph, "run_request", lambda *a, **kw: S())
-    monkeypatch.setattr(bridge, "_prepare_to_write", lambda brain: None)
+    monkeypatch.setattr(bridge, "_prepare_to_write", lambda: None)
     delivered = []
     bridge.ask("x", writes=False, brain=object(), after=lambda: delivered.append(1))
     assert delivered == []
@@ -389,7 +389,7 @@ def test_preflight_runs_in_submit_order(monkeypatch):
 
 
 def test_a_write_that_raises_still_gets_its_receipts_drained(monkeypatch):
-    monkeypatch.setattr(bridge, "_prepare_to_write", lambda brain: None)
+    monkeypatch.setattr(bridge, "_prepare_to_write", lambda: None)
 
     def boom(*a, **kw):
         raise RuntimeError("Notes went away mid-write")
@@ -398,3 +398,24 @@ def test_a_write_that_raises_still_gets_its_receipts_drained(monkeypatch):
     with pytest.raises(RuntimeError):
         bridge.ask("x", writes=True, brain=object(), after=lambda: delivered.append(1))
     assert delivered == [1]
+
+
+
+def test_worker_health_stays_up_while_a_write_runs(monkeypatch):
+    """submit holds its Heartbeat across the job. Closing it before the graph ran
+    reported the worker "stopped" for the whole of a real write."""
+    from notron.health import HealthStore
+    monkeypatch.setattr(bridge, "_prepare_to_write",
+                        lambda: HealthStore().update(state='ready', reason_code=None))
+    during = {}
+
+    class S:
+        answer, results = "ok", []
+
+    def run(*a, **kw):
+        during["state"] = HealthStore().row()["state"]
+        return S()
+    monkeypatch.setattr(graph, "run_request", run)
+    bridge.ask("x", writes=True, brain=object())
+    assert during["state"] == "ready"
+    assert HealthStore().row()["state"] == "stopped", "and closed once the run is over"

@@ -159,33 +159,34 @@ PAUSED = ("Notron is paused, so she will not act from here either. "
 NOT_READY = "Notron is not ready to act for you"
 
 
-def _prepare_to_write(brain) -> None:
+def _prepare_to_write() -> None:
     """The startup steps `worker.submit` runs before any CLI write, in its order:
     filer migration, the probe (permissions, key, provider), interrupted jobs,
     then pending requests. A write from an MCP client is no less a write, and
-    skipping these would make the client the one path around them. Raises on
-    failure, after recording it in worker health exactly as submit does."""
+    skipping these would make the client the one path around them. Recovery
+    uses the probe's own brain, as submit does: it is the one just proven to
+    reach the provider. Raises on failure, after recording it in worker health
+    exactly as submit does. The caller holds the Heartbeat."""
     from . import worker
-    from .health import HealthStore, Heartbeat
+    from .health import HealthStore
     from .watch import Watcher
     from .worker_migration import migrate_filer
-    with Heartbeat(HealthStore()):
-        try:
-            migrate_filer()
-            probed = worker.probe()
-            worker.Queue().recover_interrupted()
-            recovery = Watcher(probed)
-            for _ in range(200):
-                if HealthStore().paused:
-                    raise _Paused()
-                if not recovery.recover_pending():
-                    break
-            HealthStore().update(state='ready', reason_code=None)
-        except _Paused:
-            raise
-        except Exception as exc:
-            worker.failure(exc)
-            raise
+    try:
+        migrate_filer()
+        probed = worker.probe()
+        worker.Queue().recover_interrupted()
+        recovery = Watcher(probed)
+        for _ in range(200):
+            if HealthStore().paused:
+                raise _Paused()
+            if not recovery.recover_pending():
+                break
+        HealthStore().update(state='ready', reason_code=None)
+    except _Paused:
+        raise
+    except Exception as exc:
+        worker.failure(exc)
+        raise
 
 
 class _Paused(Exception):
@@ -198,7 +199,7 @@ def ask(request: str, *, writes: bool, brain, after=None) -> dict:
     the same lock once a real run finishes, even one that raised (the CLI's
     receipt delivery)."""
     from . import graph, requests
-    from .health import HealthStore, WorkerLock
+    from .health import HealthStore, Heartbeat, WorkerLock
     from .policy import PolicyError
     if not isinstance(request, str) or not request.strip():
         return {"error": "empty request"}
@@ -209,20 +210,26 @@ def ask(request: str, *, writes: bool, brain, after=None) -> dict:
         # refuses to execute anything while paused.
         if HealthStore().paused:
             return {"error": PAUSED}
-        if writes:
-            try:
-                _prepare_to_write(brain)
-            except _Paused:
-                return {"error": PAUSED}
-            except Exception as exc:  # noqa: BLE001 - recorded by worker.failure
-                # PolicyError texts are fixed strings; anything else is named by
-                # type only, since its message could carry a note title.
-                why = str(exc) if isinstance(exc, PolicyError) else type(exc).__name__
-                return {"error": f"{NOT_READY}: {why}"}
-        envelope = requests.create(request, source="mcp")
-        try:
-            state = graph.run_request(envelope, brain=brain, dry_run=not writes, trigger="mcp")
-        finally:
-            if writes and after is not None:
-                after()
+        if not writes:
+            envelope = requests.create(request, source="mcp")
+            state = graph.run_request(envelope, brain=brain, dry_run=True, trigger="mcp")
+        else:
+            # Held across the run, as submit holds it across the job: health
+            # must not read "stopped" while a real write is in flight.
+            with Heartbeat(HealthStore()):
+                try:
+                    _prepare_to_write()
+                except _Paused:
+                    return {"error": PAUSED}
+                except Exception as exc:  # noqa: BLE001 - recorded by worker.failure
+                    # PolicyError texts are fixed strings; anything else is named
+                    # by type only, since its message could carry a note title.
+                    why = str(exc) if isinstance(exc, PolicyError) else type(exc).__name__
+                    return {"error": f"{NOT_READY}: {why}"}
+                envelope = requests.create(request, source="mcp")
+                try:
+                    state = graph.run_request(envelope, brain=brain, dry_run=False, trigger="mcp")
+                finally:
+                    if after is not None:
+                        after()
     return {"answer": state.answer, "results": list(state.results), "dry_run": not writes}

@@ -57,7 +57,9 @@ def test_writes_flips_ask_notron_read_only_hint():
     on = _tools(mcp_server.build(writes=True, ask=True, brain_factory=_never))
     assert off["ask_notron"].annotations.read_only_hint is True
     assert on["ask_notron"].annotations.read_only_hint is False
-    assert on["ask_notron"].annotations.destructive_hint is False
+    # Unset is "may be destructive" by MCP default: once a note is opted in, the
+    # organizer rewrites it in place, so claiming non-destructive would be untrue.
+    assert on["ask_notron"].annotations.destructive_hint is None
 
 
 def test_build_prints_nothing(capsys):
