@@ -142,3 +142,47 @@ def test_a_dialect_label_is_only_a_label():
         "q": {"$schema": "http://json-schema.org/draft-07/schema#", "type": "string"}}}
     assert not schema.supported(nested)                       # only at the top
     assert not schema.supported({"$schema": {"evil": 1}, "type": "object"})  # only a string
+
+
+def test_vercels_example_and_deprecated_notes_do_not_refuse_a_tool():
+    """Live 2026-10-02: 102 of Vercel's read-only tools were refused for a
+    property-level `example`, one for `deprecated`. Both are notes for people;
+    they constrain nothing."""
+    from notron import schema
+    tool = {"type": "object", "properties": {
+        "idOrName": {"type": "string", "example": "prj_12", "description": "project"},
+        "old": {"type": "string", "deprecated": True}}}
+    assert schema.supported(tool)
+    assert schema.supported({"type": "object", "properties": {
+        "q": {"anyOf": [{"type": "string"}, {"type": "null"}], "example": "x"}}})
+
+
+def test_min_items_is_accepted_only_because_it_is_enforced():
+    from notron import schema
+    tool = {"type": "object", "properties": {
+        "level": {"type": "array", "minItems": 1, "items": {"type": "string"}}}}
+    assert schema.supported(tool)
+    assert schema.validate(tool, {"level": []}) == ["level: too few items"]
+    assert schema.validate(tool, {"level": ["info"]}) == []
+    assert not schema.supported({"type": "object", "properties": {
+        "level": {"type": "array", "minItems": -1}}})
+
+
+def test_exclusive_bounds_are_accepted_only_because_they_are_enforced():
+    from notron import schema
+    tool = {"type": "object", "properties": {
+        "limit": {"type": "integer", "exclusiveMinimum": 0, "exclusiveMaximum": 100}}}
+    assert schema.supported(tool)
+    assert schema.validate(tool, {"limit": 0}) == ["limit: below minimum"]
+    assert schema.validate(tool, {"limit": 100}) == ["limit: above maximum"]
+    assert schema.validate(tool, {"limit": 50}) == []
+    # The draft-04 boolean form means something else; it is refused, not guessed.
+    assert not schema.supported({"type": "object", "properties": {
+        "limit": {"type": "integer", "minimum": 0, "exclusiveMinimum": True}}})
+
+
+def test_a_server_supplied_pattern_is_still_refused():
+    # A regex from a third party can be made to run for ever on a crafted value.
+    from notron import schema
+    assert not schema.supported({"type": "object", "properties": {
+        "name": {"type": "string", "pattern": "^[a-z]+$"}}})

@@ -11,8 +11,9 @@ from __future__ import annotations
 TYPES = {"string": str, "integer": int, "number": (int, float), "boolean": bool,
          "array": list, "object": dict}
 KEYWORDS = {"type", "description", "title", "properties", "required", "additionalProperties",
-            "enum", "items", "minimum", "maximum", "minLength", "maxLength", "maxItems",
-            "default", "examples"}
+            "enum", "items", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
+            "minLength", "maxLength", "minItems", "maxItems",
+            "default", "examples", "example", "deprecated"}
 # Caps used when the server's schema sets none: an uncapped string or list is
 # where a model smuggles a whole note out.
 MAX_STRING = 2000
@@ -20,10 +21,11 @@ MAX_ITEMS = 50
 
 
 #: Keys allowed beside `anyOf` in the one union v1 understands (`nullable`).
-NULLABLE_KEYS = {"anyOf", "description", "title", "default", "examples"}
+NULLABLE_KEYS = {"anyOf", "description", "title", "default", "examples", "example", "deprecated"}
 
-BOUNDS = ("minimum", "maximum")
-LENGTHS = ("minLength", "maxLength", "maxItems")  # counts: whole and not negative
+# `exclusive*` are the 2020-12 numbers; the draft-04 booleans fail `_number`.
+BOUNDS = ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum")
+LENGTHS = ("minLength", "maxLength", "minItems", "maxItems")  # counts: whole and not negative
 
 
 def _number(v) -> bool:
@@ -142,9 +144,15 @@ def validate(s: dict, value, path: str = "") -> list[str]:
             errs.append(f"{here}: below minimum")
         if "maximum" in s and value > s["maximum"]:
             errs.append(f"{here}: above maximum")
+        if "exclusiveMinimum" in s and value <= s["exclusiveMinimum"]:
+            errs.append(f"{here}: below minimum")
+        if "exclusiveMaximum" in s and value >= s["exclusiveMaximum"]:
+            errs.append(f"{here}: above maximum")
     elif t == "array":
         if len(value) > s.get("maxItems", MAX_ITEMS):
             errs.append(f"{here}: too many items")
+        if len(value) < s.get("minItems", 0):
+            errs.append(f"{here}: too few items")
         item = s.get("items", {"type": "string"})
         for i, v in enumerate(value):
             errs += validate(item, v, f"{path}[{i}]")
