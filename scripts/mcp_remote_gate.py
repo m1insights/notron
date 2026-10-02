@@ -10,7 +10,9 @@ kept: the token and the sign-in are gone when the script ends. Prints the tools
 the server offers, approves one read-only tool and calls it twice through the
 same path the listener uses.
 """
+import collections
 import getpass
+import json
 import os
 import sys
 import tempfile
@@ -19,7 +21,7 @@ import time
 # realpath: macOS temp lives under /var, a symlink, which secure storage refuses.
 os.environ["NOTRON_DATA_DIR"] = os.path.realpath(tempfile.mkdtemp(prefix="notron-gate-"))
 
-from notron import channels, connectors, credentials  # noqa: E402
+from notron import channels, connectors, credentials, schema  # noqa: E402
 
 SERVERS = {"github": ("https://api.githubcopilot.com/mcp/", "bearer", "get_me"),
            "vercel": ("https://mcp.vercel.com", "oauth", "list_teams")}
@@ -30,6 +32,33 @@ class Memory:
     def get(self, name): return self.values.get(name)
     def put(self, name, value): self.values[name] = value
     def delete(self, name): self.values.pop(name, None)
+
+
+def _first_unsupported(s, path, top):
+    """The first part of a schema `schema.supported` refuses, as `path: why`."""
+    if not top and isinstance(s, dict) and "anyOf" in s:
+        inner = schema.nullable(s)
+        return f"{path or 'top'}: anyOf" if inner is None else _first_unsupported(inner, path, False)
+    if not isinstance(s, dict):
+        return f"{path or 'top'}: not an object"
+    extra = schema._keys(s) - schema.KEYWORDS
+    if extra:
+        return f"keyword {sorted(extra)}"
+    if not schema._well_formed(s):
+        return "malformed: " + json.dumps(s)[:80]
+    t = s.get("type")
+    if t not in schema.TYPES or (top and t != "object"):
+        return f"type {t!r}"
+    for key, sub in (s.get("properties") or {}).items() if t == "object" else ():
+        found = _first_unsupported(sub, f"{path}.{key}", False)
+        if found:
+            return found
+    if t == "array":
+        item = s.get("items", {"type": "string"})
+        if schema.effective(item).get("type") in ("array", "object"):
+            return "array of objects or arrays"
+        return _first_unsupported(item, path + "[]", False)
+    return ""
 
 
 def main(name):
@@ -48,6 +77,14 @@ def main(name):
     for o in offers:
         if not o.approvable:
             print(f"  not approvable: {o.name} ({o.why})")
+    # Why a read-only tool's arguments were refused, counted by first cause, so
+    # a server whose whole catalogue fails reads as one fixable line.
+    causes = collections.Counter()
+    for o in offers:
+        if o.why == "arguments too complex for v1":
+            causes[_first_unsupported(o.schema, "", True)] += 1
+    for cause, n in causes.most_common(8):
+        print(f"  {n:4} refused for: {cause}")
     # A tool that needs no arguments, so the call below can send `{}`.
     bare = [o.name for o in offers if o.approvable and not o.schema.get("required")]
     if not bare:

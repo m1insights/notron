@@ -88,6 +88,13 @@ def supported(s: dict, *, top: bool = True) -> bool:
     if not top and isinstance(s, dict) and "anyOf" in s:
         inner = nullable(s)
         return inner is not None and supported(inner, top=False)
+    if top and isinstance(s, dict) and "$schema" in s:
+        # The dialect URI zod-to-json-schema puts at the top (every one of
+        # Vercel's tools carries it). It names a draft and constrains nothing;
+        # anywhere else, or as anything but a string, it is not a label.
+        if not isinstance(s["$schema"], str):
+            return False
+        s = {k: v for k, v in s.items() if k != "$schema"}
     if not isinstance(s, dict) or _keys(s) - KEYWORDS or not _well_formed(s):
         return False
     if top and s.get("type") != "object":
