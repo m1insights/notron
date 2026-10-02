@@ -105,7 +105,7 @@ def test_failed_call_persists_cooldown_without_provider_or_user_text(monkeypatch
     state = json.loads(brain_module.PROVIDER_STATE.read_text())
     raw = brain_module.PROVIDER_STATE.read_text()
     assert state["nebius"]["failures"] == 1 and state["nebius"]["retry_after"] > 1000.0
-    assert state["tavily"] == {"failures": 0, "retry_after": 0.0}
+    assert set(state) == {"nebius"}
     assert "sensitive" not in raw
     with pytest.raises(network.ProviderCooldownError):
         ask(instance)
@@ -141,8 +141,7 @@ def test_deadline_failure_persists_cooldown(monkeypatch):
         ask(instance)
 
     assert json.loads(brain_module.PROVIDER_STATE.read_text()) == {
-        "nebius": {"failures": 1, "retry_after": 101.0},
-        "tavily": {"failures": 0, "retry_after": 0.0}}
+        "nebius": {"failures": 1, "retry_after": 101.0}}
 
 
 @pytest.mark.parametrize("status", [408, 429, 500, 503])
@@ -236,3 +235,15 @@ def capture_error(errors, operation):
         operation()
     except Exception as error:
         errors.append(error)
+
+
+def test_a_retry_file_written_before_tavily_moved_to_mcp_still_loads(monkeypatch):
+    """2026-10-02: web search left the provider layer. A state file from before
+    still holds a `tavily` row; refusing it would pause every model call."""
+    brain_module.PROVIDER_STATE.parent.mkdir(parents=True, exist_ok=True)
+    brain_module.PROVIDER_STATE.write_text(json.dumps({
+        "nebius": {"failures": 2, "retry_after": 5.0},
+        "tavily": {"failures": 9, "retry_after": 7.0}}))
+    assert brain_module._retry_state("nebius") == {"failures": 2, "retry_after": 5.0}
+    with pytest.raises(network.ProviderStateError):
+        brain_module._retry_state("tavily")

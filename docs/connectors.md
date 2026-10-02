@@ -18,6 +18,45 @@ The MCP support is an optional extra. Without it, Notron works as before and
 pip install 'notron[mcp]'          # or, in a checkout: uv sync --extra mcp
 ```
 
+## Presets: git, GitHub and web search
+
+Notron's own repository and web lookups are the official MCP servers too. A
+preset is one command; what it may do is fixed in code, not in a file you edit.
+
+```bash
+notron connect preset git        # mcp-server-git 2026.8.18 via uvx (needs uv)
+brew install github-mcp-server   # once
+notron connect preset github     # then: notron connect secret github GITHUB_PERSONAL_ACCESS_TOKEN
+notron connect preset github     # run again once the token is stored, to approve
+notron connect preset tavily     # tavily-mcp 0.2.22 via npx (needs Node); keyless
+```
+
+| Preset | Reached by | Approved tools |
+|---|---|---|
+| `git` | channels with `--allow read` and a `--repo` | `git_status`, `git_log`, `git_branch`, `git_diff_unstaged`, `git_diff`, `git_show` |
+| `github` | channels with `--allow read` and a `--github owner/name` | `list_pull_requests`, `pull_request_read`, `search_issues`, `issue_read`, `list_commits`, `actions_list` |
+| `tavily` | web questions anywhere, and channels with `--allow research` | `tavily_search`, called by code (the researcher), never from a menu |
+
+What a preset adds to an ordinary connector:
+
+- **The repository is code's choice.** `repo_path` (git) and `owner`/`repo`
+  (GitHub) are filled in from the channel and hidden from Nemotron's menu;
+  anything the model sends for them is replaced. The git server is also started
+  with `--repository` set to that repo, so it refuses any other path itself.
+  A project inside a bigger repository (Synqology in `~/Dev`) uses the
+  enclosing repository: `mcp-server-git` will not start on a subfolder.
+- **Tavily is vouched read-only by Notron.** `tavily-mcp` marks none of its
+  tools, so v1 would refuse them all. Notron vouches for `tavily_search` only,
+  and only while the registered command is exactly the pinned one; edit the
+  version and it is an ordinary server again. `--with-key` registers
+  `TAVILY_API_KEY` if you would rather use your own key than the keyless tier.
+- **Absolute paths.** The preset records where the binary really lives, and the
+  server gets that folder first on `PATH`, so a background listener can start
+  `npx` (which needs `node`) even with launchd's short `PATH`.
+
+Measured live on 2026-10-02:
+[`docs/production/evidence/2026-10-02-mcp-presets.md`](production/evidence/2026-10-02-mcp-presets.md).
+
 ## A worked example: what time is it in Tokyo?
 
 `mcp-server-time` is a small read-only server. You need [`uv`](https://docs.astral.sh/uv/)
@@ -130,6 +169,8 @@ to run it. That sits next to roughly 2.5 s for Nemotron Super to decide. Details
 
 ## Not yet
 
+- GitHub's `list_issues` (one argument is a list of objects, which v1 will not
+  half-check); `search_issues` covers it.
 - Tools that change things (planned through the Approve reminder).
 - Remote servers over HTTP with sign-in, such as Notion and Linear. v1 runs local
   servers over stdio.

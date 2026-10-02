@@ -21,7 +21,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import shutil
 import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -76,6 +78,9 @@ class Server:
     #: Kept so the refusal says why, and so a server that changes the tool back
     #: does not quietly regain it: only the user's approval does that.
     changed: tuple[str, ...] = ()
+    #: The `PRESETS` entry this server was installed from, or "". What a preset
+    #: may do beyond an ordinary server lives in code, never in this file.
+    preset: str = ""
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,118 @@ class Offer:
     annotations: dict
     approvable: bool
     why: str = ""
+
+
+@dataclass(frozen=True)
+class Preset:
+    """An official server Notron knows how to run, and what it may do there.
+
+    Plain code, like the Guard: a note, the model or a server can never make
+    one. `binds` names arguments the model never chooses: code fills them from
+    the channel (`repo` → its repository; `owner`/`name` → its GitHub slug) so a
+    request cannot point a tool at another project. `vouched` names tools Notron
+    itself knows are reads, for a server that never says so.
+    """
+    name: str
+    argv: tuple[str, ...]
+    grant: str                          # the channel switch that reaches it
+    needs: str = ""                     # "repo" | "github" | ""
+    secrets: tuple[str, ...] = ()
+    optional_secrets: tuple[str, ...] = ()
+    binds: tuple[tuple[str, str], ...] = ()
+    #: Appended with the channel's repository when a call runs in one, so the
+    #: server itself refuses any other path (`outside the allowed repository`).
+    repo_flag: str = ""
+    tools: tuple[str, ...] = ()
+    vouched: tuple[str, ...] = ()
+    #: False: code calls it (the researcher); Nemotron never picks it from a menu.
+    menu: bool = True
+    install: str = ""                   # how to get the binary, said when it is missing
+
+
+#: Measured against the official servers on 2026-10-02
+#: (`docs/plans/2026-10-02-mcp-replace-design.md`). GitHub's `list_issues` is
+#: left out on purpose: its `field_filters` is a list of objects, which v1 will
+#: not half-check; `search_issues` answers the same questions. Versions are pinned where
+#: the launcher can pin; Homebrew's github-mcp-server is held by the approval
+#: digest instead, like every other server.
+PRESETS = {p.name: p for p in (
+    Preset("git", ("uvx", "mcp-server-git==2026.8.18"), "read", needs="repo",
+           binds=(("repo_path", "repo"),), repo_flag="--repository",
+           tools=("git_status", "git_log", "git_branch", "git_diff_unstaged", "git_diff", "git_show"),
+           install="install uv: https://docs.astral.sh/uv/"),
+    Preset("github", ("github-mcp-server", "stdio", "--read-only",
+                      "--toolsets", "repos,issues,pull_requests,actions"), "read", needs="github",
+           secrets=("GITHUB_PERSONAL_ACCESS_TOKEN",),
+           binds=(("owner", "owner"), ("repo", "name")),
+           tools=("list_pull_requests", "pull_request_read", "search_issues", "issue_read",
+                  "list_commits", "actions_list"),
+           install="brew install github-mcp-server"),
+    # tavily-mcp sets no annotations at all, so v1 would call every tool "changes
+    # things". A search changes nothing; Notron says so for that one tool, and
+    # only while the argv is exactly this pinned one. It runs keyless; a key is
+    # optional (`--secret TAVILY_API_KEY`).
+    Preset("tavily", ("npx", "-y", "tavily-mcp@0.2.22"), "research",
+           optional_secrets=("TAVILY_API_KEY",), tools=("tavily_search",),
+           vouched=("tavily_search",), menu=False,
+           install="install Node.js (for npx): https://nodejs.org"),
+)}
+
+
+def preset_of(server: Server) -> Preset | None:
+    """The preset behind a server, only while it still runs the preset's argv.
+
+    The binary may be recorded as an absolute path (`install_preset`), so the
+    first word compares by name; everything after it must match exactly. A hand
+    edit to the version or the flags is an ordinary server again.
+    """
+    p = PRESETS.get(server.preset)
+    if p is None or not server.argv:
+        return None
+    if Path(server.argv[0]).name != p.argv[0] or tuple(server.argv[1:]) != p.argv[1:]:
+        return None
+    return p
+
+
+def _binds(server: Server) -> dict[str, str]:
+    p = preset_of(server)
+    return dict(p.binds) if p else {}
+
+
+def _toplevel(repo: str) -> str:
+    """The repository that holds `repo`: itself, or the nearest folder above with
+    `.git`. mcp-server-git refuses to start on a subfolder, and Synqology lives
+    inside the developer's whole `~/Dev` monorepo."""
+    if not repo:
+        return ""
+    here = Path(repo).expanduser()
+    for p in (here, *here.parents):
+        if (p / ".git").exists():
+            return str(p)
+    return ""
+
+
+def _channel_value(field: str, channel) -> str:
+    if field == "repo":
+        return _toplevel(getattr(channel, "repo", "") or "")
+    owner, _, name = (getattr(channel, "github", "") or "").partition("/")
+    return {"owner": owner, "name": name}.get(field, "")
+
+
+def _bound(server: Server, channel) -> dict[str, str] | None:
+    """Values for the server's bound arguments, or None when the channel lacks one."""
+    out = {arg: _channel_value(field, channel) for arg, field in _binds(server).items()}
+    return None if any(not v for v in out.values()) else out
+
+
+def _spawn(server: Server, channel=None) -> tuple[str, ...]:
+    """The argv a call runs: the registered one, scoped to the channel's repository."""
+    p = preset_of(server)
+    if p and p.repo_flag and channel is not None:
+        repo = _channel_value("repo", channel)
+        if repo:
+            return (*server.argv, p.repo_flag, repo)
+    return server.argv
 
 
 def qualified(server: str, tool: str) -> str:
@@ -146,7 +263,7 @@ def load() -> list[Server]:
                 raise _damaged()
             out.append(_validate(Server(row["name"], tuple(row["argv"]),
                                         tuple(row.get("secrets", ())), tools,
-                                        tuple(row.get("changed", ())))))
+                                        tuple(row.get("changed", ())), str(row.get("preset", "")))))
     except (KeyError, TypeError, AttributeError) as exc:
         raise _damaged() from exc
     return out
@@ -161,7 +278,7 @@ def _save(servers: list[Server]) -> None:
         {"name": s.name, "argv": list(s.argv), "secrets": list(s.secrets),
          "tools": {n: {"description": t.description, "schema": t.schema, "digest": t.digest}
                    for n, t in s.tools.items()},
-         "changed": list(s.changed)}
+         "changed": list(s.changed), "preset": s.preset}
         for s in servers]})
 
 
@@ -176,10 +293,10 @@ def _require(name: str) -> Server:
     return found
 
 
-def add(name: str, argv, secrets=()) -> Server:
+def add(name: str, argv, secrets=(), *, preset: str = "") -> Server:
     """Register a server. Lists nothing and approves nothing: running it at all
     waits for `discover`, which the user asks for separately."""
-    server = _validate(Server(str(name).strip(), tuple(argv), tuple(secrets)))
+    server = _validate(Server(str(name).strip(), tuple(argv), tuple(secrets), preset=preset))
     if any(privacy.contains_secret(a) for a in server.argv):
         # argv is visible to every process on the Mac, lands in shell history,
         # and would sit in connectors.json in the clear. The value is never
@@ -239,15 +356,17 @@ def _safe_names(params: dict) -> bool:
     props = params.get("properties", {})
     if len(props) > MAX_PROPERTIES or not all(isinstance(k, str) and PROPERTY.match(k) for k in props):
         return False
-    return all(_safe_names(v) for v in props.values() if v.get("type") == "object")
+    return all(_safe_names(schema.effective(v)) for v in props.values()
+               if schema.effective(v).get("type") == "object")
 
 
-def _offer(tool: dict) -> Offer:
+def _offer(tool: dict, vouched=()) -> Offer:
     name, desc = tool.get("name"), tool.get("description") or ""
     params, notes = tool.get("inputSchema"), tool.get("annotations") or {}
     if not isinstance(name, str) or not TOOL.match(name) or not isinstance(desc, str):
         why = "name Notron cannot show safely"
-    elif not isinstance(notes, dict) or notes.get("readOnlyHint") is not True:
+    elif not isinstance(notes, dict) or (notes.get("readOnlyHint") is not True
+                                         and name not in vouched):
         why = "changes things: v1 is read-only"
     elif not isinstance(params, dict) or not schema.supported(params):
         why = "arguments too complex for v1"
@@ -258,6 +377,11 @@ def _offer(tool: dict) -> Offer:
         why = ""
     return Offer(str(name), str(desc), params if isinstance(params, dict) else {},
                  notes if isinstance(notes, dict) else {}, not why, why)
+
+
+def _vouched(server: Server) -> tuple[str, ...]:
+    p = preset_of(server)
+    return p.vouched if p else ()
 
 
 def _list(server: Server) -> list[dict]:
@@ -280,7 +404,8 @@ def _listed(server: Server) -> list[dict]:
 
 def discover(name: str) -> list[Offer]:
     """Ask the server for its tools and say which of them v1 could approve."""
-    return [_offer(t) for t in _listed(_require(name))]
+    server = _require(name)
+    return [_offer(t, _vouched(server)) for t in _listed(server)]
 
 
 def approve(name: str, tool_names) -> list[str]:
@@ -297,12 +422,12 @@ def approve(name: str, tool_names) -> list[str]:
     for n in wanted:
         if n not in listed:
             raise ConnectorError(f"{server.name} has no tool called {n}.")
-        offer = _offer(listed[n])
+        offer = _offer(listed[n], _vouched(server))
         if not offer.approvable:
             raise ConnectorError(f"{server.name}.{n} cannot be approved: {offer.why}.")
     tools = dict(server.tools)
     for n in wanted:
-        o = _offer(listed[n])
+        o = _offer(listed[n], _vouched(server))
         tools[n] = ApprovedTool(n, o.description, o.schema, digest(listed[n]))
     new = replace(server, tools=tools, changed=tuple(c for c in server.changed if c not in wanted))
     _save([new if s.name == server.name else s for s in load()])
@@ -310,17 +435,33 @@ def approve(name: str, tool_names) -> list[str]:
 
 
 def _granted(channel) -> list[Server]:
-    # `Channel.connectors` is checked against this registry when granted, not
-    # when channels load; a name that has since left the registry matches
-    # nothing here and grants nothing.
+    """The servers this channel reaches: those granted by name, and the presets
+    its own switches cover (`read` → git and GitHub, `research` → web search).
+
+    `Channel.connectors` is checked against this registry when granted, not
+    when channels load; a name that has since left the registry matches
+    nothing here and grants nothing. A preset whose channel value is missing (no
+    repository, no GitHub slug) is not reached at all.
+    """
     names = {str(n).lower() for n in channel.connectors}
-    return [s for s in load() if s.name.lower() in names]
+    allow = set(getattr(channel, "allow", ()))
+    out = []
+    for s in load():
+        p = preset_of(s)
+        if s.name.lower() in names or (p is not None and p.grant in allow):
+            if _bound(s, channel) is not None:
+                out.append(s)
+    return out
 
 
-def _shape(params: dict) -> str:
+def _shape(params: dict, hidden=()) -> str:
     required = set(params.get("required", ()))
-    text = json.dumps({k: f"{v.get('type', 'any')}{' (required)' if k in required else ''}"
-                       for k, v in params.get("properties", {}).items()})
+
+    def kind(v):
+        t = schema.effective(v).get("type", "any")
+        return f"{t} or null" if schema.nullable(v) else t
+    text = json.dumps({k: f"{kind(v)}{' (required)' if k in required else ''}"
+                       for k, v in params.get("properties", {}).items() if k not in hidden})
     return text if len(text) <= MAX_SHAPE else text[:MAX_SHAPE] + " …"
 
 
@@ -344,11 +485,14 @@ def offered(channel) -> dict[str, str]:
     """
     out = {}
     for s in _granted(channel):
+        p = preset_of(s)
+        if p is not None and not p.menu:
+            continue
         for t in s.tools.values():
             if t.name in s.changed:
                 continue
             name = qualified(s.name, t.name)
-            out[name] = f"- {name}: {_flat(t.description)} args: {_shape(t.schema)}"
+            out[name] = f"- {name}: {_flat(t.description)} args: {_shape(t.schema, _binds(s))}"
     return out
 
 
@@ -377,6 +521,56 @@ def _disable(server: Server, tool: str) -> None:
         pass  # the call is refused either way; the next one re-checks
 
 
+def _unbound(params: dict, bound) -> dict:
+    """The schema the model's own arguments are checked against: bound ones gone."""
+    if not bound:
+        return params
+    return {**params, "properties": {k: v for k, v in params.get("properties", {}).items()
+                                     if k not in bound},
+            "required": [r for r in params.get("required", []) if r not in bound]}
+
+
+def _checked(server: Server, approved: ApprovedTool, arguments, label: str, channel=None) -> str:
+    """Check, redact, bind, re-verify and run one approved tool. Every refusal is a line.
+
+    Bound arguments are removed from whatever the model sent and set by code
+    after redaction: redaction must never rewrite a repository path, and the
+    model must never choose one.
+    """
+    if not isinstance(arguments, dict):
+        return f"{label}: refused — arguments: wrong type"
+    bound = (_bound(server, channel) if channel is not None else None) or {}
+    if channel is not None and _binds(server) and not bound:
+        return f"{label}: not available in this channel"
+    arguments = {k: v for k, v in arguments.items() if k not in bound}
+    loose = _unbound(approved.schema, bound)
+    errors = schema.validate(loose, arguments)
+    if errors:
+        # Errors name the field and the rule, never the value.
+        return f"{label}: refused — " + "; ".join(errors[:5])
+    if any(privacy.contains_secret(s) for s in _strings(arguments)):
+        return f"{label}: blocked: arguments looked like a credential"
+    [safe] = prepare_outbound("connector", [Passage(json.dumps(arguments), "model")])
+    try:
+        arguments = json.loads(safe)
+    except ValueError:
+        return f"{label}: blocked: arguments looked like a credential"
+    arguments = {**arguments, **bound}
+    # Redaction can turn a valid value into one the schema refuses (an enum
+    # member, a minimum length); what is sent must pass the same check.
+    errors = schema.validate(approved.schema, arguments)
+    if errors:
+        return f"{label}: refused — " + "; ".join(errors[:5])
+    secrets = _secrets(server)
+    argv = _spawn(server, channel)
+    live = next((t for t in mcp_client.list_tools(argv, secrets)
+                 if isinstance(t, dict) and t.get("name") == approved.name), None)
+    if live is None or digest(live) != approved.digest:
+        _disable(server, approved.name)
+        return f"{label}: " + CHANGED.format(server=server.name)
+    return mcp_client.call_tool(argv, secrets, approved.name, arguments)
+
+
 def call(channel, name, arguments) -> str:
     """Run one approved tool for this channel, or say in one line why not.
 
@@ -396,29 +590,7 @@ def call(channel, name, arguments) -> str:
         approved = server.tools.get(tool)
         if approved is None:
             return f"{label}: not approved"
-        errors = schema.validate(approved.schema, arguments)
-        if errors:
-            # Errors name the field and the rule, never the value.
-            return f"{label}: refused — " + "; ".join(errors[:5])
-        if any(privacy.contains_secret(s) for s in _strings(arguments)):
-            return f"{label}: blocked: arguments looked like a credential"
-        [safe] = prepare_outbound("connector", [Passage(json.dumps(arguments), "model")])
-        try:
-            arguments = json.loads(safe)
-        except ValueError:
-            return f"{label}: blocked: arguments looked like a credential"
-        # Redaction can turn a valid value into one the schema refuses (an enum
-        # member, a minimum length); what is sent must pass the same check.
-        errors = schema.validate(approved.schema, arguments)
-        if errors:
-            return f"{label}: refused — " + "; ".join(errors[:5])
-        secrets = _secrets(server)
-        live = next((t for t in mcp_client.list_tools(server.argv, secrets)
-                     if isinstance(t, dict) and t.get("name") == tool), None)
-        if live is None or digest(live) != approved.digest:
-            _disable(server, tool)
-            return f"{label}: " + CHANGED.format(server=server.name)
-        return mcp_client.call_tool(server.argv, secrets, tool, arguments)
+        return _checked(server, approved, arguments, label, channel)
     except (CredentialUnavailable, StorageError, PolicyError):
         raise
     except MissingSecret as exc:
@@ -430,3 +602,72 @@ def call(channel, name, arguments) -> str:
         # TimeoutError, an ExceptionGroup from anyio). Only the type is shown:
         # a server's message can carry anything, including what it was handed.
         return f"{label}: could not run ({type(exc).__name__})"
+
+
+# --------------------------------------------------------------- presets
+
+def _resolve(command: str) -> str:
+    """The command as an absolute path the listener can start, or "" if missing.
+
+    A launchd job has a short PATH, and a version manager's shim folder (fnm's
+    `fnm_multishells/<pid>`) dies with the shell that made it, so the folder is
+    resolved to where the binary really lives; the file name is kept, because
+    `preset_of` compares by it.
+    """
+    found = shutil.which(command)
+    if not found:
+        return ""
+    return str(Path(os.path.realpath(os.path.dirname(found))) / os.path.basename(found))
+
+
+def install_preset(name: str, *, with_key: bool = False) -> tuple[Server, list[str]]:
+    """Register an official server from `PRESETS` and approve its default tools.
+
+    Returns the server and the tools approved. A server that needs a secret not
+    yet stored is registered and approves nothing: `MissingSecret` says which
+    command stores it, and running the preset again finishes the approval.
+    """
+    p = PRESETS.get(str(name).lower())
+    if p is None:
+        raise ConnectorError(f"No preset called {name}. Presets: {', '.join(PRESETS)}.")
+    existing = get(p.name)
+    if existing is not None and preset_of(existing) is None:
+        raise ConnectorError(f"There is already a connector called {p.name}; "
+                             f"remove it first: notron connect remove {p.name}")
+    stale = (existing is not None and Path(existing.argv[0]).is_absolute()
+             and not Path(existing.argv[0]).exists())
+    if existing is None or stale:
+        exe = _resolve(p.argv[0])
+        if not exe:
+            raise ConnectorError(f"{p.argv[0]} is not installed: {p.install}")
+        if stale:
+            # The binary moved (a Node upgrade under fnm, a Homebrew reinstall).
+            # Same preset, same secrets and approvals; only where it lives changes.
+            existing = replace(existing, argv=(exe, *p.argv[1:]))
+            _save([existing if s.name == existing.name else s for s in load()])
+        else:
+            secrets = p.secrets + (p.optional_secrets if with_key else ())
+            existing = add(p.name, (exe, *p.argv[1:]), secrets, preset=p.name)
+    return existing, approve(p.name, p.tools)
+
+
+def web_search(query: str, limit: int) -> str:
+    """Run the `tavily` preset's search for the researcher, through every check a
+    channel call gets. Raises ConnectorError when web search is not set up."""
+    server = next((s for s in load() if s.preset == "tavily" and preset_of(s)), None)
+    if server is None:
+        raise ConnectorError("web search is not set up — notron connect preset tavily")
+    approved = server.tools.get("tavily_search")
+    if approved is None or "tavily_search" in server.changed:
+        raise ConnectorError("web search is not approved — notron connect preset tavily")
+    return _checked(server, approved, {"query": query, "max_results": limit}, "tavily.tavily_search")
+
+
+def web_ready() -> bool:
+    """True when the researcher could search: the preset is installed and approved."""
+    try:
+        server = next((s for s in load() if s.preset == "tavily" and preset_of(s)), None)
+    except ConnectorError:
+        return False
+    return (server is not None and "tavily_search" in server.tools
+            and "tavily_search" not in server.changed)

@@ -64,6 +64,9 @@ this document must name it and the response process before public release.
 - **Provider retention:** Nebius and Tavily retention/training behavior has not
   been verified for the intended account configuration. Do not promise zero
   provider retention. Approved content leaves the Mac when those services are used.
+  Web search runs through Tavily's MCP server, a separate local process that makes
+  its own network calls (outside `network.py`'s pinned routes); only the query,
+  after policy and redaction, is handed to it.
 - **User edit loss:** Apple Notes writes replace a whole body and are non-atomic.
   P02 Task 2 binds IDs/revisions before inference, serializes local writes, checks
   policy, revision and every known content source after final reads, requires a

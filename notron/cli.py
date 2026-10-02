@@ -108,7 +108,7 @@ def cmd_key(args):
 
 def cmd_channel(args):
     """Project channels: a note per project that every new line in is for her."""
-    from . import channels, credentials, tools
+    from . import channels, connectors, credentials
     if args.action != 'list' and credentials._provider is None:
         # Saving a grant walks retention, which needs secure storage unlocked.
         credentials.startup()
@@ -124,7 +124,11 @@ def cmd_channel(args):
             print(f"  {c.title:28} {where}  [{', '.join(c.allow)}]{hand}")
             if c.test:
                 print(f"  {'':28} tests: {' '.join(c.test)}")
-            print(f"  {'':28} tools: {', '.join(t.name for t in tools.available(c)) or 'none'}")
+            try:
+                offered = ", ".join(connectors.offered(c)) or "none"
+            except connectors.ConnectorError as problem:
+                offered = f"unavailable ({problem})"
+            print(f"  {'':28} tools: {offered}")
             if c.connectors:
                 print(f"  {'':28} connectors: {', '.join(c.connectors)}")
         print()
@@ -230,6 +234,28 @@ def cmd_connect(args):
             for var in server.secrets:
                 print(f"  needs {var}: notron connect secret {server.name} {var}")
             print(f"  Next: notron connect tools {server.name}\n")
+        elif args.action == 'preset':
+            preset = connectors.PRESETS.get(args.name.lower())
+            if preset is None:
+                raise connectors.ConnectorError(
+                    f"No preset called {args.name}. Presets: {', '.join(connectors.PRESETS)}.")
+            if (preset.secrets or args.with_key) and credentials._provider is None:
+                credentials.startup()
+            try:
+                server, done = connectors.install_preset(preset.name, with_key=args.with_key)
+            except connectors.MissingSecret:
+                server = connectors.get(preset.name)
+                print(f"\n  Registered {server.name}: {' '.join(server.argv)}")
+                for var in server.secrets:
+                    print(f"  Store its token: notron connect secret {server.name} {var}")
+                print(f"  Then run this again: notron connect preset {server.name}\n")
+                return
+            print(f"\n  {server.name}: {' '.join(server.argv)}")
+            print(f"  Approved {', '.join(connectors.qualified(server.name, t) for t in done)}.")
+            reach = {"read": "every channel with --allow read" + (
+                         " and a --repo" if preset.needs == "repo" else " and a --github"),
+                     "research": "web questions everywhere, and channels with --allow research"}
+            print(f"  Used by: {reach[preset.grant]}.\n")
         elif args.action == 'tools':
             unlock(connectors.get(args.name))
             offers = connectors.discover(args.name)
@@ -270,9 +296,18 @@ def cmd_connect(args):
         elif args.action == 'list':
             found = connectors.load()
             granted = {}
-            for ch in channels.load():
+            loaded = channels.load()
+            for ch in loaded:
                 for name in ch.connectors:
                     granted.setdefault(name.lower(), []).append(ch.name)
+            for s in found:
+                # A preset is reached through a channel's own switches, not a name.
+                p = connectors.preset_of(s)
+                if p is not None:
+                    for ch in loaded:
+                        if p.grant in ch.allow and ch.name not in granted.get(s.name.lower(), []) \
+                                and connectors._bound(s, ch) is not None:
+                            granted.setdefault(s.name.lower(), []).append(ch.name)
             rows = [dict(name=s.name, argv=list(s.argv), secrets=list(s.secrets),
                          tools=sorted(s.tools), changed=list(s.changed),
                          channels=granted.get(s.name.lower(), [])) for s in found]
@@ -1071,7 +1106,8 @@ def main(argv=None):
     ch.add_argument('--repo', help='the local repository folder')
     ch.add_argument('--github', help='the GitHub repository, owner/name')
     ch.add_argument('--allow', default=None,
-                    help='what she may use there: read (repo + GitHub, read-only), research (web), '
+                    help='what she may use there: read (the git and github connectors, read-only), '
+                         'research (web search through the tavily connector), '
                          'run (hand an approved brief to a coding agent). Default read,research')
     ch.add_argument('--hand', choices=['claude', 'codex'], default=None,
                     help='the coding agent `run` hands work to: your own Claude Code or Codex install')
@@ -1091,6 +1127,11 @@ def main(argv=None):
                    help='an environment variable the server needs, e.g. GITHUB_TOKEN (repeatable); '
                         'set its value with `notron connect secret`')
     c.add_argument('argv', nargs=argparse.REMAINDER, help='after --: the command that starts the server')
+    c = cs.add_parser('preset', help='install an official server Notron knows: git, github or tavily')
+    c.add_argument('name', help='git (your repo), github (needs a token), tavily (web search)')
+    c.add_argument('--with-key', action='store_true',
+                   help='tavily: use your own API key (set it with `notron connect secret tavily TAVILY_API_KEY`); '
+                        'without it, search runs keyless')
     c = cs.add_parser('tools', help='what the server offers, and what v1 could approve')
     c.add_argument('name')
     c = cs.add_parser('approve', help='approve read-only tools, one by one')

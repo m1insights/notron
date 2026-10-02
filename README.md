@@ -330,7 +330,7 @@ order, and on which model.
   this", "undo") are routed in code with no model at all.
 - **retriever** — semantic search over approved notes, with redaction before embeddings
   and encrypted caching. Ignored notes are excluded; secret detection is imperfect.
-- **researcher** — Tavily web search, only when the answer cannot be in her head
+- **researcher** — web search through Tavily's official MCP server, only when the answer cannot be in her head
   or in your notes. Fails soft: no key or a timeout costs the web, not the reply.
 - **agenda** — reads today's real calendar and open reminders via EventKit. No
   model, and only when the request is about the day.
@@ -438,8 +438,11 @@ notron mcp config      # paste the block into your client's MCP config
 ## Powered by
 
 - **[Nebius Token Factory](https://tokenfactory.nebius.com)** — core inference; planned external-agent integrations use separately authorized providers.
-- **[Tavily](https://tavily.com)** — web search, when the answer is not in her
-  head or your notes. Optional; leave the key out and she works without it.
+- **[Tavily](https://tavily.com)** — web search through its official MCP server
+  (`notron connect preset tavily`), when the answer is not in her head or your
+  notes. Runs keyless; optional, and she works without it.
+- **Official MCP servers for git and GitHub** — `notron connect preset git` /
+  `github`: what a project channel can look at, read-only, fenced to its repo.
 - **NVIDIA Nemotron 3** (Nano 30B / Super 120B / Ultra 550B) — open-source models.
 - **Apple Notes + iCloud** — the interface and the sync layer, free.
 

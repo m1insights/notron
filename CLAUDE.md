@@ -101,6 +101,7 @@ nor tell whether one is pinned; that screen instructs and opens
 .venv/bin/python -m notron library         # which notes she may file into / never reads
 .venv/bin/python -m notron channel add Synqology --repo ~/Dev/apps/synqology [--github owner/repo]
 .venv/bin/python -m notron channel list    # project channels and the read-only tools each may use
+.venv/bin/python -m notron connect preset git|github|tavily  # install an official MCP server: repo, GitHub (token), web search (keyless)
 .venv/bin/python -m notron review          # what is on hold; `review dismiss <id>` lets it go
 .venv/bin/python -m notron channel set Synqology --allow read,research,run --hand claude  # let Nemotron hand approved work to your coding agent
 .venv/bin/python -m notron tasks           # hand-off tasks; `tasks show|approve|cancel <id>`, `--json` for the task board
@@ -136,7 +137,7 @@ A declared graph of specialised nodes, not one agent in a loop:
 ```
 watcher ─► router ─► project ─► retriever ─► researcher ─► agenda ─► planner ─► scheduler ─► doer ─► filer ─► organizer ─► undoer ─► writer ─► executor
   │          │          │            │           │          │           │          │        │        │           │        │          │
-no LLM     Super     Super      no LLM       Tavily      no LLM       Super       Super    no LLM   Super     Super     no LLM   Super   no LLM + Guard
+no LLM     Super     Super      no LLM     Tavily MCP    no LLM       Super       Super    no LLM   Super     Super     no LLM   Super   no LLM + Guard
 ```
 
 Nodes decline work they do not own. Model tiers live in `brain.DEFAULT_MODELS`
@@ -171,7 +172,7 @@ are Qwen3-Embedding-8B because Nebius serves no NVIDIA embedding model.
 | `care.py` / `daily.py` | "Take Care of Notron" and the morning routine |
 | `reflect.py` | The self-improvement loop — lessons from answers that missed |
 | `channels.py` | Project channels: `Notron <Project>` notes, every new line a request (Siri can append one). Grants live in the registry, never the note |
-| `tools.py` | Fixed-argv, read-only git/gh tools a channel may use; the model names tools, never commands |
+| `connectors.py` / `mcp_client.py` | MCP servers a channel may use, read-only. Presets in code (`notron connect preset git\|github\|tavily`) pin the official servers; `read` reaches git/GitHub, `research` reaches Tavily (researcher only). The repo/owner arguments are bound by code from the channel, never chosen by the model; every call re-checks the approved tool's digest first |
 | `handoff.py` | Nemotron-briefed tasks: digest-bound approval, a git worktree + `sandbox-exec` fence for Claude Code/Codex, branch-only results, the channel's own tests run by Notron afterwards (fenced, network off), Nemotron review. Failing tests are never "Done". Never pushes |
 | `inbox.py` | The task inbox: a Reminders list "Notron". Nemotron routes each reminder to a channel (or `Notron Tasks`); the answer lands in that note; `Approve:` / `✅ Done:` reminders buzz the phone, and ticking Approve is the id-bound go. Channels without a repo are workspaces: the agent writes Markdown/CSV into `~/Documents/Notron` |
 | `mail.py` | Apple Mail via AppleScript, read only: bulk inbox headers, bodies by index+id, sent subjects. No script sends, replies, saves, moves or deletes (a test reads them all) |

@@ -19,6 +19,9 @@ MAX_STRING = 2000
 MAX_ITEMS = 50
 
 
+#: Keys allowed beside `anyOf` in the one union v1 understands (`nullable`).
+NULLABLE_KEYS = {"anyOf", "description", "title", "default", "examples"}
+
 BOUNDS = ("minimum", "maximum")
 LENGTHS = ("minLength", "maxLength", "maxItems")  # counts: whole and not negative
 
@@ -50,9 +53,42 @@ def _well_formed(s: dict) -> bool:
     return True
 
 
+def _keys(s: dict) -> set:
+    # `x-*` keys are vendor annotations (github-mcp-server's `x-mcp-header`).
+    # JSON Schema gives them no meaning, so they constrain nothing and check nothing.
+    return {k for k in s if not (isinstance(k, str) and k.startswith("x-"))}
+
+
+def nullable(s: dict) -> dict | None:
+    """The `T` in `{"anyOf": [T, {"type": "null"}]}`, or None for any other shape.
+
+    That pair is how Pydantic writes an optional argument (mcp-server-git
+    writes every one this way). It is the only union v1 understands: a value is
+    null, or it passes every rule of `T`. Real unions are refused.
+    """
+    if not isinstance(s, dict) or "anyOf" not in s or _keys(s) - NULLABLE_KEYS:
+        return None
+    branches = s["anyOf"]
+    if not isinstance(branches, list) or len(branches) != 2:
+        return None
+    null = {"type": "null"}
+    if branches.count(null) != 1:
+        return None
+    [inner] = [b for b in branches if b != null]
+    return inner if isinstance(inner, dict) else None
+
+
+def effective(s: dict) -> dict:
+    """The schema a value is really checked against: `T` for a nullable `T`."""
+    return nullable(s) or s
+
+
 def supported(s: dict, *, top: bool = True) -> bool:
     """True when every keyword in `s` is one this module actually enforces."""
-    if not isinstance(s, dict) or set(s) - KEYWORDS or not _well_formed(s):
+    if not top and isinstance(s, dict) and "anyOf" in s:
+        inner = nullable(s)
+        return inner is not None and supported(inner, top=False)
+    if not isinstance(s, dict) or _keys(s) - KEYWORDS or not _well_formed(s):
         return False
     if top and s.get("type") != "object":
         return False
@@ -64,7 +100,7 @@ def supported(s: dict, *, top: bool = True) -> bool:
     if t == "array":
         # Arrays hold scalars only in v1: nested containers are refused, not half-checked.
         item = s.get("items", {"type": "string"})
-        return supported(item, top=False) and item.get("type") not in ("array", "object")
+        return supported(item, top=False) and effective(item).get("type") not in ("array", "object")
     return True
 
 
@@ -78,6 +114,9 @@ def _is(value, t: str) -> bool:
 def validate(s: dict, value, path: str = "") -> list[str]:
     """Every rule `value` breaks, as `field: rule`. An empty list means it may go."""
     here = path or "arguments"
+    inner = nullable(s)
+    if inner is not None:
+        return [] if value is None else validate(inner, value, path)
     t = s.get("type")
     if t not in TYPES or not _is(value, t):
         return [f"{here}: wrong type"]

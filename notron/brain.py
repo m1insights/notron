@@ -70,7 +70,11 @@ def _deadline_guard(deadline: float):
                 signal.setitimer(signal.ITIMER_REAL, max(0.001, old_timer[0] - elapsed), old_timer[1])
 
 
-_PROVIDERS = ('nebius', 'tavily')
+_PROVIDERS = ('nebius',)
+#: Retry rows for providers Notron no longer calls directly. Tavily moved to an
+#: MCP server on 2026-10-02; a state file written before then still holds its
+#: row, and refusing that file would pause every model call.
+_RETIRED_PROVIDERS = ('tavily',)
 
 
 def _empty_retry_state() -> dict:
@@ -86,6 +90,9 @@ def _all_retry_state() -> dict:
         return _empty_retry_state()
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
         raise network.ProviderStateError('Provider retry state is unavailable.') from None
+    if isinstance(raw, dict):
+        for service in _RETIRED_PROVIDERS:
+            raw.pop(service, None)
     if not isinstance(raw, dict) or set(raw) != set(_PROVIDERS):
         raise network.ProviderStateError('Provider retry state is unavailable.')
     for service in _PROVIDERS:

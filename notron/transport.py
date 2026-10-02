@@ -71,7 +71,7 @@ class ManagedTransport:
         self.stopped=True
         if hasattr(self.session,'stop'): self.session.stop()
     def _http(self,operation,body,token,deadline):
-        if operation not in {'infer','embed','vision','search',*(f'worker/lease/{x}' for x in ('acquire','renew','release','check'))}: raise ManagedError('permission_required')
+        if operation not in {'infer','embed','vision',*(f'worker/lease/{x}' for x in ('acquire','renew','release','check'))}: raise ManagedError('permission_required')
         host=urlsplit(self.service_url).hostname
         connection=network._ProviderConnection(host,443,timeout=max(.001,deadline-time.monotonic()),context=ssl.create_default_context())
         connection.write_timeout=max(.001,deadline-time.monotonic())
@@ -206,18 +206,6 @@ class ManagedTransport:
         prepared,validate=self._prepared_boundary('embed',passages)
         data=self.request('embed',{'passages':prepared},deadline,before_send=validate)
         return _validated_embeddings(data.get('embeddings'),len(passages))
-    def search(self,passages,limit,depth,deadline):
-        prepared,validate=self._prepared_boundary('search',passages)
-        data=self.request('search',{'passages':prepared,'limit':limit,'depth':depth},deadline,before_send=validate)
-        return _validated_search(data,limit)
-
-def _validated_search(data,limit):
-    if isinstance(data,dict) and data.get('answer') is None: data=data|{'answer':''}
-    if not isinstance(data,dict) or not isinstance(data.get('answer'),str) or not isinstance(data.get('results'),list) or len(data['results'])>limit:
-        raise ManagedError('outcome_uncertain')
-    for r in data['results']:
-        if not isinstance(r,dict) or any(not isinstance(r.get(k),str) for k in ('title','url','content')): raise ManagedError('outcome_uncertain')
-    return data
 
 def _validated_embeddings(vectors,count):
     if not isinstance(vectors,list) or len(vectors)!=count or any(not isinstance(v,list) or not 1<=len(v)<=8192 or any(type(x) not in (int,float) or not math.isfinite(x) for x in v) for v in vectors):
@@ -235,9 +223,6 @@ def _direct_message(message):
 class DirectTransport:
     """Existing constrained user-Keychain adapter behind the same Brain methods."""
     def __init__(self,brain): self.brain=brain
-    def search(self,passages,limit,depth,deadline):
-        from .research import _search
-        return _validated_search(_search('\n'.join(prepare_outbound('search',passages)),limit,depth,deadline),limit)
     def infer(self,tier,system,passages,budget,json_mode,temperature,purpose,deadline):
         b=self.brain
         kwargs={'response_format':{'type':'json_object'}} if json_mode else {}

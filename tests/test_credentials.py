@@ -152,8 +152,8 @@ def test_legacy_repository_cache_blocks_cloud_even_when_managed_store_empty(monk
 
 def test_provision_api_key_stores_the_trimmed_value(_task3_storage):
     from notron import credentials
-    credentials.provision_api_key('tavily-api-key', '  synthetic-key-value\n')
-    assert _task3_storage.values['tavily-api-key'] == b'synthetic-key-value'
+    credentials.provision_api_key('development-nebius-api-key', '  synthetic-key-value\n')
+    assert _task3_storage.values['development-nebius-api-key'] == b'synthetic-key-value'
 
 
 def test_provision_api_key_refuses_names_outside_the_provisionable_set(_task3_storage):
@@ -161,7 +161,8 @@ def test_provision_api_key_refuses_names_outside_the_provisionable_set(_task3_st
     destination and `managed-refresh` is native-only. Letting a general "store a
     key" command write either would widen a deliberate boundary."""
     from notron import credentials
-    for name in (credentials.STORAGE_KEY, 'managed-refresh', 'anything-at-all'):
+    for name in (credentials.STORAGE_KEY, 'managed-refresh', 'anything-at-all',
+                 'tavily-api-key'):  # web search is an MCP connector since 2026-10-02
         with pytest.raises(credentials.CredentialUnavailable):
             credentials.provision_api_key(name, 'synthetic-key-value')
 
@@ -172,7 +173,7 @@ def test_provision_api_key_refuses_a_paste_accident(_task3_storage):
     from notron import credentials
     for bad in ('', '   ', 'line one\nline two', 'has internal space', 'x' * 5000):
         with pytest.raises(credentials.CredentialUnavailable):
-            credentials.provision_api_key('tavily-api-key', bad)
+            credentials.provision_api_key('development-nebius-api-key', bad)
 
 
 def test_provision_api_key_detects_a_store_that_did_not_take(monkeypatch):
@@ -185,7 +186,7 @@ def test_provision_api_key_detects_a_store_that_did_not_take(monkeypatch):
 
     credentials.configure(Loses())
     with pytest.raises(credentials.CredentialUnavailable, match='verified'):
-        credentials.provision_api_key('tavily-api-key', 'synthetic-key-value')
+        credentials.provision_api_key('development-nebius-api-key', 'synthetic-key-value')
 
 
 def test_provisioned_reports_presence_and_never_a_value(_task3_storage):
@@ -194,14 +195,14 @@ def test_provisioned_reports_presence_and_never_a_value(_task3_storage):
     state = dict(credentials.provisioned())
     assert set(state) == set(credentials.PROVISIONABLE)
     assert state['nebius-api-key'] is True
-    assert state['tavily-api-key'] is False
+    assert state['development-nebius-api-key'] is False
 
 
 def test_forget_api_key_removes_only_provisionable_names(_task3_storage):
     from notron import credentials
-    credentials.provision_api_key('tavily-api-key', 'synthetic-key-value')
-    credentials.forget_api_key('tavily-api-key')
-    assert credentials.get('tavily-api-key') is None
+    credentials.provision_api_key('development-nebius-api-key', 'synthetic-key-value')
+    credentials.forget_api_key('development-nebius-api-key')
+    assert credentials.get('development-nebius-api-key') is None
     for name in (credentials.STORAGE_KEY, 'managed-refresh'):
         with pytest.raises(credentials.CredentialUnavailable):
             credentials.forget_api_key(name)
@@ -250,11 +251,11 @@ def test_key_command_reads_the_secret_from_stdin_never_argv(monkeypatch, capsys,
     history, so the secret must never be an argument -- and must not be echoed."""
     from notron import cli
     monkeypatch.setattr('sys.stdin', io.StringIO('synthetic-stdin-secret\n'))
-    cli.main(['key', 'set', 'tavily-api-key'])
+    cli.main(['key', 'set', 'development-nebius-api-key'])
     captured = capsys.readouterr()
     assert 'synthetic-stdin-secret' not in captured.out
     assert 'synthetic-stdin-secret' not in captured.err
-    assert _task3_storage.values['tavily-api-key'] == b'synthetic-stdin-secret'
+    assert _task3_storage.values['development-nebius-api-key'] == b'synthetic-stdin-secret'
 
 
 def test_key_list_prints_names_and_presence_but_no_secrets(_task3_storage, capsys):
@@ -297,7 +298,7 @@ def test_key_set_reports_why_a_paste_was_refused(monkeypatch, capsys, _task3_sto
     from notron import cli
     monkeypatch.setattr('sys.stdin', io.StringIO('two\nlines\n'))
     with pytest.raises(SystemExit):
-        cli.main(['key', 'set', 'tavily-api-key'])
+        cli.main(['key', 'set', 'development-nebius-api-key'])
     err = capsys.readouterr().err
     assert 'more than one line' in err
 

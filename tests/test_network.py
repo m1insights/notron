@@ -83,8 +83,6 @@ def wire(monkeypatch):
                 body = {'data': [{'index': 0, 'embedding': [1., 0.]}]}
             elif b'/models ' in self.data:
                 body = {'data': [{'id': 'synthetic-model'}]}
-            elif b'/search ' in self.data:
-                body = {'answer': 'synthetic result', 'results': []}
             else:
                 body = {'choices': [{'message': {'content': 'synthetic answer'}}]}
             data = json.dumps(body).encode()
@@ -100,11 +98,7 @@ def wire(monkeypatch):
 
 def invoke(boundary):
     from notron.brain import Brain
-    from notron import research
     passages = [Passage('synthetic question', 'user_request')]
-    if boundary == 'search':
-        credentials._provider.put(credentials.SEARCH_KEY, b'synthetic-search-key')
-        return research.search(passages)
     brain = Brain.from_credentials()
     try:
         if boundary == 'inference':
@@ -116,11 +110,11 @@ def invoke(boundary):
         brain._client.close()
 
 
-@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models', 'search'])
+@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models'])
 def test_every_real_transport_connects_only_to_validated_ip_with_original_tls_name(wire, boundary):
     result = invoke(boundary)
     assert result
-    host = 'api.tavily.com' if boundary == 'search' else 'api.tokenfactory.nebius.com'
+    host = 'api.tokenfactory.nebius.com'
     assert wire.dns == [(host, 443)]
     assert wire.connects == [('93.184.216.34', 443)]
     assert wire.tls == [(host, True, ssl.CERT_REQUIRED)]
@@ -128,7 +122,7 @@ def test_every_real_transport_connects_only_to_validated_ip_with_original_tls_na
     assert b'synthetic-' in wire.requests[0]
 
 
-@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models', 'search'])
+@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models'])
 @pytest.mark.parametrize('addresses', [['127.0.0.1'], ['93.184.216.34', '10.0.0.2'], ['::ffff:8.8.8.8'], []])
 def test_every_boundary_rejects_prohibited_dns_before_credentials_leave(wire, boundary, addresses):
     wire.addresses = addresses
@@ -137,7 +131,7 @@ def test_every_boundary_rejects_prohibited_dns_before_credentials_leave(wire, bo
     assert wire.connects == [] and wire.requests == []
 
 
-@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models', 'search'])
+@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models'])
 @pytest.mark.parametrize('status', [301, 302, 303, 307, 308])
 def test_redirects_never_forward_authorization_or_search_body(wire, boundary, status):
     wire.status = status
@@ -192,14 +186,7 @@ def test_sdk_base_mutation_cannot_redirect_production_key(wire):
         brain._client.close()
 
 
-def test_search_endpoint_mutation_is_blocked(monkeypatch, wire):
-    from notron import research
-    monkeypatch.setattr(research, 'ENDPOINT', 'https://attacker.example/search')
-    with pytest.raises(PolicyError): invoke('search')
-    assert not wire.requests and not wire.dns
-
-
-@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models', 'search'])
+@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models'])
 def test_proxy_environment_cannot_receive_provider_credentials(monkeypatch, wire, boundary):
     monkeypatch.setenv('HTTPS_PROXY', 'http://synthetic:proxy-secret@attacker.example:8888')
     monkeypatch.setenv('ALL_PROXY', 'http://attacker.example:8888')
@@ -209,7 +196,7 @@ def test_proxy_environment_cannot_receive_provider_credentials(monkeypatch, wire
     assert b'proxy-secret' not in wire.requests[0]
 
 
-@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models', 'search'])
+@pytest.mark.parametrize('boundary', ['inference', 'embedding', 'models'])
 def test_public_ipv6_connection_is_pinned(wire, boundary):
     wire.addresses = ['2606:4700:4700::1111']
     invoke(boundary)
@@ -327,15 +314,14 @@ def test_inference_transport_uses_remaining_interactive_deadline(wire):
     assert all(0 < value <= 30 for value in wire.timeouts)
 
 
-@pytest.mark.parametrize('boundary', ['inference', 'search'])
+@pytest.mark.parametrize('boundary', ['inference'])
 def test_blocking_dns_is_interrupted_by_total_deadline(monkeypatch, wire, boundary):
     import time
-    from notron import brain, research
+    from notron import brain
     from types import SimpleNamespace
 
     monkeypatch.setattr(brain, 'INTERACTIVE_DEADLINE', 0.05)
     monkeypatch.setattr(brain, '_deadline_seconds', SimpleNamespace(get=lambda: 0.05))
-    monkeypatch.setattr(research, 'TIMEOUT', 0.05)
 
     def blocked_resolution(*args, **kwargs):
         time.sleep(1)
@@ -349,14 +335,13 @@ def test_blocking_dns_is_interrupted_by_total_deadline(monkeypatch, wire, bounda
     assert not wire.connects and not wire.requests
 
 
-@pytest.mark.parametrize('boundary', ['inference', 'search'])
+@pytest.mark.parametrize('boundary', ['inference'])
 def test_slow_response_body_is_interrupted_by_total_deadline(monkeypatch, boundary):
     import time
-    from notron import brain, research
+    from notron import brain
     from types import SimpleNamespace
 
     monkeypatch.setattr(brain, '_deadline_seconds', SimpleNamespace(get=lambda: 0.05))
-    monkeypatch.setattr(research, 'TIMEOUT', 0.05)
 
     class SlowResponse:
         status = 200

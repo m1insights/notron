@@ -1,9 +1,9 @@
 """Tests run with no API key, no network and no real Notes app — always.
 
-Every world question now routes to the researcher by design, so a Tavily key
-exported in the developer's shell would quietly turn the graph tests into
-live web searches. Strip it before every test; a test that wants a key sets
-one itself.
+Every world question now routes to the researcher by design, and web search is
+an MCP server process (`connectors.PRESETS["tavily"]`): `mcp_client._run` is
+shut for every test, and a stray TAVILY_API_KEY in the developer's shell is
+stripped anyway.
 
 The same went for the Notes app itself, and that one had teeth. Any test that
 reached code calling `applescript.run` without patching it first talked to the
@@ -341,8 +341,6 @@ def outbound_transport(monkeypatch):
     """Real Brain, fake provider adapters; never construct a credential client."""
     from types import SimpleNamespace as NS
     from notron.brain import Brain
-    import json
-    from notron import network
 
     calls = NS(chat=[], embed=[], search=[], replies=[])
     def chat(**kw):
@@ -352,22 +350,16 @@ def outbound_transport(monkeypatch):
     def embed(**kw):
         calls.embed.append(kw)
         return NS(data=[NS(index=i, embedding=[1., 0.]) for i, _ in enumerate(kw['input'])], usage=None)
-    class SearchConnection:
-        def __init__(self, *args, **kwargs): self.sock = NS(settimeout=lambda value: None)
-        def request(self, method, path, *, body, headers):
-            calls.search.append(json.loads(body))
-        def getresponse(self):
-            class Response:
-                status = 200
-                def getheaders(self): return [('Content-Type', 'application/json')]
-                def read(self): return b'{"answer":"synthetic result","results":[]}'
-            return Response()
-        def close(self): pass
+    def search(query, limit):
+        # Web search is the Tavily MCP connector now; this is what would be
+        # handed to it, after the outbound gate.
+        calls.search.append({"query": query, "max_results": limit})
+        return "Detailed Results:\n\nTitle: synthetic result\nURL: https://example.org\nContent: synthetic"
     brain = Brain.__new__(Brain)
     brain._client = NS(chat=NS(completions=NS(create=chat)), embeddings=NS(create=embed))
-    monkeypatch.setattr(network, '_ProviderConnection', SearchConnection)
-    from notron import credentials
-    credentials._provider.put(credentials.SEARCH_KEY, b'synthetic-test-key')
+    from notron import research
+    monkeypatch.setattr(research, '_call', search)
+    monkeypatch.setattr(research, 'available', lambda: True)
     return brain, calls
 
 

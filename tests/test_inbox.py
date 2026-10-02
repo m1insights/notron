@@ -217,8 +217,7 @@ def test_a_second_task_with_the_same_goal_never_overwrites_the_first(spawn):
 
 def test_document_work_is_briefed_and_reviewed_as_documents(monkeypatch):
     _channel("Tasks", "tasks-note")
-    monkeypatch.setattr(nodes, "_prefetch", lambda ch: (type("T", (), {"is_alive": lambda s: False})(), {}))
-    brain = Decides({"kind": "task", "tools": [], "web": False}, BRIEF)
+    brain = Decides({"kind": "task", "web": False}, BRIEF)
     state = State(request="draft a reply to the landlord", intent="question", source_note_id="tasks-note",
                   trigger="reminder", request_id="reminder:r1",
                   reply_to=("Notron Tasks", workspace.FOLDER, 0))

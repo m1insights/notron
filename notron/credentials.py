@@ -15,9 +15,8 @@ from typing import Protocol
 SERVICE = 'com.m1labs.notron'
 STORAGE_KEY = 'storage-key'
 NEBIUS_KEY = 'nebius-api-key'
-SEARCH_KEY = 'tavily-api-key'
 DEV_NEBIUS_KEY = 'development-nebius-api-key'
-NAMES = frozenset({STORAGE_KEY, NEBIUS_KEY, SEARCH_KEY, DEV_NEBIUS_KEY})
+NAMES = frozenset({STORAGE_KEY, NEBIUS_KEY, DEV_NEBIUS_KEY})
 #: A token an MCP server needs (`connectors.py`), stored per server and variable.
 #: A pattern rather than a list because the user names the servers, but a
 #: narrow one: no dot in the server part, so `connector.a.b.C` cannot address
@@ -216,7 +215,7 @@ def provision_storage_key(root: Path) -> None:
 #: generated rather than supplied; `managed-refresh` is native-only by design and
 #: the helper refuses it. Neither belongs in a general "store a key" command, and
 #: allowing them would quietly widen a deliberate boundary.
-PROVISIONABLE = (NEBIUS_KEY, SEARCH_KEY, DEV_NEBIUS_KEY)
+PROVISIONABLE = (NEBIUS_KEY, DEV_NEBIUS_KEY)
 
 
 def _provisionable(name) -> bool:

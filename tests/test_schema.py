@@ -74,3 +74,52 @@ def test_required_must_be_a_list_of_names():
     assert not schema.supported({"type": "object", "required": "ab", "properties": {}})
     assert not schema.supported({"type": "object", "required": [1], "properties": {}})
     assert not schema.supported({"type": ["object"], "properties": {}})
+
+
+# --- the two shapes the official git and GitHub servers need (2026-10-02) ----
+
+#: mcp-server-git 2026.8.18 writes every optional argument this way; `git_log`
+#: and `git_branch` were unapprovable until it was understood.
+NULLABLE = {"type": "object", "required": ["repo_path"], "properties": {
+    "repo_path": {"type": "string"},
+    "start_timestamp": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None,
+                        "title": "Start Timestamp", "description": "ISO date"}}}
+
+
+def test_mcp_server_git_optional_arguments_are_approvable():
+    assert schema.supported(NULLABLE)
+
+
+def test_a_nullable_argument_takes_null_or_its_own_type_and_nothing_else():
+    assert schema.validate(NULLABLE, {"repo_path": "/r", "start_timestamp": None}) == []
+    assert schema.validate(NULLABLE, {"repo_path": "/r", "start_timestamp": "2026-01-01"}) == []
+    assert schema.validate(NULLABLE, {"repo_path": "/r", "start_timestamp": 7}) == \
+        ["start_timestamp: wrong type"]
+    assert schema.validate(NULLABLE, {"repo_path": "/r", "start_timestamp": "a" * 2001}) == \
+        ["start_timestamp: too long"]
+
+
+@pytest.mark.parametrize("bad", [
+    {"anyOf": [{"type": "string"}, {"type": "integer"}]},           # a real union
+    {"anyOf": [{"type": "string"}, {"type": "null"}, {"type": "integer"}]},
+    {"anyOf": [{"type": "null"}]},
+    {"anyOf": [{"type": "object", "properties": {"x": {"$ref": "#"}}}, {"type": "null"}]},
+    {"anyOf": "string"},
+    {"anyOf": [{"type": "string"}, {"type": "null"}], "type": "integer"},  # two answers
+])
+def test_only_the_optional_null_shape_of_anyof_is_approvable(bad):
+    assert not schema.supported({"type": "object", "properties": {"x": bad}})
+
+
+def test_github_mcp_server_vendor_keys_are_ignored_annotations():
+    # github-mcp-server 1.12.2 marks `owner`/`repo` with `x-mcp-header`, which
+    # made 22 of its 25 read-only tools unapprovable.
+    s = {"type": "object", "properties": {"owner": {"type": "string", "x-mcp-header": "owner"}}}
+    assert schema.supported(s)
+    assert schema.validate(s, {"owner": "m1"}) == []
+    assert schema.validate(s, {"owner": 1}) == ["owner: wrong type"]
+
+
+def test_a_nullable_wrapper_does_not_smuggle_a_nested_container_into_an_array():
+    assert not schema.supported({"type": "object", "properties": {"x": {
+        "type": "array", "items": {"anyOf": [{"type": "object"}, {"type": "null"}]}}}})

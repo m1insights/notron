@@ -2,8 +2,8 @@
 
 One process per call, launched from an argv the user typed at the terminal,
 with a stripped environment plus exactly the secrets that server was granted.
-Everything that comes back is untrusted text for the model, capped like
-`tools.MAX_OUTPUT`.
+Everything that comes back is untrusted text for the model, capped at
+`MAX_OUTPUT`.
 
 Both entry points are synchronous on purpose: the graph is synchronous and
 `brain._deadline_guard` needs the main thread, so the async SDK runs inside its
@@ -19,8 +19,9 @@ from __future__ import annotations
 
 import os
 
-from .tools import MAX_OUTPUT
-
+#: Characters of one tool's output the model is shown. A busy log or PR list is
+#: long; the tail of it is rarely what anyone asked about.
+MAX_OUTPUT = 6000
 TIMEOUT = 30
 KEEP_ENV = ("PATH", "HOME", "USER", "LANG", "TMPDIR")
 # A server that pages its tool list forever must not hold a call open forever.
@@ -39,14 +40,21 @@ def _sdk():
         return None
 
 
-def child_env(secrets: dict[str, str]) -> dict[str, str]:
+def child_env(secrets: dict[str, str], argv=()) -> dict[str, str]:
     """The server's whole environment: essentials plus its own granted secrets.
 
     The SDK also merges its own short safe list (PATH, HOME, USER, SHELL, TERM,
     LOGNAME on macOS) under this. Nothing else from Notron's environment, such as
     the Nebius key, ever reaches a third-party process.
+
+    A server registered by absolute path gets its own folder first on PATH:
+    `npx` is `#!/usr/bin/env node`, and a launchd listener's PATH has never
+    heard of the folder node lives in. It is the folder of the binary the user
+    already approved, so it adds nothing they did not choose.
     """
     env = {k: os.environ[k] for k in KEEP_ENV if k in os.environ}
+    if argv and os.path.isabs(argv[0]):
+        env["PATH"] = os.pathsep.join(p for p in (os.path.dirname(argv[0]), env.get("PATH")) if p)
     env.update(secrets)
     return env
 
@@ -87,7 +95,7 @@ def _run(argv, secrets, work):
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
-    params = StdioServerParameters(command=argv[0], args=list(argv[1:]), env=child_env(secrets))
+    params = StdioServerParameters(command=argv[0], args=list(argv[1:]), env=child_env(secrets, argv))
 
     async def main():
         # A third-party server's stderr can echo the token it was handed; it

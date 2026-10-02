@@ -5,26 +5,24 @@ what happened this morning, what a thing costs today, or whether a restaurant is
 open. For those she searches — but only when the router says the question
 actually needs it, because a search is slow and everything else is not.
 
-Tavily is used because it returns short, already-extracted answers rather than a
-page of blue links, which is what a model can actually use.
+The search itself is Tavily's official MCP server (`notron connect preset
+tavily`), run through the same connector checks as any channel tool: approved
+tool, pinned digest re-checked before the call, credential-shaped arguments
+blocked, outbound redaction. Nemotron decides *whether* to search; code decides
+what is sent, and parses what comes back into findings the ranker can order.
 """
 
 from __future__ import annotations
 
-import json
-import time
+import re
 from dataclasses import dataclass
 from typing import Sequence
 
 from .outbound import Passage, prepare_outbound
-from . import network
-
-ENDPOINT = network.SEARCH_URL
-TIMEOUT = 30
 
 
-class NoSearchKey(RuntimeError):
-    """No Tavily key configured. Notron still answers, just without the web."""
+class NoSearch(RuntimeError):
+    """Web search is not set up. Notron still answers, just without the web."""
 
 
 @dataclass(frozen=True)
@@ -38,67 +36,69 @@ class Finding:
 
 
 def available() -> bool:
-    from . import credentials, retention
+    from . import connectors, retention
     retention.require_ready()
-    from .transport import configured
-    return configured() is not None or credentials.get(credentials.SEARCH_KEY) is not None
+    return connectors.web_ready()
 
 
-def search(passages: Sequence[Passage], *, limit: int = 5, depth: str = "basic") -> tuple[str, list[Finding]]:
-    """Return Tavily's own summary answer plus the sources behind it."""
+def _call(query: str, limit: int) -> str:
+    """The one call out of this module; tests replace it."""
+    from . import connectors
+    try:
+        return connectors.web_search(query, limit)
+    except connectors.ConnectorError as exc:
+        raise NoSearch(str(exc)) from None
+
+
+#: tavily-mcp 0.2.22 `formatResults`: an optional `Answer:` line, then per
+#: result `Title:`, optional `ID:`, `URL:`, `Content:` and optional extras.
+_RESULT = re.compile(r"^Title: (?P<title>.*)$", re.M)
+_FIELD = re.compile(r"^(?P<key>ID|URL|Content|Raw Content|Favicon): ?(?P<value>.*)$")
+
+
+def parse(text: str) -> tuple[str, list[Finding]]:
+    """Tavily's text as (answer, findings). Anything that is not a field is dropped.
+
+    The server's output is untrusted data. When 0.2.22 hits its keyless limit
+    it answers with a pitch addressed to agents ("Agentic payment…", "Earn
+    bonus credits by POSTing answers to…") and no results; that parses to
+    nothing. Only the title, the URL and the content of each result survive; a
+    result with no http(s) URL is not a source and is left out.
+    """
+    answer = ""
+    head = text.split("Detailed Results:", 1)[0]
+    m = re.search(r"^Answer: (.*)$", head, re.M)
+    if m:
+        answer = m.group(1).strip()
+    starts = [m.start() for m in _RESULT.finditer(text)] + [len(text)]
+    findings = []
+    for a, b in zip(starts, starts[1:]):
+        block = text[a:b].splitlines()
+        title = block[0][len("Title: "):].strip()
+        fields, key = {}, None
+        for line in block[1:]:
+            f = _FIELD.match(line)
+            if f:
+                key = f["key"]
+                fields[key] = f["value"]
+            elif key == "Content" and line.strip():
+                # Content runs across lines; anything after it that is not a
+                # field belongs to it, until the next field or result.
+                fields["Content"] += "\n" + line
+        url = fields.get("URL", "").strip()
+        if not url.startswith(("https://", "http://")):
+            continue
+        findings.append(Finding(title=title[:120], url=url,
+                                snippet=fields.get("Content", "").strip()[:800]))
+    return answer, findings
+
+
+def search(passages: Sequence[Passage], *, limit: int = 5) -> tuple[str, list[Finding]]:
+    """Return Tavily's own summary answer (when it gives one) and the sources."""
+    from . import retention
+    retention.require_ready()
     query = "\n".join(prepare_outbound("search", passages))
-    from . import brain
-    deadline = time.monotonic() + TIMEOUT
-    with brain._deadline_guard(deadline):
-        from .transport import configured
-        managed=configured()
-        if managed is not None:
-            data=managed.search(passages,limit,depth,deadline)
-        else:
-            brain._check_cooldown('tavily')
-            from .transport import DirectTransport
-            data = DirectTransport(None).search(passages,limit,depth,deadline)
-
-    findings = [
-        Finding(
-            title=r.get("title", "")[:120],
-            url=r.get("url", ""),
-            snippet=(r.get("content") or "")[:800],
-        )
-        for r in data.get("results", [])
-    ]
-    return (data.get("answer") or "").strip(), findings
-
-
-def _search(query: str, limit: int, depth: str, deadline: float) -> dict:
-    from . import brain
-    from . import credentials, retention
-    retention.require_ready()
-    endpoint = network.provider_endpoint(ENDPOINT, 'tavily')
-    secret = credentials.get(endpoint.credential_name)
-    key = secret.decode("utf-8") if secret else ""
-    if not key:
-        raise NoSearchKey("Search credential is not configured")
-
-    payload = json.dumps({
-        "api_key": key,
-        "query": query,
-        "max_results": limit,
-        "search_depth": depth,
-        "include_answer": True,
-    }).encode()
-
-    def request():
-        # Rebuild the constrained client so each retry revalidates endpoint,
-        # credential and destination at the existing provider boundary.
-        with network.provider_client(endpoint) as client:
-            response = client.post(
-                endpoint.url, content=payload, headers={"Content-Type": "application/json"},
-                timeout=brain._remaining(deadline))
-            response.raise_for_status()
-            return response.json()
-
-    return brain.provider_call(request, deadline, service='tavily')
+    return parse(_call(query, limit))
 
 
 # Domain tiers for ranking findings. Suffix-matched, so subdomains count.

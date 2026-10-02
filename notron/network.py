@@ -26,10 +26,11 @@ from openai import OpenAIError
 from .policy import PolicyError
 
 NEBIUS_URL = 'https://api.tokenfactory.nebius.com/v1/'
-SEARCH_URL = 'https://api.tavily.com/search'
-_SERVICES = {'nebius': NEBIUS_URL, 'tavily': SEARCH_URL}
+# Web search left this module on 2026-10-02: it runs through Tavily's MCP server
+# (`connectors.PRESETS["tavily"]`), a process of its own, not a route here.
+_SERVICES = {'nebius': NEBIUS_URL}
 _ROUTES = {'nebius': {('POST', '/v1/chat/completions'), ('POST', '/v1/embeddings'),
-                      ('GET', '/v1/models')}, 'tavily': {('POST', '/search')}}
+                      ('GET', '/v1/models')}}
 
 
 class NetworkPolicyError(PolicyError, OpenAIError):
@@ -182,7 +183,7 @@ class ProviderEndpoint:
         from . import credentials
         if self.development:
             return credentials.DEV_NEBIUS_KEY
-        return credentials.NEBIUS_KEY if self.service == 'nebius' else credentials.SEARCH_KEY
+        return credentials.NEBIUS_KEY
 
 
 def provider_endpoint(url: str, service: str) -> ProviderEndpoint:
