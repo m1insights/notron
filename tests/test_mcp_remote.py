@@ -174,7 +174,7 @@ def test_a_stored_token_keeps_its_expiry_so_a_later_process_refreshes(monkeypatc
     assert all(b" " not in v for v in box.values())
     later = mcp_client.TokenStore(box.get, box.__setitem__)
     token = asyncio.run(later.get_tokens())
-    assert token.refresh_token == "r" and later.expires_at == 1060.0
+    assert token.refresh_token == "r" and later.expires_at == 1060.0 - mcp_client.EXPIRY_MARGIN
 
 
 def test_the_stored_registration_fixes_the_redirect_port():
@@ -284,3 +284,64 @@ def test_sdk_tracebacks_never_reach_the_terminal():
     log = logging.getLogger("mcp")
     assert log.propagate is False
     assert sum(isinstance(h, logging.NullHandler) for h in log.handlers) == 1
+
+
+# --- review fixes (2026-10-02) ---------------------------------------------------
+
+def test_a_never_signed_in_server_is_not_registered_with_from_the_background(monkeypatch):
+    """Live, a background `discover` registered Notron with Vercel and pinned
+    redirect port 8976 before stopping at the browser step."""
+    import anyio
+    monkeypatch.setattr(anyio, "run", lambda *a: pytest.fail("connected"))
+    store, _ = _store()
+    with pytest.raises(mcp_client.NeedsLogin):
+        mcp_client._run.original(mcp_client.Remote(VERCEL, oauth=store), {}, None)
+
+
+def test_notrons_own_words_survive_the_task_group_wrapper(monkeypatch):
+    """A sign-in that timed out arrived wrapped in an ExceptionGroup and was
+    reported as "refused (HTTP 401)" from the first request of every OAuth flow."""
+    import anyio
+    _dns(monkeypatch, "76.76.21.21")
+
+    def run(main):
+        raise BaseExceptionGroup("tg", [ExceptionGroup("tg", [
+            mcp_client.Unavailable("sign-in was not finished in time")])])
+    monkeypatch.setattr(anyio, "run", run)
+    with pytest.raises(mcp_client.Unavailable, match="not finished in time"):
+        mcp_client._run.original(mcp_client.Remote(VERCEL), {}, None)
+
+
+def test_sign_in_requests_to_a_private_address_are_refused(monkeypatch):
+    """The server names its own sign-in URLs; one pointing at the home network
+    or a cloud metadata address must never be fetched."""
+    import httpx2
+    from mcp.client.auth import OAuthClientProvider
+    _dns(monkeypatch, "76.76.21.21")
+    original = httpx2.Request("POST", VERCEL)
+
+    async def flow(self, request):
+        yield httpx2.Request("GET", "https://vercel.com/.well-known/oauth-authorization-server")
+        yield httpx2.Request("POST", "http://169.254.169.254/register")
+    monkeypatch.setattr(OAuthClientProvider, "_auth_flow", flow)
+    store, _ = _store()
+    provider = mcp_client._auth(mcp_client.Remote(VERCEL, oauth=store), None)
+
+    async def drive():
+        gen = provider._auth_flow(original)
+        await gen.__anext__()                      # public https: allowed
+        await gen.asend(httpx2.Response(200))      # the next one is not
+    with pytest.raises(mcp_client.Unavailable, match="will not go"):
+        asyncio.run(drive())
+
+
+def test_a_corrupt_stored_token_reads_as_signed_out():
+    import base64
+    bad = base64.urlsafe_b64encode(json.dumps({"token": {"nope": 1}}).encode())
+    store = mcp_client.TokenStore(lambda k: bad, lambda k, v: None)
+    assert asyncio.run(store.get_tokens()) is None
+
+
+def test_a_malformed_probe_does_not_end_the_sign_in():
+    sock = _Sock(b"GET http://[::1 HTTP/1.1\r\n\r\n", b"GET /callback?code=c&state=s HTTP/1.1\r\n\r\n")
+    assert mcp_client._await_redirect(sock, deadline=float("inf"))["code"] == "c"

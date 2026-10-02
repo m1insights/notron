@@ -32,6 +32,7 @@ from .tools import MAX_OUTPUT
 TIMEOUT = 30
 #: How long `connect login` waits for the user to finish signing in.
 LOGIN_TIMEOUT = 300
+EXPIRY_MARGIN = 60
 KEEP_ENV = ("PATH", "HOME", "USER", "LANG", "TMPDIR")
 # A server that pages its tool list forever must not hold a call open forever.
 MAX_PAGES = 10
@@ -83,8 +84,13 @@ class TokenStore:
         if not isinstance(row, dict) or not isinstance(row.get("token"), dict):
             return None
         at = row.get("expires_at")
-        self.expires_at = float(at) if isinstance(at, (int, float)) else None
-        return OAuthToken.model_validate(row["token"])
+        # A minute early: a token that runs out mid-call 401s, and the SDK
+        # answers a 401 with a browser sign-in rather than the refresh it has.
+        self.expires_at = float(at) - EXPIRY_MARGIN if isinstance(at, (int, float)) else None
+        try:
+            return OAuthToken.model_validate(row["token"])
+        except ValueError:
+            return None
 
     async def set_tokens(self, tokens):
         at = time.time() + tokens.expires_in if tokens.expires_in else None
@@ -95,7 +101,14 @@ class TokenStore:
     async def get_client_info(self):
         from mcp.shared.auth import OAuthClientInformationFull
         row = self._get(self.CLIENT)
-        return OAuthClientInformationFull.model_validate(row) if isinstance(row, dict) else None
+        try:
+            return OAuthClientInformationFull.model_validate(row) if isinstance(row, dict) else None
+        except ValueError:
+            return None
+
+    def signed_in(self) -> bool:
+        row = self._get(self.TOKENS)
+        return isinstance(row, dict) and isinstance(row.get("token"), dict)
 
     async def set_client_info(self, info):
         self._put(self.CLIENT, info.model_dump(mode="json", exclude_none=True))
@@ -244,7 +257,10 @@ def _await_redirect(sock, deadline: float) -> dict:
             except OSError:
                 continue
             parts = line.split(" ")
-            query = parse_qs(urlsplit(parts[1]).query) if len(parts) >= 2 else {}
+            try:
+                query = parse_qs(urlsplit(parts[1]).query) if len(parts) >= 2 else {}
+            except ValueError:
+                query = {}  # a malformed local probe must not end the sign-in
             if "code" not in query and "error" not in query:
                 conn.sendall(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
                 continue  # a favicon or a probe, not the redirect
@@ -274,9 +290,26 @@ def _auth(target: Remote, sock):
             await super()._initialize()
             self.context.token_expiry_time = store.expires_at
 
+        async def _auth_flow(self, request):
+            """Every request the sign-in makes on its own (metadata,
+            registration, token, refresh) goes to a URL the *server* named, so
+            each is held to the same public-https rule as the URL the user
+            typed. Otherwise a registered server could point the Mac at a
+            router or a cloud metadata address on the home network."""
+            flow = super()._auth_flow(request)
+            try:
+                outgoing = await flow.__anext__()
+                while True:
+                    if outgoing is not request:
+                        await anyio.to_thread.run_sync(_public_https, str(outgoing.url))
+                    outgoing = await flow.asend((yield outgoing))
+            except StopAsyncIteration:
+                return
+
     async def redirect(url):
         if not target.login:
             raise NeedsLogin("needs sign-in")
+        _public_https(url)
         _open_browser(url)
 
     async def callback():
@@ -296,23 +329,37 @@ def _auth(target: Remote, sock):
     return Provider(target.url, meta, store, redirect_handler=redirect, callback_handler=callback)
 
 
-def _needs_login(exc: BaseException) -> NeedsLogin | None:
-    """The NeedsLogin inside whatever anyio wrapped it in, if any."""
-    if isinstance(exc, NeedsLogin):
+def _public_https(url: str) -> str:
+    from . import network
+    if network._https_parts(url) is None:
+        raise Unavailable("the server's sign-in points somewhere Notron will not go")
+    return public_url(url)
+
+
+def _find(exc: BaseException, kind, seen=None):
+    """The first `kind` inside whatever anyio wrapped it in, if any."""
+    seen = seen if seen is not None else set()
+    if exc is None or id(exc) in seen:
+        return None
+    seen.add(id(exc))
+    if isinstance(exc, kind):
         return exc
     for inner in getattr(exc, "exceptions", ()) or ():
-        found = _needs_login(inner)
-        if found:
+        found = _find(inner, kind, seen)
+        if found is not None:
             return found
-    cause = exc.__cause__ or exc.__context__
-    return _needs_login(cause) if cause is not None and cause is not exc else None
+    return _find(exc.__cause__ or exc.__context__, kind, seen)
+
+
+def _needs_login(exc: BaseException) -> NeedsLogin | None:
+    return _find(exc, NeedsLogin)
 
 
 def _refusal(statuses) -> str | None:
     """Plain words for the HTTP answer that ended a session. The SDK reports a
     refused request as a bare "error response", which tells the user nothing
     about whether to fix the token, the URL, or wait."""
-    for code in reversed(statuses):
+    for code in statuses[-1:]:
         if code in (401, 403):
             return f"the server refused Notron's sign-in (HTTP {code}); check the token or sign in again"
         if code == 404:
@@ -340,6 +387,11 @@ def _run_remote(target: Remote, secrets, work):
     from mcp.client.streamable_http import streamable_http_client
     from mcp.shared._httpx_utils import create_mcp_http_client
 
+    if target.oauth is not None and not target.login and not target.oauth.signed_in():
+        # Before any request: otherwise the SDK registers Notron with the
+        # server (and pins a redirect port) from a background call nobody is
+        # watching, only to stop at the browser step anyway.
+        raise NeedsLogin("needs sign-in")
     public_url(target.url)
     headers = {}
     if target.bearer:
@@ -368,6 +420,11 @@ def _run_remote(target: Remote, secrets, work):
         found = _needs_login(exc)
         if found is not None:
             raise NeedsLogin(str(found)) from None
+        own = _find(exc, Unavailable)
+        if own is not None:
+            # Notron's own words (a sign-in that timed out or was denied, an
+            # address it refused) win over the last HTTP status seen.
+            raise Unavailable(str(own)) from None
         refused = _refusal(statuses) if isinstance(exc, Exception) else None
         if refused:
             raise Unavailable(refused) from None
