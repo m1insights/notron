@@ -124,6 +124,99 @@ def test_a_damaged_registry_is_an_error_not_an_empty_list():
         channels.load()
 
 
+def _connector(name="GitHub"):
+    from notron import connectors
+    # `add` registers an argv and runs nothing, so no server starts here.
+    connectors.add(name, ("npx", "-y", "@modelcontextprotocol/server-github"))
+
+
+def test_a_channel_cannot_grant_an_unregistered_connector(monkeypatch):
+    """A grant names a server in the registry the user built at the terminal.
+    A typo would otherwise sit in the grant, inert, and look like it worked."""
+    from notron import notes
+    _register()
+    with pytest.raises(channels.ChannelError):
+        channels.update("Synqology", connect=("github",))
+    assert channels.load()[0].connectors == ()
+    monkeypatch.setattr(notes, "create_note", lambda *a: pytest.fail("created a note for a bad channel"))
+    with pytest.raises(channels.ChannelError):
+        channels.add("Vyvid", connectors=("github",))
+
+
+def test_old_channels_file_loads_without_connectors():
+    import json
+    channels._path().parent.mkdir(parents=True, exist_ok=True)
+    channels._path().write_text(json.dumps({"version": 1, "channels": [
+        {"name": "Synqology", "note_id": "chan-1", "repo": "/tmp/synq", "allow": ["read"]}]}))
+    [ch] = channels.load()
+    assert ch.connectors == ()
+
+
+def test_connector_grant_needs_read():
+    """Connectors are reads in v1; a channel that may not read may not use one."""
+    _connector()
+    _register(allow=("research",))
+    with pytest.raises(channels.ChannelError):
+        channels.update("Synqology", connect=("github",))
+
+
+def test_a_grant_keeps_the_registered_name_and_survives_reload():
+    _connector("GitHub")
+    _register()
+    ch = channels.update("synqology", connect=("github", "GITHUB"))
+    assert ch.connectors == ("GitHub",)
+    assert channels.load()[0].connectors == ("GitHub",)
+    assert channels.update("Synqology", disconnect=("github",)).connectors == ()
+
+
+def test_a_damaged_connector_registry_does_not_silence_every_channel():
+    """Loading channels must not read connectors.json: one bad file there would
+    otherwise stop her answering in every channel, connectors or not."""
+    from notron import connectors
+    _connector()
+    _register()
+    channels.update("Synqology", connect=("github",))
+    connectors._path().write_text("{not json")
+    assert channels.load()[0].connectors == ("GitHub",)
+    # An edit that adds no new connector does not need the registry either.
+    assert channels.update("Synqology", allow=("read",)).allow == ("read",)
+    with pytest.raises(channels.ChannelError):
+        channels.update("Synqology", connect=("linear",))
+
+
+def test_a_connector_removed_from_the_registry_can_still_be_disconnected():
+    from notron import connectors
+    _connector()
+    _register()
+    channels.update("Synqology", connect=("github",))
+    connectors._save([])
+    assert channels.update("Synqology", disconnect=("GitHub",)).connectors == ()
+
+
+def test_a_grant_stored_as_a_bare_string_is_damage_not_letters():
+    """`tuple("github")` is six one-letter grants; a hand-edited file must not
+    quietly turn into that."""
+    import json
+    channels._path().parent.mkdir(parents=True, exist_ok=True)
+    channels._path().write_text(json.dumps({"version": 1, "channels": [
+        {"name": "Synqology", "note_id": "chan-1", "allow": ["read"], "connectors": "github"}]}))
+    with pytest.raises(channels.ChannelError):
+        channels.load()
+
+
+def test_channel_set_connect_from_the_command_line(capsys):
+    from notron import cli
+    _connector()
+    _register()
+    args = dict(action="set", name=["Synqology"], allow=None, github=None, hand=None, test=None,
+                connect="github", disconnect=None)
+    cli.cmd_channel(type("A", (), args)())
+    assert channels.load()[0].connectors == ("GitHub",)
+    assert "GitHub" in capsys.readouterr().out
+    cli.cmd_channel(type("A", (), {**args, "connect": None, "disconnect": "github"})())
+    assert channels.load()[0].connectors == ()
+
+
 # ------------------------------------------------------------------- guard
 
 

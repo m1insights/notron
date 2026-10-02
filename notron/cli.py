@@ -125,6 +125,8 @@ def cmd_channel(args):
             if c.test:
                 print(f"  {'':28} tests: {' '.join(c.test)}")
             print(f"  {'':28} tools: {', '.join(t.name for t in tools.available(c)) or 'none'}")
+            if c.connectors:
+                print(f"  {'':28} connectors: {', '.join(c.connectors)}")
         print()
         return
     if not args.name:
@@ -141,13 +143,20 @@ def cmd_channel(args):
             if args.test is not None:
                 old = next((c for c in channels.load() if c.name.lower() == name.strip().lower()), None)
                 test = _test_argv(args.test, old.repo if old else "")
-            ch = channels.update(name, github=args.github, allow=allow, hand=args.hand, test=test)
+            ch = channels.update(name, github=args.github, allow=allow, hand=args.hand, test=test,
+                                 connect=_names(args.connect), disconnect=_names(args.disconnect))
         except channels.ChannelError as problem:
             _setup_failure(problem)
         print(f"\n  {ch.title}: [{', '.join(ch.allow)}]" + (f" · hands work to {ch.hand}" if ch.hand else "")
-              + (f"\n  tests after each hand-off: {' '.join(ch.test)}" if ch.test else "") + "\n")
+              + (f"\n  tests after each hand-off: {' '.join(ch.test)}" if ch.test else "")
+              + (f"\n  connectors: {', '.join(ch.connectors)}" if ch.connectors else "") + "\n")
         return
     _add_channel(args)
+
+
+def _names(text) -> tuple[str, ...]:
+    """`--connect a,b` as names; absent or empty is none."""
+    return tuple(n.strip() for n in (text or "").split(",") if n.strip())
 
 
 def _test_argv(command: str, repo: str) -> tuple[str, ...]:
@@ -920,6 +929,9 @@ def main(argv=None):
     ch.add_argument('--test', default=None,
                     help='the project\'s test command; Notron runs it after each hand-off, network off '
                          '(e.g. ".venv/bin/python -m pytest -q"; "" removes it)')
+    ch.add_argument('--connect', default=None,
+                    help='let Nemotron use these registered connectors (MCP servers) here, e.g. github,linear')
+    ch.add_argument('--disconnect', default=None, help='stop using these connectors here')
     ch.set_defaults(fn=cmd_channel)
 
     tk = sub.add_parser('tasks', help='hand-off tasks: briefed by Nemotron, run by your coding agent')

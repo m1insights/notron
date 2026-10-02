@@ -44,10 +44,7 @@ def server(monkeypatch):
 
 
 def granted(*names):
-    # Task A6 adds `Channel.connectors`; until then a stand-in carries the grant.
-    ch = channels.Channel("Synqology", "note-x")
-    object.__setattr__(ch, "connectors", tuple(names))
-    return ch
+    return channels.Channel("Synqology", "note-x", connectors=tuple(names))
 
 
 def approved(server, *tools):

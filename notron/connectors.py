@@ -304,8 +304,10 @@ def approve(name: str, tool_names) -> list[str]:
 
 
 def _granted(channel) -> list[Server]:
-    # Task A6 adds `Channel.connectors`; until then no channel grants any.
-    names = {str(n).lower() for n in getattr(channel, "connectors", ())}
+    # `Channel.connectors` is checked against this registry when granted, not
+    # when channels load; a name that has since left the registry matches
+    # nothing here and grants nothing.
+    names = {str(n).lower() for n in channel.connectors}
     return [s for s in load() if s.name.lower() in names]
 
 
