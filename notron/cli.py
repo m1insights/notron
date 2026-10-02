@@ -125,6 +125,8 @@ def cmd_channel(args):
             if c.test:
                 print(f"  {'':28} tests: {' '.join(c.test)}")
             print(f"  {'':28} tools: {', '.join(t.name for t in tools.available(c)) or 'none'}")
+            if c.connectors:
+                print(f"  {'':28} connectors: {', '.join(c.connectors)}")
         print()
         return
     if not args.name:
@@ -141,13 +143,20 @@ def cmd_channel(args):
             if args.test is not None:
                 old = next((c for c in channels.load() if c.name.lower() == name.strip().lower()), None)
                 test = _test_argv(args.test, old.repo if old else "")
-            ch = channels.update(name, github=args.github, allow=allow, hand=args.hand, test=test)
+            ch = channels.update(name, github=args.github, allow=allow, hand=args.hand, test=test,
+                                 connect=_names(args.connect), disconnect=_names(args.disconnect))
         except channels.ChannelError as problem:
             _setup_failure(problem)
         print(f"\n  {ch.title}: [{', '.join(ch.allow)}]" + (f" · hands work to {ch.hand}" if ch.hand else "")
-              + (f"\n  tests after each hand-off: {' '.join(ch.test)}" if ch.test else "") + "\n")
+              + (f"\n  tests after each hand-off: {' '.join(ch.test)}" if ch.test else "")
+              + (f"\n  connectors: {', '.join(ch.connectors)}" if ch.connectors else "") + "\n")
         return
     _add_channel(args)
+
+
+def _names(text) -> tuple[str, ...]:
+    """`--connect a,b` as names; absent or empty is none."""
+    return tuple(n.strip() for n in (text or "").split(",") if n.strip())
 
 
 def _test_argv(command: str, repo: str) -> tuple[str, ...]:
@@ -166,16 +175,144 @@ def _test_argv(command: str, repo: str) -> tuple[str, ...]:
 def _add_channel(args):
     from . import channels
     allow = tuple(a.strip() for a in (args.allow or 'read,research').split(',') if a.strip())
+    if getattr(args, 'disconnect', None):
+        raise SystemExit("A new channel has nothing to disconnect; use --connect, or `channel set`.")
     try:
         repo = str(pathlib.Path(args.repo).expanduser().resolve()) if args.repo else ""
         ch, state = channels.add(" ".join(args.name), repo=repo, github=args.github or "",
                                  allow=allow, hand=args.hand or "",
-                                 test=_test_argv(args.test, repo) if args.test else ())
+                                 test=_test_argv(args.test, repo) if args.test else (),
+                                 connectors=_names(getattr(args, 'connect', None)))
     except channels.ChannelError as problem:
         _setup_failure(problem)
-    print(f"\n  {state:8} {ch.title}  (in {workspace.FOLDER})")
+    print(f"\n  {state:8} {ch.title}  (in {workspace.FOLDER})"
+          + (f"\n  connectors: {', '.join(ch.connectors)}" if ch.connectors else ""))
     print(f"\n  Say: “Hey Siri, add is CI green to my {ch.title} note.”")
     print("  Or type any line into it. She answers underneath, while `notron listen` runs.\n")
+
+
+def _connect_args(rest, secrets):
+    """`connect add NAME [--secret VAR ...] -- argv...`: argparse hands back
+    everything after NAME, so declared secrets are taken off the front here and
+    the server's argv after `--` is kept exactly as typed."""
+    rest, secrets = list(rest), list(secrets or ())
+    while len(rest) >= 2 and rest[0] == '--secret':
+        secrets.append(rest[1])
+        rest = rest[2:]
+    if rest and rest[0] == '--':
+        rest = rest[1:]
+    return tuple(rest), tuple(secrets)
+
+
+def cmd_connect(args):
+    """MCP servers Notron may use: register, look, approve, grant, remove.
+
+    Every step is the user's, at the terminal. Nothing here touches Notes, and
+    a server's own text (tool names, descriptions) is flattened before it is
+    printed, so a hostile description cannot redraw the terminal.
+    """
+    import json as _json
+    from . import channels, connectors, credentials
+
+    def unlock(server):
+        # Only a server with secrets needs the Keychain; one without never asks.
+        if server is not None and server.secrets and credentials._provider is None:
+            credentials.startup()
+
+    try:
+        if args.action == 'add':
+            argv, secrets = _connect_args(args.argv, args.secret)
+            if not argv:
+                raise connectors.ConnectorError(
+                    "Which command starts the server? e.g. notron connect add time -- uvx mcp-server-time")
+            server = connectors.add(args.name, argv, secrets)
+            print(f"\n  Registered {server.name}: {' '.join(server.argv)}")
+            for var in server.secrets:
+                print(f"  needs {var}: notron connect secret {server.name} {var}")
+            print(f"  Next: notron connect tools {server.name}\n")
+        elif args.action == 'tools':
+            unlock(connectors.get(args.name))
+            offers = connectors.discover(args.name)
+            print()
+            for o in offers:
+                read_only = "read-only" if o.annotations.get("readOnlyHint") is True else "changes things"
+                verdict = "approvable" if o.approvable else f"not approvable: {o.why}"
+                print(f"  {connectors._flat(o.name)[:64]} · {read_only} · {verdict}")
+                if o.description:
+                    print(f"      {connectors._flat(o.description)}")
+            if not offers:
+                print("  The server offered no tools.")
+            print()
+        elif args.action == 'approve':
+            if not args.tools:
+                raise connectors.ConnectorError(f"Which tools? notron connect approve {args.name} <tool> ...")
+            unlock(connectors.get(args.name))
+            done = connectors.approve(args.name, args.tools)
+            server = connectors.get(args.name)
+            print(f"\n  Approved {', '.join(connectors.qualified(server.name, t) for t in done)}.")
+            print(f"  Grant it to a channel: notron channel set <project> --connect {server.name}\n")
+        elif args.action == 'secret':
+            server = connectors.get(args.name)
+            if server is None:
+                raise connectors.ConnectorError(f"No connector called {args.name}.")
+            if args.var not in server.secrets:
+                declared = ", ".join(server.secrets) or "none"
+                raise connectors.ConnectorError(
+                    f"{server.name} was not registered with {args.var} (it has: {declared}).")
+            if credentials._provider is None:
+                credentials.startup()
+            try:
+                # The registered casing: `connectors` asks for exactly this name.
+                credentials.provision_api_key(f"connector.{server.name}.{args.var}", _read_secret(args.var))
+            except CredentialUnavailable as problem:
+                _setup_failure(problem)
+            print(f"Stored {args.var} for {server.name}.")
+        elif args.action == 'list':
+            found = connectors.load()
+            granted = {}
+            for ch in channels.load():
+                for name in ch.connectors:
+                    granted.setdefault(name.lower(), []).append(ch.name)
+            rows = [dict(name=s.name, argv=list(s.argv), secrets=list(s.secrets),
+                         tools=sorted(s.tools), changed=list(s.changed),
+                         channels=granted.get(s.name.lower(), [])) for s in found]
+            if args.json:
+                print(_json.dumps(rows, indent=2))
+                return
+            if not rows:
+                print("\n  No connectors yet. Try: notron connect add time -- uvx mcp-server-time\n")
+                return
+            print()
+            for r in rows:
+                print(f"  {r['name']:16} {' '.join(r['argv'])}")
+                print(f"  {'':16} approved: {', '.join(r['tools']) or 'none'}")
+                if r['changed']:
+                    print(f"  {'':16} changed since approval: {', '.join(r['changed'])}")
+                if r['secrets']:
+                    print(f"  {'':16} secrets: {', '.join(r['secrets'])}")
+                print(f"  {'':16} channels: {', '.join(r['channels']) or 'none'}")
+            print()
+        elif args.action == 'remove':
+            server = connectors.get(args.name)
+            if server is None:
+                raise connectors.ConnectorError(f"No connector called {args.name}.")
+            unlock(server)  # before any grant changes: a locked Keychain changes nothing
+            # Revoke the grants first: a crash after this leaves a registered
+            # server no channel uses, which is inert, never a grant to a name a
+            # different server could later be registered under.
+            for ch in channels.load():
+                if any(c.lower() == server.name.lower() for c in ch.connectors):
+                    channels.update(ch.name, disconnect=(server.name,))
+            gone = connectors.remove(server.name)
+            print(f"\n  Removed {gone.name}, its grants and its secrets.\n")
+    except (connectors.ConnectorError, channels.ChannelError) as problem:
+        print(f"  {problem}", file=sys.stderr)
+        raise SystemExit(1)
+    except CredentialUnavailable as problem:
+        # A person is at the terminal: say why, rather than main()'s generic
+        # pause line. `remove` unlocks before touching any grant, so this
+        # leaves the grants and the registry exactly as they were.
+        _setup_failure(problem)
 
 
 def cmd_tasks(args):
@@ -813,6 +950,27 @@ def _deliver_receipts():
         pass
 
 
+def cmd_mcp(args):
+    """Notron's Apple bridge for any MCP client. Not a worker command: a server
+    lives as long as its client, and `ask_notron` takes the worker lock per call.
+    Stdout belongs to the protocol, so every word here goes to stderr except the
+    config block, which is the whole point of `mcp config`."""
+    from . import mcp_server
+    if args.action == 'config':
+        print(mcp_server.config())
+        return
+    try:
+        app = mcp_server.build(writes=args.writes, ask=not args.no_ask,
+                               brain_factory=_brain, after_writes=_deliver_receipts)
+    except mcp_server.SDKMissing as missing:
+        print(f"  {missing}", file=sys.stderr)
+        raise SystemExit(1)
+    if args.writes:
+        print("  notron mcp: writes are ON. ask_notron can file notes and create reminders "
+              "through Notron's own checks.", file=sys.stderr)
+    app.run()
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="notron", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -920,7 +1078,32 @@ def main(argv=None):
     ch.add_argument('--test', default=None,
                     help='the project\'s test command; Notron runs it after each hand-off, network off '
                          '(e.g. ".venv/bin/python -m pytest -q"; "" removes it)')
+    ch.add_argument('--connect', default=None,
+                    help='let Nemotron use these registered connectors (MCP servers) here, e.g. github,linear')
+    ch.add_argument('--disconnect', default=None, help='stop using these connectors here')
     ch.set_defaults(fn=cmd_channel)
+
+    cn = sub.add_parser('connect', help='MCP servers Notron may use in a channel: add, approve, remove')
+    cs = cn.add_subparsers(dest='action', required=True)
+    c = cs.add_parser('add', help='register a server: notron connect add time -- uvx mcp-server-time')
+    c.add_argument('name')
+    c.add_argument('--secret', action='append', default=[],
+                   help='an environment variable the server needs, e.g. GITHUB_TOKEN (repeatable); '
+                        'set its value with `notron connect secret`')
+    c.add_argument('argv', nargs=argparse.REMAINDER, help='after --: the command that starts the server')
+    c = cs.add_parser('tools', help='what the server offers, and what v1 could approve')
+    c.add_argument('name')
+    c = cs.add_parser('approve', help='approve read-only tools, one by one')
+    c.add_argument('name')
+    c.add_argument('tools', nargs='*')
+    c = cs.add_parser('secret', help="store a server's secret; the value is read from stdin, never argv")
+    c.add_argument('name')
+    c.add_argument('var')
+    c = cs.add_parser('list', help='servers, approved tools, and the channels using them')
+    c.add_argument('--json', action='store_true')
+    c = cs.add_parser('remove', help='unregister a server, ungrant it everywhere, forget its secrets')
+    c.add_argument('name')
+    cn.set_defaults(fn=cmd_connect)
 
     tk = sub.add_parser('tasks', help='hand-off tasks: briefed by Nemotron, run by your coding agent')
     tk.add_argument('action', nargs='?', choices=['list', 'show', 'approve', 'cancel', 'fence', 'setup'], default='list')
@@ -952,6 +1135,13 @@ def main(argv=None):
     rv.add_argument('ids', nargs='*', help='id prefixes, as `notron review` prints them')
     rv.add_argument('--all', action='store_true', help='dismiss everything on hold')
     rv.set_defaults(fn=cmd_review)
+
+    mc = sub.add_parser('mcp', help="use your Apple Notes, Calendar and Reminders from any MCP client")
+    mc.add_argument('action', choices=['serve', 'config'])
+    mc.add_argument('--writes', action='store_true',
+                    help='serve: let ask_notron write (through the Guard); off means a dry run')
+    mc.add_argument('--no-ask', action='store_true', help='serve: offer only the read tools')
+    mc.set_defaults(fn=cmd_mcp)
 
     from .credentials import PROVISIONABLE
     keys = sub.add_parser('key', help='store, list or remove the API keys Notron uses')

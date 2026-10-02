@@ -198,7 +198,11 @@ class FakeNotesApp:
             for folder, titles in self.folders:
                 for title in titles:
                     if args[0] == f'{folder}/{title}':
-                        return notes.RS.join((args[0], title, folder, 'observed'))
+                        # The same date the listing reports, as real Notes does:
+                        # a placeholder here made every note look undated, and
+                        # an undated note is hidden under a start-from cutoff.
+                        stamp = self.modified.get(args[0], "Wednesday, 2 September 2026 at 21:30:00")
+                        return notes.RS.join((args[0], title, folder, stamp))
             return ''
 
         if script is notes._MODIFIED:
@@ -422,6 +426,22 @@ def _native_subprocesses_require_mocks(monkeypatch):
 
     monkeypatch.setattr(subprocess, 'run', blocked)
     monkeypatch.setattr(subprocess, 'Popen', blocked)
+
+
+@pytest.fixture(autouse=True)
+def _mcp_servers_require_fakes(monkeypatch):
+    """The MCP SDK spawns its server through anyio, not `subprocess.Popen`, so the
+    block above would not stop a missed fake from launching a real third-party
+    process with real secrets. `mcp_client._run` is the one door; shut it here."""
+    from notron import mcp_client
+
+    def blocked(*args, **kwargs):
+        raise AssertionError('MCP servers require a fake in unit tests')
+
+    # Kept for the one test that drives the real `_run` with the SDK's transport
+    # faked underneath it.
+    blocked.original = mcp_client._run
+    monkeypatch.setattr(mcp_client, '_run', blocked)
 
 
 @pytest.fixture(autouse=True)

@@ -289,3 +289,9 @@ def test_ambiguous_redacted_titles_never_fall_back_to_another_home(returned, out
     verdicts, _ = filer.classify(brain,
         [filer.Item('check in', '', 0, 'Scratch', 'Notes', note_id='n1')], candidates)
     assert verdicts == [None]
+
+
+def test_connector_and_export_are_known_purposes():
+    from notron.outbound import Passage, prepare_outbound
+    assert prepare_outbound("connector", [Passage("hello", "user_request")]) == ["hello"]
+    assert prepare_outbound("export", [Passage("hello", "user_request")]) == ["hello"]

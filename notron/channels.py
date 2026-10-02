@@ -63,6 +63,9 @@ class Channel:
     #: After a hand-off, Notron runs it in the fence (network off) and shows the
     #: result to Nemotron's review. Never from a note, never from a model.
     test: tuple[str, ...] = ()
+    #: MCP servers (`connectors.py`) whose approved tools Nemotron may pick
+    #: here, by their registered name. Set at the terminal, never from a note.
+    connectors: tuple[str, ...] = ()
 
     @property
     def title(self) -> str:
@@ -102,7 +105,39 @@ def _validate(ch: Channel) -> Channel:
         raise ChannelError("`run` needs an agent: --hand claude|codex.")
     if ch.test and (not ch.repo or not all(isinstance(a, str) and a for a in ch.test)):
         raise ChannelError("A test command needs a repository, e.g. --test \".venv/bin/python -m pytest -q\".")
+    # Only the shape here, not membership in connectors.json: `load` runs this
+    # on every channel, and a damaged connector registry must not stop her
+    # answering in every channel. Names are checked against the registry when
+    # a grant is added (`_registered`), and a name that later leaves the
+    # registry is inert: `connectors` only ever grants servers it still holds.
+    if not isinstance(ch.connectors, tuple) or not all(isinstance(c, str) and c for c in ch.connectors):
+        raise ChannelError("Connectors are named by their registered names.")
+    if ch.connectors and "read" not in ch.allow:
+        raise ChannelError("Connectors are reads in v1: the channel needs --allow read.")
     return ch
+
+
+def _registered(names) -> tuple[str, ...]:
+    """Each name as the registry spells it, or an error naming the first unknown.
+
+    The registered casing is stored so the grant reads the same in `channel
+    list` as in `connect list`. A damaged registry is an error here, on the
+    write path, where the user is at the terminal to fix it.
+    """
+    from . import connectors
+    if not names:
+        return ()
+    try:
+        known = {s.name.lower(): s.name for s in connectors.load()}
+    except connectors.ConnectorError as problem:
+        raise ChannelError(str(problem)) from None
+    out = []
+    for n in names:
+        name = known.get(str(n).strip().lower())
+        if name is None:
+            raise ChannelError(f"No connector called {str(n).strip()}. Try: notron connect add {str(n).strip()} -- <command>")
+        out.append(name)
+    return tuple(dict.fromkeys(out))
 
 
 def load() -> list[Channel]:
@@ -119,14 +154,16 @@ def load() -> list[Channel]:
         raise ChannelError("The channel registry is unreadable; fix or remove it.")
     out = []
     for row in raw["channels"]:
-        if not isinstance(row, dict):
+        # A bare string would become one grant per letter through `tuple()`.
+        if not isinstance(row, dict) or not isinstance(row.get("connectors", []), list):
             raise ChannelError("The channel registry is unreadable; fix or remove it.")
         try:
             out.append(_validate(Channel(name=row["name"], note_id=row["note_id"],
                                          repo=row.get("repo", ""), github=row.get("github", ""),
                                          allow=tuple(row.get("allow", ("read",))),
                                          hand=row.get("hand", ""),
-                                         test=tuple(row.get("test") or ()))))
+                                         test=tuple(row.get("test") or ()),
+                                         connectors=tuple(row.get("connectors", ())))))
         except (KeyError, TypeError) as exc:
             raise ChannelError("The channel registry is unreadable; fix or remove it.") from exc
     return out
@@ -138,7 +175,8 @@ def _save(channels: list[Channel]) -> None:
     path = _path()
     private_directory(path.parent)
     atomic_write_json(path, {"version": 1, "channels": [
-        {**asdict(c), "allow": list(c.allow), "test": list(c.test)} for c in channels]})
+        {**asdict(c), "allow": list(c.allow), "test": list(c.test),
+         "connectors": list(c.connectors)} for c in channels]})
 
 
 def for_note(note_id: str | None) -> Channel | None:
@@ -148,7 +186,8 @@ def for_note(note_id: str | None) -> Channel | None:
 
 
 def add(name: str, *, repo: str = "", github: str = "", allow: tuple[str, ...] = ("read",),
-        hand: str = "", test: tuple[str, ...] = ()) -> tuple[Channel, str]:
+        hand: str = "", test: tuple[str, ...] = (),
+        connectors: tuple[str, ...] = ()) -> tuple[Channel, str]:
     """Create (or adopt) `Notron <name>` in her folder and register it.
 
     Adopts an existing note of that exact title in her folder rather than making
@@ -164,7 +203,8 @@ def add(name: str, *, repo: str = "", github: str = "", allow: tuple[str, ...] =
     existing = load()
     if any(c.name.lower() == name.lower() for c in existing):
         raise ChannelError(f"There is already a channel called {name}.")
-    _validate(Channel(name, "pending", repo, github, tuple(allow), hand, tuple(test)))
+    connectors = _registered(connectors)
+    _validate(Channel(name, "pending", repo, github, tuple(allow), hand, tuple(test), connectors))
     lib = library.load()
     if not lib.configured:
         raise policy.PolicyError("Set up note permissions (notron library) before adding a channel.")
@@ -178,7 +218,7 @@ def add(name: str, *, repo: str = "", github: str = "", allow: tuple[str, ...] =
         note_id = notes.create_note(workspace.FOLDER, markup.render(
             title, HELP.format(title=title, project=project) + "\n\n———\n"))
         state = "created"
-    channel = _validate(Channel(name, note_id, repo, github, tuple(allow), hand, tuple(test)))
+    channel = _validate(Channel(name, note_id, repo, github, tuple(allow), hand, tuple(test), connectors))
     # The grant first, then the registry. If the grant cannot be saved (secure
     # storage locked, say) the registry never names a note she may not read —
     # the first live run did it the other way round and left exactly that.
@@ -205,16 +245,28 @@ def remove(name: str) -> Channel:
 
 
 def update(name: str, *, github: str | None = None, allow: tuple[str, ...] | None = None,
-           hand: str | None = None, test: tuple[str, ...] | None = None) -> Channel:
-    """Change what an existing channel may use. The note and its grant stay put."""
+           hand: str | None = None, test: tuple[str, ...] | None = None,
+           connect=(), disconnect=()) -> Channel:
+    """Change what an existing channel may use. The note and its grant stay put.
+
+    `connect` adds connector grants and `disconnect` removes them, by name, any
+    casing. Only the newly added names are checked against the registry, so a
+    server already removed from it can still be disconnected, and an edit that
+    adds none never needs connectors.json at all.
+    """
     from dataclasses import replace
     existing = load()
     old = next((c for c in existing if c.name.lower() == name.strip().lower()), None)
     if old is None:
         raise ChannelError(f"No channel called {name}.")
-    new = _validate(replace(old, **{k: v for k, v in (("github", github), ("hand", hand),
-                                                      ("allow", tuple(allow) if allow is not None else None),
-                                                      ("test", tuple(test) if test is not None else None))
-                                    if v is not None}))
+    held = {c.lower() for c in old.connectors}
+    added = _registered([n for n in connect if str(n).strip().lower() not in held])
+    gone = {str(n).strip().lower() for n in disconnect}
+    granted = tuple(c for c in (*old.connectors, *added) if c.lower() not in gone)
+    new = _validate(replace(old, connectors=granted,
+                            **{k: v for k, v in (("github", github), ("hand", hand),
+                                                 ("allow", tuple(allow) if allow is not None else None),
+                                                 ("test", tuple(test) if test is not None else None))
+                               if v is not None}))
     _save([new if c is old else c for c in existing])
     return new

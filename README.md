@@ -411,6 +411,30 @@ Apple Notes itself (~0.2 s a request, and there is no faster door into Notes).
 Every write is still re-checked against Notes right before it happens; none of
 the speed came from skipping a safety check.
 
+## Give Notron new tools (MCP)
+
+Any MCP server can become a tool in a project channel. Nemotron picks the tool
+and its arguments; plain code checks them. v1 runs read-only tools only, each
+approved by you. Full guide: [docs/connectors.md](docs/connectors.md).
+
+```bash
+notron connect add time -- uvx mcp-server-time
+notron connect tools time && notron connect approve time get_current_time
+notron channel set Shop --connect time
+```
+
+## Use your Apple Notes from any AI (MCP)
+
+Claude Desktop, Cursor and other MCP clients can search and read the notes you
+let Notron read, see your agenda, and ask Notron. Ignored notes, About Me,
+attachments and secrets never leave. **Note text a client reads goes to that
+client's AI provider.** Full guide: [docs/mcp-server.md](docs/mcp-server.md).
+
+```bash
+pip install 'notron[mcp]'
+notron mcp config      # paste the block into your client's MCP config
+```
+
 ## Powered by
 
 - **[Nebius Token Factory](https://tokenfactory.nebius.com)** — core inference; planned external-agent integrations use separately authorized providers.

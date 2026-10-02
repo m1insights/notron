@@ -48,7 +48,7 @@ class RequestEnvelope:
 
     def __post_init__(self):
         identity(self.request_id)
-        if self.version != 1 or self.source not in {'ask', 'mention', 'shortcut', 'cli', 'morning'}:
+        if self.version != 1 or self.source not in {'ask', 'mention', 'shortcut', 'cli', 'morning', 'mcp'}:
             raise ValueError('Unsupported request envelope.')
         if not isinstance(self.text, str):
             raise ValueError('Request text is required.')
@@ -110,9 +110,9 @@ def local_timezone() -> str:
 
 def create(text: str, *, source='cli', request_id=None, note_id=None,
            source_revision=None, timezone_name=None, **context) -> RequestEnvelope:
-    # CLI captures are explicit. Notes line capture times are unknowable.
+    # CLI and MCP captures are explicit (asked this moment). Notes line capture times are unknowable.
     stamp = datetime.now(timezone.utc)
-    captured = stamp if source in {'cli', 'morning'} else None
+    captured = stamp if source in {'cli', 'morning', 'mcp'} else None
     return RequestEnvelope(1, request_id or uuid4().hex, source, text, captured,
                            stamp, timezone_name or local_timezone(), 'explicit' if captured else 'observed_only',
                            note_id, source_revision, **context)
