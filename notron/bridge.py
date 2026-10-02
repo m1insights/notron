@@ -91,9 +91,12 @@ def notes_read(note_id: str) -> dict:
     snapshot = policy.require_ready()
     if not isinstance(note_id, str) or not note_id.strip():
         return dict(NOT_AVAILABLE)
-    if library.state_of(note_id) == library.IGNORE:
+    if not snapshot.can_read(note_id):
         # Refused before Notes is asked anything, as `attachments.on_note` does:
         # an ignored note costs no query and leaves no trace in the call log.
+        # Id-only on purpose: `library.state_of` without a date hides every
+        # undecided note under a start-from cutoff. The date and title checks
+        # run in `_visible` once `get_note` has them.
         return dict(NOT_AVAILABLE)
     note = notes.get_note(note_id)
     if note is None or not _visible(note, snapshot):

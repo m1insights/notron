@@ -277,3 +277,14 @@ def test_an_ignored_note_is_refused_before_notes_is_asked(_notes_is_never_the_re
     app.calls.clear()
     assert bridge.notes_read(PARKING) == {"error": "not available"}
     assert "metadata" not in app.calls and "body" not in app.calls
+
+
+def test_a_note_after_the_start_from_cutoff_is_readable_not_just_listed():
+    """The id-only pre-check has no date. Asked without one, the cutoff hides
+    every undecided note, so a note the list just offered came back "not available"."""
+    from datetime import datetime
+    library.save(library.Library(homes=set(), decided=set(), allow_new_notes=True,
+                                 start_from=datetime(2026, 1, 1), system_notes=SYSTEM))
+    assert PARKING in [n["id"] for n in bridge.notes_list()]
+    out = bridge.notes_read(PARKING)
+    assert out.get("error") is None and "Parking Garages" in out["text"]

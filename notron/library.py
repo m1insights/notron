@@ -105,8 +105,10 @@ def state_of(note_id: str, modified: str = "") -> str:
     before it asks Notes anything. The modification date travels alongside
     because the year cutoff is part of the rule: an id alone cannot say whether
     a note the user never looked at falls before "start from 2026". Passing no
-    date reads the note rather than hiding it, exactly as `Library.hides` does
-    with a date it cannot parse.
+    date HIDES an undecided note whenever a cutoff is set, exactly as
+    `Library.hides` does with a date it cannot parse: an unknown date cannot
+    defeat the cutoff (`PolicySnapshot.readable`). A caller with only an id that
+    wants "not ignored" without the date rule asks `policy.current().can_read`.
     """
     lib = load()
     if lib.hides(note_id, modified):

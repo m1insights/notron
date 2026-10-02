@@ -198,7 +198,11 @@ class FakeNotesApp:
             for folder, titles in self.folders:
                 for title in titles:
                     if args[0] == f'{folder}/{title}':
-                        return notes.RS.join((args[0], title, folder, 'observed'))
+                        # The same date the listing reports, as real Notes does:
+                        # a placeholder here made every note look undated, and
+                        # an undated note is hidden under a start-from cutoff.
+                        stamp = self.modified.get(args[0], "Wednesday, 2 September 2026 at 21:30:00")
+                        return notes.RS.join((args[0], title, folder, stamp))
             return ''
 
         if script is notes._MODIFIED:
