@@ -55,8 +55,9 @@ or an absolute path.
 
 `connect secret` and `channel set` need Notron's secure storage, which needs the
 signed Notron app installed: Notron checks the app bundle's signature before it
-unlocks the Keychain. Without it they stop (`Secure startup requires a validly
-signed Notron bundle.`). A server with no secrets never touches the Keychain.
+unlocks the Keychain. Without it they stop (`connect secret` says `Secure startup
+requires a validly signed Notron bundle.`; `channel set` says `Protected processing
+paused.`). A server with no secrets never touches the Keychain.
 
 ## What v1 will and will not run
 
