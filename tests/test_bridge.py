@@ -288,3 +288,41 @@ def test_a_note_after_the_start_from_cutoff_is_readable_not_just_listed():
     assert PARKING in [n["id"] for n in bridge.notes_list()]
     out = bridge.notes_read(PARKING)
     assert out.get("error") is None and "Parking Garages" in out["text"]
+
+
+def test_ask_while_the_listener_runs_says_busy_instead_of_hanging(monkeypatch):
+    """run_request blocks on the worker lock the listener holds for its whole
+    life. From an MCP client that was an ask_notron call that never returned."""
+    from notron.health import WorkerLock
+    import threading
+
+    def never(*a, **kw):
+        raise AssertionError("ran a second executor beside the listener")
+    monkeypatch.setattr(graph, "run_request", never)
+    held, done = threading.Event(), threading.Event()
+
+    def listener():
+        with WorkerLock() as lock:
+            assert lock.acquired
+            held.set()
+            done.wait(5)
+    t = threading.Thread(target=listener)
+    t.start()
+    held.wait(5)
+    try:
+        out = bridge.ask("what's on today", writes=True, brain=object())
+    finally:
+        done.set()
+        t.join()
+    assert out == {"error": bridge.BUSY}
+
+
+def test_receipts_are_delivered_only_after_a_real_run(monkeypatch):
+    class S:
+        answer, results = "ok", []
+    monkeypatch.setattr(graph, "run_request", lambda *a, **kw: S())
+    delivered = []
+    bridge.ask("x", writes=False, brain=object(), after=lambda: delivered.append(1))
+    assert delivered == []
+    bridge.ask("x", writes=True, brain=object(), after=lambda: delivered.append(1))
+    assert delivered == [1]

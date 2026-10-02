@@ -813,6 +813,27 @@ def _deliver_receipts():
         pass
 
 
+def cmd_mcp(args):
+    """Notron's Apple bridge for any MCP client. Not a worker command: a server
+    lives as long as its client, and `ask_notron` takes the worker lock per call.
+    Stdout belongs to the protocol, so every word here goes to stderr except the
+    config block, which is the whole point of `mcp config`."""
+    from . import mcp_server
+    if args.action == 'config':
+        print(mcp_server.config())
+        return
+    try:
+        app = mcp_server.build(writes=args.writes, ask=not args.no_ask,
+                               brain_factory=_brain, after_writes=_deliver_receipts)
+    except mcp_server.SDKMissing as missing:
+        print(f"  {missing}", file=sys.stderr)
+        raise SystemExit(1)
+    if args.writes:
+        print("  notron mcp: writes are ON. ask_notron can file notes and create reminders "
+              "through Notron's own checks.", file=sys.stderr)
+    app.run()
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="notron", description=__doc__)
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -952,6 +973,13 @@ def main(argv=None):
     rv.add_argument('ids', nargs='*', help='id prefixes, as `notron review` prints them')
     rv.add_argument('--all', action='store_true', help='dismiss everything on hold')
     rv.set_defaults(fn=cmd_review)
+
+    mc = sub.add_parser('mcp', help="use your Apple Notes, Calendar and Reminders from any MCP client")
+    mc.add_argument('action', choices=['serve', 'config'])
+    mc.add_argument('--writes', action='store_true',
+                    help='serve: let ask_notron write (through the Guard); off means a dry run')
+    mc.add_argument('--no-ask', action='store_true', help='serve: offer only the read tools')
+    mc.set_defaults(fn=cmd_mcp)
 
     from .credentials import PROVISIONABLE
     keys = sub.add_parser('key', help='store, list or remove the API keys Notron uses')

@@ -145,12 +145,28 @@ def agenda(days: int = 7, *, checker=None) -> dict:
     }
 
 
-def ask(request: str, *, writes: bool, brain) -> dict:
+#: `graph.run_request` waits for the worker lock, and the listener holds that
+#: lock for its whole life, so without this check ask_notron hangs for as long
+#: as the listener runs. One executor at a time is the rule; a busy answer is
+#: honest, a hang is not.
+BUSY = ("Notron's listener is running, and it is the only thing allowed to act for you "
+        "right now. Ask in 📥 Ask Notron instead, or stop the listener (`notron listen --off`) "
+        "to ask here.")
+
+
+def ask(request: str, *, writes: bool, brain, after=None) -> dict:
     """Run the normal graph on a request from an MCP client. Without `writes`
-    it is a dry run: Nemotron answers, nothing is written."""
+    it is a dry run: Nemotron answers, nothing is written. `after` runs under
+    the same lock once a real run finishes (the CLI's receipt delivery)."""
     from . import graph, requests
+    from .health import WorkerLock
     if not isinstance(request, str) or not request.strip():
         return {"error": "empty request"}
-    envelope = requests.create(request, source="mcp")
-    state = graph.run_request(envelope, brain=brain, dry_run=not writes, trigger="mcp")
+    with WorkerLock() as lock:
+        if not lock.acquired:
+            return {"error": BUSY}
+        envelope = requests.create(request, source="mcp")
+        state = graph.run_request(envelope, brain=brain, dry_run=not writes, trigger="mcp")
+        if writes and after is not None:
+            after()
     return {"answer": state.answer, "results": list(state.results), "dry_run": not writes}
