@@ -264,7 +264,16 @@ def execute(job, fn=None):
             raise QueuedPayloadError('Queued payload requires review.') from exc
         if args._envelope:
             args._envelope = requests.current().capture(args._envelope)
-        result = fn(args) if fn else dispatch(job['kind'], args)
+        try:
+            result = fn(args) if fn else dispatch(job['kind'], args)
+        finally:
+            if job['request_id'] and getattr(args, 'dry_run', False):
+                # _enqueue captured this request so the job could be queued;
+                # a dry run never runs it, and graph.run_request only retires
+                # a rehearsal it created itself. Left 'prepared', every queued
+                # dry run (each default ask_notron call while the listener
+                # runs) counted as waiting work for ever.
+                requests.current().retire_rehearsal(job['request_id'])
     except BaseException:
         queue.finish(job['job_id'], 'needs_review')
         raise

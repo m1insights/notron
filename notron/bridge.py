@@ -160,6 +160,8 @@ STILL_WORKING = ("Notron's listener has your request but has not finished it yet
                  "in a minute for the answer here.")
 NEEDS_REVIEW = ("Notron's listener could not finish this request safely, so it is waiting for "
                 "you to review it (`notron review`).")
+FINISHED_UNSEEN = ("Notron's listener finished this request, but its answer did not reach "
+                   "here. Anything she wrote is in your notes and in 📊 Log.")
 PAUSED_QUEUED = ("Notron was paused while your request waited for her. It is kept, and runs "
                  "when you resume her in the Notron app.")
 
@@ -218,13 +220,19 @@ def _ask_listener(request: str, *, writes: bool, sleep, wait: float) -> dict:
                                    "reply": True, "source": "mcp"})["job_id"]
     deadline = time.monotonic() + wait
     while True:
-        # The answer before the status: execute saves it, then marks the job
-        # completed, so a completed job is never read ahead of its answer.
-        answer = queue.take_answer(job_id)
-        if answer is not None:
-            return {**answer, "dry_run": not writes}
+        # The status before the answer: execute saves the answer, then marks
+        # the job completed, so once 'completed' is read the answer is there.
+        # Read the other way round, a job finishing between the two reads
+        # looked completed-without-answer and its answer was never collected.
         job = queue.get(job_id)
-        if job is None or job["status"] in ("needs_review", "completed"):
+        if job is not None and job["status"] == "completed":
+            answer = queue.take_answer(job_id)
+            if answer is None:
+                # A listener that died after the run: recover_interrupted
+                # completes the job, but nothing saved what she said.
+                return {"error": FINISHED_UNSEEN}
+            return {**answer, "dry_run": not writes}
+        if job is None or job["status"] == "needs_review":
             return {"error": NEEDS_REVIEW}
         if job["status"] == "queued" and HealthStore().paused:
             return {"error": PAUSED_QUEUED}

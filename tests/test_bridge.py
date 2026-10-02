@@ -550,3 +550,49 @@ def test_a_folder_name_is_redacted_like_a_title(_notes_is_never_the_real_one):
     app.folders.insert(0, ("token sk-abcdefghijklmnop1234", ["Groceries"]))
     rows = [r for r in bridge.notes_list() if r["title"] == "Groceries"]
     assert rows and "sk-abcdefghijklmnop1234" not in rows[0]["folder"]
+
+
+def test_an_answer_saved_between_the_two_reads_is_still_collected(monkeypatch):
+    """The bridge read the answer, then the status. A job that finished between
+    those two reads looked completed-without-answer: the client was told it
+    needed review and the real answer sat uncollected in storage."""
+    from notron import worker
+    _never_beside_the_listener(monkeypatch)
+    real_get = worker.Queue.get
+
+    def finishing_get(self, job_id):
+        job = real_get(self, job_id)
+        if job and job["status"] == "queued":
+            # The listener completes the job right as the bridge looks.
+            self.save_answer(job_id, {"answer": "Level 3.", "results": []})
+            with self.health.connection() as db:
+                db.execute("UPDATE jobs SET status='completed' WHERE job_id=?", (job_id,))
+            job = real_get(self, job_id)
+        return job
+    monkeypatch.setattr(worker.Queue, "get", finishing_get)
+    done, t = _listener(lambda: None)
+    try:
+        out = bridge.ask("x", writes=False, brain=object(), sleep=lambda s: None)
+    finally:
+        done.set()
+        t.join(5)
+    assert out == {"answer": "Level 3.", "results": [], "dry_run": True}
+
+
+def test_a_queued_dry_run_leaves_no_waiting_request_behind(monkeypatch):
+    """_enqueue captures the request; a dry run never runs it. Left 'prepared',
+    each ask_notron dry run while the listener ran counted as waiting work
+    for ever — the "185 waiting" of 2026-09-23 again."""
+    from notron import cli, requests, worker
+    from notron.health import HealthStore
+    _never_beside_the_listener(monkeypatch)
+    monkeypatch.setattr(cli, "cmd_ask", lambda args: {"answer": "ok", "results": []})
+    done, t = _listener(worker.drain_one)
+    try:
+        out = bridge.ask("x", writes=False, brain=object(), sleep=lambda s: None)
+    finally:
+        done.set()
+        t.join(5)
+    assert out["answer"] == "ok"
+    assert requests.current().pending() == []
+    assert HealthStore().status()["pending_count"] == 0
