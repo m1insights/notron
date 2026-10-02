@@ -20,9 +20,9 @@ from notron import cli
 
 #: Every module a command may reach through its local import.
 _MODULE_NAMES = (
-    'attachments', 'brain', 'calendar', 'care', 'channels', 'clarifications', 'connectors', 'conversation',
+    'attachments', 'brain', 'bridge', 'calendar', 'care', 'channels', 'clarifications', 'connectors', 'conversation',
     'credentials', 'daily', 'eventkit', 'filer', 'graph', 'health', 'index',
-    'layout', 'library', 'markup', 'mentions', 'migration', 'notedoc', 'notes',
+    'layout', 'library', 'markup', 'mcp_server', 'mentions', 'migration', 'notedoc', 'notes',
     'operations', 'outbound', 'paths', 'permissions', 'persistence', 'policy',
     'privacy', 'reflect', 'reminders', 'requests', 'research', 'retention',
     'retrieval', 'rewrite', 'securestore', 'undo', 'watch', 'worker', 'workspace',
@@ -302,3 +302,62 @@ def test_a_locked_keychain_stops_remove_before_any_grant_is_touched(monkeypatch,
         cli.main(['connect', 'remove', 'github'])
     assert stop.value.code == 2 and 'Keychain unavailable' in capsys.readouterr().err
     assert channels.load()[0].connectors == ('GitHub',) and connectors.get('github') is not None
+
+
+def test_mcp_serve_wires_its_flags_and_the_cli_brain(monkeypatch, capsys):
+    """`--no-ask` must reach `ask`, `--writes` must reach `writes`, and the brain
+    stays lazy: `_brain` is handed over, never called, so reads need no key."""
+    from notron import mcp_server
+    seen = {}
+
+    class App:
+        def run(self):
+            seen['ran'] = True
+
+    def fake_build(*, writes, ask, brain_factory, after_writes=None):
+        seen.update(writes=writes, ask=ask, brain_factory=brain_factory, after_writes=after_writes)
+        return App()
+    monkeypatch.setattr(mcp_server, 'build', fake_build)
+    cli.main(['mcp', 'serve', '--writes', '--no-ask'])
+    assert seen == {'writes': True, 'ask': False, 'brain_factory': cli._brain,
+                    'after_writes': cli._deliver_receipts, 'ran': True}
+    assert capsys.readouterr().out == '', 'stdout is the MCP wire'
+
+
+def test_mcp_serve_without_the_sdk_says_how_to_install_it(monkeypatch, capsys):
+    from notron import mcp_server
+    import pytest
+
+    def missing(**kw):
+        raise mcp_server.SDKMissing(mcp_server.INSTALL)
+    monkeypatch.setattr(mcp_server, 'build', missing)
+    with pytest.raises(SystemExit) as stop:
+        cli.main(['mcp', 'serve'])
+    assert stop.value.code != 0
+    out = capsys.readouterr()
+    assert "pip install 'notron[mcp]'" in out.err and out.out == ''
+
+
+def test_mcp_sdk_missing_is_reported_by_build_itself(monkeypatch):
+    """The lazy import is the only thing between a bare install and a traceback."""
+    import builtins
+    import pytest
+    from notron import mcp_server
+    real = builtins.__import__
+
+    def no_mcp(name, *a, **kw):
+        if name == 'mcp' or name.startswith('mcp.'):
+            raise ImportError(name)
+        return real(name, *a, **kw)
+    monkeypatch.setattr(builtins, '__import__', no_mcp)
+    with pytest.raises(mcp_server.SDKMissing):
+        mcp_server.build(writes=False, ask=True, brain_factory=lambda: None)
+
+
+def test_mcp_config_prints_a_ready_to_paste_block(capsys):
+    import json
+    import sys
+    cli.main(['mcp', 'config'])
+    block = json.loads(capsys.readouterr().out)
+    assert block['mcpServers']['notron'] == {'command': sys.executable,
+                                             'args': ['-m', 'notron', 'mcp', 'serve']}
