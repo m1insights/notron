@@ -613,7 +613,7 @@ def cmd_ask(args):
         # "Speak Text", say. No trace, no blank lines, no results dump.
         state = graph.run_request(envelope, brain=brain, dry_run=args.dry_run)
         print(state.answer.strip() if state.answer else "I don't have anything to say to that.")
-        return
+        return {"answer": state.answer, "results": list(state.results)}
 
     def trace(name, state):
         if state.trace and state.trace[-1].startswith(name):
@@ -625,6 +625,9 @@ def cmd_ask(args):
     for r in state.results:
         print(f"  {r}")
     print()
+    # A queued ask from an MCP client is answered by the listener, whose stdout
+    # goes nowhere; worker.execute keeps this for the producer waiting on it.
+    return {"answer": state.answer, "results": list(state.results)}
 
 
 @command('plan')

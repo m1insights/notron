@@ -222,6 +222,14 @@ class HealthStore:
             with self.connection() as db:
                 db.execute('UPDATE health SET ' + ','.join(k + '=?' for k in values) + ' WHERE id=1', tuple(values.values()))
 
+    def mark_stopped(self):
+        """A clean end reads stopped; an end `worker.failure` explained keeps its
+        reason. Only the states a run itself sets are cleared, in one statement,
+        so a failure written a moment earlier cannot be overwritten."""
+        with self.connection() as db:
+            db.execute("UPDATE health SET state='stopped',reason_code=NULL "
+                       "WHERE id=1 AND state IN ('starting','ready','stopped')")
+
     def success(self):
         self.update(last_success_at=time.time())
 
@@ -292,5 +300,5 @@ class Heartbeat:
             return
         self.stop.set()
         self.thread.join(timeout=3)
-        self.store.update(state='stopped', reason_code=None)
+        self.store.mark_stopped()
         self.closed = True
