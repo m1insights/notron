@@ -275,3 +275,24 @@ def forget_api_key(name: str) -> None:
     if _provider is None:
         raise CredentialUnavailable('Keychain unavailable; protected processing paused.')
     _provider.delete(name)
+
+
+#: An OAuth sign-in (tokens or a client registration, base64 JSON) is written
+#: by code, not pasted, and a long-lived token pair can pass the paste limit.
+MAX_TOKEN_BYTES = 16384
+
+
+def store_connector_token(name: str, value: bytes) -> None:
+    """Store a connector's OAuth state, written by `mcp_client.TokenStore`.
+
+    Only `connector.<server>.OAUTH_*` names: the general secrets above stay
+    paste-only, and this never writes a key a person typed.
+    """
+    if (CONNECTOR_SECRET.fullmatch(name or '') is None
+            or not name.rsplit('.', 1)[-1].startswith('OAUTH_')):
+        raise CredentialUnavailable('That credential cannot be set here.')
+    if _provider is None:
+        raise CredentialUnavailable('Keychain unavailable; protected processing paused.')
+    if not isinstance(value, bytes) or not value or len(value) > MAX_TOKEN_BYTES:
+        raise CredentialUnavailable('Sign-in token could not be stored.')
+    _provider.put(name, value)

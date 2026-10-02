@@ -98,9 +98,11 @@ it off unless you need it.
 
 ## Known limits
 
-- **`ask_notron` answers "busy" while the listener runs.** Only one thing may act
-  for you at a time. Ask in 📥 Ask Notron instead, or stop the listener
-  (`notron listen --off`). The read tools still work.
+- **While the listener runs, `ask_notron` waits for it.** Only one thing may act
+  for you at a time, so the request is handed to the listener and its answer comes
+  back, usually within a minute (Notes can make a listener pass slow). After three
+  minutes the client gets "not finished yet": the request still runs, and anything
+  she writes lands in your notes and 📊 Log. The client session waits meanwhile.
 - **Pausing Notron blocks `ask_notron`,** dry runs included. Resume in the Notron
   app.
 - **The first Notes read after Notes has been idle can take about 40 seconds.**

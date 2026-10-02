@@ -28,6 +28,14 @@ import pytest
 
 from pathlib import Path
 
+# Imported before any fixture replaces `subprocess.Popen` with a function: on
+# Python < 3.14 the SDK evaluates `subprocess.Popen[bytes]` at import time, so a
+# test file whose first `import mcp` happens inside a test fails to import it.
+try:
+    import mcp  # noqa: F401
+except ImportError:
+    pass
+
 from notron import (applescript, attachments, mentions, notes,
                     rewrite, undo, library, workspace)
 

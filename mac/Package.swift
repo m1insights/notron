@@ -17,7 +17,7 @@ import Foundation
 //   2. declaring products surfaced "target ... is empty", because `exclude`
 //      removes the very file `sources` names back — `exclude` wins over `sources`;
 //   3. fixing that surfaced the cross-target overlap, which is structural.
-let coreSources = ["AccountSession.swift", "ManagedIPCSession.swift", "KeychainStore.swift"]
+let coreSources = ["AccountSession.swift", "ManagedIPCSession.swift", "KeychainStore.swift", "Checkout.swift"]
 let appFiles = try! FileManager.default.contentsOfDirectory(atPath: "Sources/Notron")
     .filter { !coreSources.contains($0) }
 

@@ -54,6 +54,10 @@ What a preset adds to an ordinary connector:
   and only while the registered command is exactly the pinned one; edit the
   version and it is an ordinary server again. `--with-key` registers
   `TAVILY_API_KEY` if you would rather use your own key than the keyless tier.
+- **One GitHub route at a time.** A remote `github` connector (see Remote
+  servers) and the `github` preset share the name; the preset will not replace
+  a server you registered yourself. The preset binds the channel's repo; the
+  remote one does not, so grant it only where any repo the token sees is fine.
 - **Absolute paths.** The preset records where the binary really lives, and the
   server gets that folder first on `PATH`, so a background listener can start
   `npx` (which needs `node`) even with launchd's short `PATH`.
@@ -85,6 +89,8 @@ ends with the receipt: `checked time.get_current_time · decided by Nemotron Sup
 | Command | What it does |
 |---|---|
 | `notron connect add NAME [--secret VAR ...] -- <command>` | Register a server. Everything after `--` is the command that starts it, stored exactly as typed. Runs nothing yet. |
+| `notron connect add NAME --url https://… [--bearer VAR \| --oauth]` | Register a remote server (streamable HTTP) instead of a command. See *Remote servers* below. |
+| `notron connect login NAME` | Sign in to an `--oauth` server in your browser, once. |
 | `notron connect tools NAME` | Start the server, list its tools, and say which ones v1 can approve, and why not for the rest. |
 | `notron connect approve NAME TOOL [TOOL ...]` | Approve tools, all or none. |
 | `notron connect secret NAME VAR` | Store a secret the server needs (for example `GITHUB_TOKEN`) in the Keychain. The value is read from stdin, never from the command line. |
@@ -151,6 +157,37 @@ The server starts with a stripped environment (essentials such as `PATH` and
 `HOME`) plus only its own declared secrets. Your Nebius key and everything else
 in Notron's environment never reach it.
 
+## Remote servers
+
+A server on the internet is a URL instead of a command. Everything else, read-only
+approval, the digest check before every call, untrusted output, is the same.
+
+```bash
+# GitHub's official server takes a personal access token (fine-grained, read-only is enough)
+notron connect add github --url https://api.githubcopilot.com/mcp/ --bearer GITHUB_TOKEN
+notron connect secret github GITHUB_TOKEN
+
+# Vercel's server signs you in through the browser
+notron connect add vercel --url https://mcp.vercel.com --oauth
+notron connect login vercel
+```
+
+- **`--bearer VAR`** sends that Keychain secret as `Authorization: Bearer …`, and
+  only to that URL. GitHub's server needs this route: GitHub does not let a new app
+  register itself for sign-in, so a token is the way in.
+- **`--oauth`** registers Notron with the server's sign-in service, opens your
+  browser once (`connect login`), and keeps the tokens in the Keychain. The
+  listener refreshes them by itself; it never opens a browser. If a sign-in runs
+  out it says so in one line: `vercel: needs sign-in — notron connect login vercel`.
+- **The URL** must be `https://`, with no `user:password@`, no `?query` and no
+  `#fragment` (that is where tokens hide), and not a local or private address.
+  Notron looks the name up again on every call and will not connect if any
+  address it gets back is on your own network. One gap: the HTTP library looks
+  the name up a second time when it connects, so a server that deliberately
+  answers differently twice in a row is not caught.
+- A refused request is named in plain words: `the server refused Notron's
+  sign-in (HTTP 401)`, `nothing answered at that URL (HTTP 404)`.
+
 ## What comes back
 
 A connector's output is **untrusted data**, not instructions, exactly like the
@@ -176,5 +213,6 @@ to run it. That sits next to roughly 2.5 s for Nemotron Super to decide. Details
 - GitHub's `list_issues` (one argument is a list of objects, which v1 will not
   half-check); `search_issues` covers it.
 - Tools that change things (planned through the Approve reminder).
-- Remote servers over HTTP with sign-in, such as Notion and Linear. v1 runs local
-  servers over stdio.
+- A built-in GitHub sign-in (needs a GitHub OAuth app registered for Notron);
+  until then GitHub uses a token.
+- Servers that only speak the older SSE transport.
