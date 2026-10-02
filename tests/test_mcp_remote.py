@@ -259,3 +259,28 @@ def test_the_sign_in_redirect_skips_stray_requests_and_returns_the_code():
 def test_an_unfinished_sign_in_gives_up_in_plain_words():
     with pytest.raises(mcp_client.Unavailable, match="not finished in time"):
         mcp_client._await_redirect(_Sock(), deadline=0)
+
+
+@pytest.mark.parametrize("statuses,words", [
+    ([401], "refused Notron's sign-in (HTTP 401)"),
+    ([200, 403], "HTTP 403"),
+    ([404], "nothing answered at that URL"),
+    ([503], "not answering right now"),
+    ([200], None),
+])
+def test_a_refused_request_is_named_in_plain_words(statuses, words):
+    """Live, GitHub's server without a token came back as
+    "could not list tools (ExceptionGroup)": the SDK hides the 401."""
+    out = mcp_client._refusal(statuses)
+    assert (out is None) if words is None else (words in out)
+
+
+def test_sdk_tracebacks_never_reach_the_terminal():
+    """Live, a background Vercel call printed the SDK's whole OAuth traceback
+    above the one line Notron meant to show."""
+    import logging
+    mcp_client._quiet_sdk_logs()
+    mcp_client._quiet_sdk_logs()
+    log = logging.getLogger("mcp")
+    assert log.propagate is False
+    assert sum(isinstance(h, logging.NullHandler) for h in log.handlers) == 1

@@ -308,6 +308,32 @@ def _needs_login(exc: BaseException) -> NeedsLogin | None:
     return _needs_login(cause) if cause is not None and cause is not exc else None
 
 
+def _refusal(statuses) -> str | None:
+    """Plain words for the HTTP answer that ended a session. The SDK reports a
+    refused request as a bare "error response", which tells the user nothing
+    about whether to fix the token, the URL, or wait."""
+    for code in reversed(statuses):
+        if code in (401, 403):
+            return f"the server refused Notron's sign-in (HTTP {code}); check the token or sign in again"
+        if code == 404:
+            return "nothing answered at that URL (HTTP 404); check it"
+        if code == 429 or code >= 500:
+            return f"the server is not answering right now (HTTP {code}); try again later"
+    return None
+
+
+def _quiet_sdk_logs() -> None:
+    """The SDK logs a failed sign-in with a full traceback, and with no logging
+    configured Python prints that to the terminal. Server text can ride along in
+    those messages, so they go nowhere; the caller turns the failure into one
+    line instead."""
+    import logging
+    log = logging.getLogger("mcp")
+    if not any(isinstance(h, logging.NullHandler) for h in log.handlers):
+        log.addHandler(logging.NullHandler())
+    log.propagate = False
+
+
 def _run_remote(target: Remote, secrets, work):
     import anyio
     from mcp import ClientSession
@@ -320,11 +346,18 @@ def _run_remote(target: Remote, secrets, work):
         headers["Authorization"] = f"Bearer {secrets[target.bearer]}"
     sock = _loopback(target.oauth.redirect_port()) if (target.oauth and target.login) else None
     limit = LOGIN_TIMEOUT + TIMEOUT if target.login else TIMEOUT
+    statuses: list[int] = []
+    _quiet_sdk_logs()
+
+    async def noted(response):
+        statuses.append(response.status_code)
 
     async def main():
         auth = _auth(target, sock) if target.oauth is not None else None
+        http = create_mcp_http_client(headers=headers, auth=auth)
+        http.event_hooks["response"] = [noted]
         with anyio.fail_after(limit):
-            async with create_mcp_http_client(headers=headers, auth=auth) as http, \
+            async with http, \
                     streamable_http_client(target.url, http_client=http) as (r, w), \
                     ClientSession(r, w) as session:
                 await session.initialize()
@@ -335,6 +368,9 @@ def _run_remote(target: Remote, secrets, work):
         found = _needs_login(exc)
         if found is not None:
             raise NeedsLogin(str(found)) from None
+        refused = _refusal(statuses) if isinstance(exc, Exception) else None
+        if refused:
+            raise Unavailable(refused) from None
         raise
     finally:
         if sock is not None:

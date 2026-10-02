@@ -350,7 +350,7 @@ def _listed(server: Server) -> list[dict]:
     except mcp_client.NeedsLogin:
         raise ConnectorError(_needs_login(server)) from None
     except mcp_client.Unavailable as exc:
-        raise ConnectorError(str(exc)) from None
+        raise ConnectorError(f"{server.name}: {exc}" if server.url else str(exc)) from None
     except Exception as exc:
         raise ConnectorError(f"{server.name}: could not list tools ({type(exc).__name__})") from None
 
